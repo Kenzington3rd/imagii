@@ -89,8 +89,9 @@ export async function probeAudio(filePath: string): Promise<AudioProbe> {
 }
 
 /**
- * T-161 (3): the channel count ffmpeg will extract from a file, or null when it cannot be read. The MOST channels of any audio stream, because that is the stream
- * ffmpeg picks when it is not told which. Deliberately not `probeAudio`: that one refuses a file with no LENGTH, and a Record take (MediaRecorder WebM) has none.
+ * T-161 (3): the channel count ffmpeg will extract from a file, or null when it cannot be read. The MOST channels of any audio stream, which is the stream ffmpeg picks
+ * when it is not told which UNLESS one is flagged default (ffmpeg 7 prefers the default-flagged stream: a mono default plus a stereo track extracts the mono one while this
+ * reads 2; T-110 (ap) holds that mixed-track case). Deliberately not `probeAudio`: that one refuses a file with no LENGTH, and a Record take (MediaRecorder WebM) has none.
  * Any failure is null - the caller extracts as it always did.
  */
 export async function probeAudioChannels(filePath: string): Promise<number | null> {

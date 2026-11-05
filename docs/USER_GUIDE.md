@@ -348,7 +348,8 @@ that names the file being converted.)
   width, so it doesn't swallow the frame.
   Captions need a one-time setup; see **Captions setup** below. The engine's
   notes about sounds that are not speech (**[MUSIC]**, **[BLANK_AUDIO]**, **(upbeat music)**, music notes) are
-  left out of the captions. Every
+  left out of the captions, and a video that has only those says **No speech found, so there are no captions.**,
+  keeps no transcript, and leaves the panel as it was before you transcribed. Every
   transcription also keeps its `.srt` transcript in a `captions` folder
   inside imagii's own data folder — on your machine only, like everything
   else. The bottom of the panel says how many are kept, and **Clear saved
@@ -374,7 +375,9 @@ that names the file being converted.)
   press it — in a job's first moment, or between two files of a batch — and the
   half-written file a canceled or failed job was making is removed. In an
   Export batch, files that already finished stay in your folder and the rows
-  that didn't are marked **Canceled** (gray, not red). A batch that fails stops at
+  that didn't are marked **Canceled** (gray, not red). The toast says so only
+  when a file did finish (**Export canceled. Files already finished are in your
+  folder.**); a cancel before the first file ends says just **Export canceled.** A batch that fails stops at
   the job that failed: that row is **Failed**, in red, with the reason printed on it,
   and the rows behind it that never started say **Not run**.
 - **Leaving a studio does not stop a job.** A render, a scan, a transcription or an export keeps running
@@ -544,7 +547,9 @@ never called loaded.
     becomes the nearest edge when you leave the box. imagii measures the whole file
     first, so exports with a loudness target take a little longer. A mono file is
     measured the way stereo speakers play it (the one channel on both sides), so its
-    target is what you hear. Whatever you switch on or cut out, peaks above −1 dBFS
+    target is what you hear. A 5.1 or 7.1 file is folded to stereo the way a player
+    does (the centre and the surrounds a little under the fronts, the bass channel left out), so it keeps its
+    level. Whatever you switch on or cut out, peaks above −1 dBFS
     are limited when you export, so a boost cannot clip; an export with nothing
     switched on and nothing cut keeps the file's levels as they are. If your cuts take out
     everything, **Export** says "Everything is cut out. Click a mark to put a part back." and

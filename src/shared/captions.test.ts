@@ -567,11 +567,11 @@ describe('the captions toasts say what happened (T-89)', () => {
   })
 
   it('a burn-in that put captions on the picture says so', () => {
-    expect(burnInDoneMessage(true)).toBe('Captions burned in')
+    expect(burnInDoneMessage(true, true)).toBe('Captions burned in')
   })
 
   it('a burn-in over a range nobody speaks in does NOT claim captions', () => {
-    const msg = burnInDoneMessage(false)
+    const msg = burnInDoneMessage(false, true)
     expect(msg).toBe('No captions in this range — exported without captions.')
     expect(msg).not.toMatch(/burned in/i)
   })
@@ -683,5 +683,23 @@ describe('cleanTranscriptSrt - the engine\'s non-speech cues are not captions (T
     const shifted = shiftSrtToRange(old, 10, 16)
     expect(shifted).toBe(file(cue(1, '00,000', '01,000', 'before'), cue(2, '04,000', '05,000', 'after')))
     expect(shiftSrtToRange(file(cue(1, '12,000', '13,000', '[MUSIC]')), 10, 16)).toBe('')
+  })
+})
+
+describe('burnInDoneMessage names the burn it answers (T-162 fold)', () => {
+  it('a burn with captions on it says so, ranged or not', () => {
+    expect(burnInDoneMessage(true, true)).toBe('Captions burned in')
+    expect(burnInDoneMessage(true, false)).toBe('Captions burned in')
+  })
+
+  it('an uncaptioned burn of a range says the range had none', () => {
+    expect(burnInDoneMessage(false, true)).toBe('No captions in this range — exported without captions.')
+  })
+
+  it('an uncaptioned burn of the whole video says the transcript had no speech, not that a range was empty', () => {
+    const msg = burnInDoneMessage(false, false)
+    expect(msg).toBe('No speech in this transcript — exported without captions.')
+    expect(msg).not.toMatch(/range/i)
+    expect(msg).not.toMatch(/burned in/i)
   })
 })

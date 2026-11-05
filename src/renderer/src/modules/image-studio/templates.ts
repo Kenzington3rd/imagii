@@ -281,7 +281,10 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
         asHint(
           textLayer('Safe area hint', 695, 580, 'TV-safe — keep load-bearing text inside', 22, '#fbbf24')
         ),
-        asHint(textLayer('Channel name', 800, 700, 'YOUR\nCHANNEL', 140, '#ffffff', 'Impact, Inter, sans-serif'))
+        // T-162 (4): the sample obeys the rule the hint above it states. One line (two lines at 140 px ran 700-980, below both frames), under the hint
+        // (y 580 + 22) and inside the TV-safe frame (y 551-889, x 662-1897). 1108 px wide at the fallback font (Inter, measured in the built app; Impact,
+        // where installed, is narrower and sits inside it), so x 725 centres that widest case in the frame: (1235 - 1108) / 2 + 662.
+        asHint(textLayer('Channel name', 725, 650, 'YOUR CHANNEL', 140, '#ffffff', 'Impact, Inter, sans-serif'))
       ]
     }
   },

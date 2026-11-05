@@ -6034,3 +6034,52 @@ test.describe('Image Studio - the Variants dialog repeats the card (T-161 (7))',
     }
   })
 })
+
+// ── T-162 (4): the channel-art template's sample name sits inside the TV-safe frame it advertises ─────────────────────────────────────────────
+//
+// "YOUR\nCHANNEL" at y 700 and 140 px on two lines ran y 700-980: below the TV-safe frame (551-889) and the all-device frame (508-931), under the
+// template's own hint "TV-safe - keep load-bearing text inside". The sample is one line now, and the drawn text node (its real width at the font
+// the machine resolves, not a computed one) is read against the drawn TV-safe rect.
+test.describe('Image Studio — the channel-art sample name is inside its TV-safe frame (T-162 (4))', () => {
+  /** A node's box in document units, by the template layer's index (the stage's children are the layers in order, after the background). */
+  function layerBox(window: Page, index: number): Promise<{ x: number; y: number; width: number; height: number }> {
+    return window.evaluate((i) => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as {
+        children: Array<{
+          children: Array<{
+            attrs: { name?: string }
+            getClientRect(o: { relativeTo: unknown; skipStroke: boolean }): { x: number; y: number; width: number; height: number }
+          }>
+        }>
+      }
+      const layer = stage.children[0]
+      if (!layer) throw new Error('no document layer on the stage')
+      const node = layer.children.filter((n) => n.attrs.name !== 'background')[i]
+      if (!node) throw new Error(`no node ${i} on the stage`)
+      return node.getClientRect({ relativeTo: layer, skipStroke: true })
+    }, index)
+  }
+
+  test('applying the template draws the sample\'s whole text box inside the TV-safe rect, below the hint line', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t162-banner')
+    const { window } = studio
+    try {
+      const t = templateById('yt-banner-channel')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      const at = (name: string): number => t.doc.layers.findIndex((l) => l.name === name)
+      const tv = await layerBox(window, at('TV-safe area'))
+      const hint = await layerBox(window, at('Safe area hint'))
+      const sample = await layerBox(window, at('Channel name'))
+      const where = `sample ${JSON.stringify(sample)} in TV-safe ${JSON.stringify(tv)}`
+      expect(sample.x, `${where}: left edge`).toBeGreaterThanOrEqual(tv.x)
+      expect(sample.x + sample.width, `${where}: right edge`).toBeLessThanOrEqual(tv.x + tv.width)
+      expect(sample.y, `${where}: top edge`).toBeGreaterThanOrEqual(tv.y)
+      expect(sample.y + sample.height, `${where}: bottom edge`).toBeLessThanOrEqual(tv.y + tv.height)
+      expect(sample.y, 'clear of the hint line above it').toBeGreaterThanOrEqual(hint.y + hint.height)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

@@ -4,6 +4,7 @@ import path from 'node:path'
 import ts from 'typescript'
 import { RENDERER_ROOT, ROUTE_ENTRY, collectRouteSources } from './routeSources'
 import { parseSource, sourceFilesUnder } from './renderedStrings'
+import { FOLD_7_1 } from '../../src/renderer/src/modules/audio-studio/VolumeMeter'
 
 /**
  * Round 23 (T-13, T-14, T-15, T-17, T-18, T-19, T-20): the unit layer runs in
@@ -3312,9 +3313,14 @@ describe('T-140 Track A - a save that landed beside the chosen file is reported 
     const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
     const burn = panel.slice(panel.indexOf('async function burnIn()'), panel.indexOf('function updateStyle('))
     expect(burn).toMatch(/const note = landedBesideNote\(outputPath, result\.outputPath, 'burn-in'\)/)
-    expect(burn).toMatch(/toast\.success\(note \? `\$\{burnInDoneMessage\(true\)\}\. \$\{note\}` : burnInDoneMessage\(true\), note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
-    expect(burn).toMatch(/toast\(note \? `\$\{burnInDoneMessage\(false\)\} \$\{note\}` : burnInDoneMessage\(false\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: note \? ACTION_TOAST_MS : 6000 \}\)/)
+    expect(burn).toMatch(/toast\.success\(note \? `\$\{burnInDoneMessage\(true, ranged\)\}\. \$\{note\}` : burnInDoneMessage\(true, ranged\), note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
+    expect(burn).toMatch(/toast\(note \? `\$\{burnInDoneMessage\(false, ranged\)\} \$\{note\}` : burnInDoneMessage\(false, ranged\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: note \? ACTION_TOAST_MS : 6000 \}\)/)
     expect(panel).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
+    // T-162 fold: the toast is told whether THIS burn was ranged, by the same value that decided whether the request carried a range.
+    expect(burn).toMatch(/const ranged = selectedClip !== null/)
+    expect(burn).toMatch(/\.\.\.\(ranged && \{\s*startSec: selectedClip\.startSec,\s*endSec: selectedClip\.endSec\s*\}\)/)
+    expect(burn.match(/burnInDoneMessage\(\w+, ranged\)/g) ?? [], 'every call passes the burn\'s own flag').toHaveLength(4)
+    expect(burn, 'never a constant').not.toMatch(/burnInDoneMessage\([^)]*(?:true|false)\)/)
   })
 
   it('Record reports the recording at the path main answered, and says why it is not the one in the Save dialog', () => {
@@ -4207,18 +4213,19 @@ describe('T-160 - the meter reads every channel; the variants are the Export car
 
   it('(3) the source is split into two channels, one analyser each, and the level is the larger peak; the splitter is torn down with the rest', () => {
     const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
-    expect(meter).toMatch(/const splitter = ctx\.createChannelSplitter\(2\)/)
-    expect(meter).toMatch(/source\.connect\(fold\)\s*fold\.connect\(splitter\)/) // T-161 (4): the down-mix sits between the source and the splitter
-    expect(meter).not.toMatch(/source\.connect\(splitter\)/)
-    expect(meter).toMatch(/splitter\.connect\(left, 0\)/)
-    expect(meter).toMatch(/splitter\.connect\(right, 1\)/)
-    // Playback and the spectrum bars stay on the first analyser.
-    expect(meter).toMatch(/source\.connect\(analyser\)\s*analyser\.connect\(ctx\.destination\)/)
-    expect(meter).toMatch(/for \(const node of channels \? \[channels\.left, channels\.right\] : \[analyser\]\) \{\s*node\.getFloatTimeDomainData\(wave\)/)
+    // T-162 (6): the fold and its output moved into `buildFold` / `connectFold`; the two-channel splitter that feeds the analysers stays one node per element.
+    expect(meter).toMatch(/const split = ctx\.createChannelSplitter\(2\)/)
+    expect(meter).toMatch(/built\.out\.connect\(g\.analyser\)\s*built\.out\.connect\(g\.split\)/) // the splitter reads the fold's output, never the source
+    expect(meter).not.toMatch(/source\.connect\(split\)/)
+    expect(meter).toMatch(/split\.connect\(left, 0\)/)
+    expect(meter).toMatch(/split\.connect\(right, 1\)/)
+    // The spectrum analyser plays on to the destination (it reads the fold's output now, T-162 (6): what is heard is what is metered).
+    expect(meter).toMatch(/analyser\.connect\(ctx\.destination\)/)
+    expect(meter).toMatch(/for \(const node of \[g\.left, g\.right\]\) \{\s*node\.getFloatTimeDomainData\(wave\)/)
     // One running maximum over both channels (not a per-channel reset, not the mono analyser's wave).
     expect(meter).toMatch(/let peak = 0\s*for \(const node of/)
-    expect(meter).toMatch(/channelRef\.current\?\.fold\.disconnect\(\)\s*channelRef\.current\?\.splitter\.disconnect\(\)\s*channelRef\.current\?\.left\.disconnect\(\)\s*channelRef\.current\?\.right\.disconnect\(\)/)
-    expect(meter).toMatch(/channelRef\.current = null/)
+    expect(meter).toMatch(/g\?\.split\.disconnect\(\)\s*g\?\.left\.disconnect\(\)\s*g\?\.right\.disconnect\(\)/)
+    expect(meter).toMatch(/graphRef\.current = null/)
   })
 
   it('(3) the label is the ceiling of the peak, so every peak above -1 dBFS (the red one) prints "0 dB" and "-1 dB" is never red', () => {
@@ -4300,16 +4307,18 @@ describe('T-161 - the Variants dialog says what the card says; Delete board coun
 describe('T-161 - the meter\'s down-mix; the Close list; the setup card\'s condition', () => {
   const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-  it('(4) the fold node is a gain with two explicit speaker channels, between the source and the splitter, and is torn down', () => {
+  it('(4) the fold node is a gain with two explicit speaker channels, between the source and the splitter and the destination, and is torn down', () => {
     const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
     expect(meter).toMatch(/const fold = ctx\.createGain\(\)/)
     expect(meter).toMatch(/fold\.channelCount = 2/)
     expect(meter).toMatch(/fold\.channelCountMode = 'explicit'/)
     expect(meter).toMatch(/fold\.channelInterpretation = 'speakers'/)
-    // Playback and the spectrum analyser stay on the source directly (the down-mix is for the readout only).
-    expect(meter).toMatch(/source\.connect\(analyser\)\s*analyser\.connect\(ctx\.destination\)/)
-    expect(meter).not.toMatch(/fold\.connect\(ctx\.destination\)/)
-    expect(meter).toMatch(/channelRef\.current = \{ fold, splitter, left, right \}/)
+    // T-162 (6): the fold is what is heard AND metered, so the source reaches the analyser and the destination only through it.
+    expect(meter).toMatch(/source\.connect\(fold\)/)
+    expect(meter).not.toMatch(/source\.connect\(analyser\)/)
+    expect(meter).not.toMatch(/fold\.connect\(ctx\.destination\)/) // it plays on through the analyser, which connects to the destination
+    expect(meter).toMatch(/return \{ nodes: \[fold\], out: fold \}/)
+    expect(meter).toMatch(/for \(const n of g\?\.fold\?\.nodes \?\? \[\]\) n\.disconnect\(\)/) // and every fold node is torn down
   })
 
   it('(5) Video Studio\'s Close lists what is lost: the clips only when changed, then the scan, the log, the spikes, the undo history only when alone', () => {
@@ -4327,5 +4336,56 @@ describe('T-161 - the meter\'s down-mix; the Close list; the setup card\'s condi
     expect(panel).toMatch(/\{status !== null && !status\.ready \? \(/)
     expect(panel).not.toMatch(/\{!status\?\.ready \? \(/)
     expect(panel).toMatch(/<div className="font-semibold text-warn mb-1">Captions need setup<\/div>/)
+  })
+})
+
+// T-162 (3), (5), (6): the wiring the e2e cases stand on, pinned where no DOM is needed. The 7.1 fold's gains are read from the matrix itself.
+describe('T-162 - the canceled sentence is chosen by what finished; the 7.1 fold is an explicit matrix; the meter plays what it meters', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(3) runExportBatch counts the rows that hold a file and hands exportCanceledMessage that count as the canceled sentence', () => {
+    const queue = strip(read('modules/video-studio/store/exportQueue.ts'))
+    expect(queue).toMatch(/canceled: exportCanceledMessage\(useExportQueue\.getState\(\)\.jobs\.filter\(\(j\) => j\.outputPath\)\.length\)/)
+    expect(queue).not.toMatch(/canceled: 'Export canceled\. Files already finished/)
+  })
+
+  it('(6) the Waveform view hands the meter the probe\'s channel count', () => {
+    expect(strip(read('modules/audio-studio/WaveformView.tsx'))).toMatch(/<VolumeMeter audioElement=\{mediaEl\} channels=\{source\.probe\.channels\} \/>/)
+  })
+
+  it('(6) eight channels go through a ChannelSplitter(8), one gain per used channel, and a ChannelMerger(2); the source feeds the fold and the fold feeds the destination chain', () => {
+    const meter = strip(read('modules/audio-studio/VolumeMeter.tsx'))
+    expect(meter).toMatch(/if \(channels === 8\) \{\s*const splitter = ctx\.createChannelSplitter\(8\)\s*const merger = ctx\.createChannelMerger\(2\)/)
+    expect(meter).toMatch(/source\.connect\(splitter\)/)
+    expect(meter).toMatch(/splitter\.connect\(g, channel\)/)
+    expect(meter).toMatch(/g\.connect\(merger, 0, side\)/)
+    expect(meter).toMatch(/return \{ nodes, out: merger \}/)
+    // The fold's output is metered and heard: the analyser (which plays on to the destination) and the two-channel splitter both read it.
+    expect(meter).toMatch(/built\.out\.connect\(g\.analyser\)/)
+    expect(meter).toMatch(/analyser\.connect\(ctx\.destination\)/)
+    // The media-element source is made once per element; only the fold is rebuilt when the count changes.
+    expect(meter.match(/createMediaElementSource/g)).toHaveLength(1)
+    expect(meter).toMatch(/if \(!g \|\| g\.fold\?\.channels === channels\) return/)
+  })
+
+  it('(6) the matrix: FL and FR at unity, the centre and the surrounds at 0.7071 into their sides, the LFE (channel 3) nowhere', () => {
+    const into = (side: 0 | 1): Array<[number, number]> =>
+      FOLD_7_1.filter((r) => r.to.includes(side)).map((r) => [r.channel, r.gain])
+    expect(into(0)).toEqual([[0, 1], [2, Math.SQRT1_2], [4, Math.SQRT1_2], [6, Math.SQRT1_2]])
+    expect(into(1)).toEqual([[1, 1], [2, Math.SQRT1_2], [5, Math.SQRT1_2], [7, Math.SQRT1_2]])
+    expect(FOLD_7_1.some((r) => r.channel === 3), 'the LFE is dropped').toBe(false)
+    expect(Math.SQRT1_2).toBeCloseTo(0.7071, 4)
+  })
+
+  it('(6) every count but 8 keeps the speakers-rule gain fold, under a simplification comment naming the ceiling', () => {
+    const raw = read('modules/audio-studio/VolumeMeter.tsx')
+    expect(raw).toMatch(/\/\/ simplification: the speakers rule folds 1, 2, 4 and 6 channels exactly/)
+    expect(raw).toMatch(/3, 5, 7 and more than 8 channels have no rule/)
+  })
+
+  it('(5) the whole-video toast is true for either finder: it names no highlights', () => {
+    const store = read('modules/video-studio/store/videoStore.ts')
+    expect(store).toMatch(/WHOLE_VIDEO_DROPPED_MESSAGE =\s*'Removed the whole-video clip now that you have added a clip\. Press Ctrl\+Z to keep it\.'/)
+    expect(store).not.toMatch(/the highlights are your clips now/)
   })
 })

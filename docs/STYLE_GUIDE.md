@@ -156,7 +156,7 @@ Repeated UI is a component, not copy-paste:
   runner registers its child at the spawn, and nearly every one waits first — a
   platform export, a compilation, a cropped GIF, a reframe and the highlight scan
   probe the source; the next job of a batch begins with that probe; a frame
-  extract makes its folder; a ranged burn-in reads its SRT — so a Cancel that
+  extract makes its folder; a burn-in reads its SRT (T-162 (1): the whole video's too) — so a Cancel that
   arrived in the wait found nothing to kill, returned false, and the job started
   anyway. Every runner opens a run for as long as it works
   (`CancelLatch.begin(jobId)`, `src/main/ffmpeg/cancelLatch.ts`); its cancel
@@ -259,6 +259,11 @@ Repeated UI is a component, not copy-paste:
   (a unity duplicate, as a player plays a mono track) after the clock stage, by `probeAudioChannels` (`audio/probe.ts`: the
   most channels of any audio stream, null when unreadable; not `probeAudio`, which refuses a file with no length, and a Record
   take has none); `-ac 2` alone up-mixes mono 3 dB down per side.
+  T-162 (2): a source with MORE than 2 channels adds `aformat=sample_fmts=fltp:channel_layouts=stereo` after the clock stage
+  (`SURROUND_TO_STEREO_FILTER`). `-ac 2` alone down-mixes in the s16 output conversion, where swresample normalises the
+  matrix (5.1 by 1/2.414, so every channel drops 7.6 dB; 7.1 about 9.9); in float it does not, and the matrix is the player's
+  (fronts at unity, centre and surrounds 0.7071, LFE dropped). A loud mix can pass full scale as in a player; the s16
+  conversion clips it. A conversion's place is part of its meaning: a level claim on a down-mix is measured per channel.
 - **A result belongs to what the job was started on (T-112).** Nothing locks the app while a long job runs, so a
   result can arrive after the person has moved on. A transcription started on video A and finished after video B
   was opened used to attach A's captions to B: the panel captures the source path when the job starts and applies
@@ -551,6 +556,12 @@ Repeated UI is a component, not copy-paste:
   (`shiftSrtToRange(srt, start, end, speed)`: shifted, cut to the range, then divided by the speed). A clip nobody
   speaks in gets no file. The YouTube slot of a vertical clip is asked about as a YouTube Short with its own
   3-minute limit (`kitLimitTargets`); Reels stays 20 minutes.
+- **The caption burn reads a cleaned transcript, whole video or range (T-162 (1)).** `runBurnIn` reads the .srt once and cleans it the one way: `range ? shiftSrtToRange(raw, ...) : cleanTranscriptSrt(raw)`.
+  An empty result is no subtitle stage and `captioned: false` (`subtitles=` cannot open a cue-less file: exit 183); a text that differs from the
+  file (a range always; a whole video when the file still holds an older release's tags) burns from a temporary copy (`shiftedSrtPath`) removed
+  in the `finally`; an unchanged whole-video text burns from the file itself. A transcription that finds no speech keeps no file at all:
+  `TranscribeResult.srtPath` is `string | null`, and the panel treats `null` as "not transcribed" (no preview, no Save .srt, no Burn into video; a
+  neutral warning toast, not `toast.success`).
 - **A project never points into a temp family (T-99, T-107).** A sound pulled out of a video (`imagii-audio`) and a video
   the importer converted (`imagii-import`) are scratch the next launch prunes; the project stores the ORIGINAL plus a
   marker (`audioStudio.extractedFromVideo`, `videoStudio.convertedForImport`, schema 4 and 5) and the work is done again on

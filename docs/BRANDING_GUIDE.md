@@ -68,8 +68,11 @@ corporation, not a hype machine.
   or deleted." The raw message (ffmpeg's stderr, an errno, a validator's
   field path) never reaches the toast — it goes to the console. A cancel is
   not an error: say it was canceled, neutrally, and say what survived
-  ("Export canceled. Files already finished are in your folder."). Spell it
-  "canceled".
+  ("Export canceled. Files already finished are in your folder.") - where
+  something did. A cancel with nothing finished says only that it was
+  canceled ("Export canceled."): a folder sentence there sends the person to
+  look for files that were never written (`exportCanceledMessage`,
+  `kitCanceledMessage`). Spell it "canceled".
 - A crash screen says what is safe and where it is, and never asks the user
   to "report" anything — a local-first app has no channel to report to. Where it
   is must be true of the recovery the button does: **Reload to Home** changes the
@@ -185,8 +188,8 @@ SAME verb, and the toast that follows uses its past tense.
   "Show in folder" (it does not dismiss, so it works twice) and "Close", the product's one
   dismiss word. A path in an 8 s toast you cannot select is not a way to the file.
   `toastKeptTake` in `lib/savedToast.tsx` is the one helper.
-- A canceled job is neutral ("Export canceled.") and says what survived; it is
-  never a red error toast.
+- A canceled job is neutral ("Export canceled.") and says what survived, when
+  something did; it is never a red error toast.
 
 ### Voice
 

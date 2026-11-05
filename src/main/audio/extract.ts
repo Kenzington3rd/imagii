@@ -33,9 +33,17 @@ export const EXTRACT_CLOCK_FILTER = 'aresample=async=1:first_pts=0'
 /**
  * T-161 (3): a mono source becomes stereo as a unity duplicate. `-ac 2` alone up-mixes mono the way a down-mix would, centre at -3 dB per side, so a mono take (what
  * Record makes) came out of Clean audio 3 dB under its own level, against the Levels copy "Otherwise the export keeps your levels as they are". A player puts a
- * mono track on both speakers at unity (`audio/chain.ts`), and this is that. Stereo and multichannel sources are left to `-ac`.
+ * mono track on both speakers at unity (`audio/chain.ts`), and this is that. Stereo sources are left to `-ac`; surround ones fold first (`SURROUND_TO_STEREO_FILTER`).
  */
 export const MONO_TO_STEREO_FILTER = 'pan=stereo|c0=c0|c1=c0'
+
+/**
+ * T-162 (2): a surround source (more than 2 channels) is folded to stereo in FLOAT, before the s16 output. `-ac 2` alone down-mixes in the s16 output conversion, where swresample
+ * NORMALISES the matrix (5.1 by 1/2.414), so every channel dropped 7.6 dB (7.1 about 9.9): a centre-only 5.1 tone at -24.1 dBFS came out at -34.7 per side. In float it does not
+ * normalise, and the matrix is the player's (Web Audio's speakers rule): fronts at unity, centre and surrounds at 0.7071, LFE dropped. A loud full-range mix can pass full scale,
+ * as it does in a player, and the s16 conversion clips it (never wraps). Mono keeps `MONO_TO_STEREO_FILTER`; stereo and a failed probe are untouched.
+ */
+export const SURROUND_TO_STEREO_FILTER = 'aformat=sample_fmts=fltp:channel_layouts=stereo'
 
 /**
  * Every extraction ffmpeg that is running, from its spawn until it closes or
@@ -99,10 +107,16 @@ async function extractUnderRun(
   // A Cancel that lands while the folder is made ends the wait, and no child is spawned (T-98).
   await run.guard(mkdir(dir, { recursive: true }))
   const wavPath = path.join(dir, `${nanoid(10)}.wav`)
-  // T-161 (3): only a stereo target can be a duplicate of a mono source (the transcription's 1-channel extract has no up-mix to correct). A probe that
-  // cannot read the file is null and the extraction is what it was.
+  // T-161 (3), T-162 (2): only a stereo target has an up-mix (mono) or a down-mix (surround) to correct (the transcription's 1-channel extract has neither). A probe that
+  // cannot read the file is null and the extraction is what it was. The probe reports the stream ffmpeg 7 extracts when it is not told which: the DEFAULT-flagged audio stream,
+  // else the one with the most channels - so a file whose default stream is not its widest can read a count that is not the extracted stream's (T-110 (ap) holds that mixed-track case).
   const sourceChannels = format.channels === 2 ? await run.guard(probeAudioChannels(videoPath)) : null
-  const audioFilter = sourceChannels === 1 ? `${EXTRACT_CLOCK_FILTER},${MONO_TO_STEREO_FILTER}` : EXTRACT_CLOCK_FILTER
+  const audioFilter =
+    sourceChannels === 1
+      ? `${EXTRACT_CLOCK_FILTER},${MONO_TO_STEREO_FILTER}`
+      : sourceChannels !== null && sourceChannels > 2
+        ? `${EXTRACT_CLOCK_FILTER},${SURROUND_TO_STEREO_FILTER}`
+        : EXTRACT_CLOCK_FILTER
 
   await new Promise<void>((resolve, reject) => {
     const p = spawn(

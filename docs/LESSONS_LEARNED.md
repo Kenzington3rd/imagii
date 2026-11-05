@@ -14,6 +14,73 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-162 (round 111), Track A: a transcript with no speech, and the sound of a surround file
+
+The forty-eighth sweep, Track A (items 1-2 and a fold).
+
+### (1) [MED] - A transcription that found only non-speech left an empty transcript the panel offered to save and burn
+
+- **Bug.** T-161 (2) cleans a run whose every cue is a tag to `''`, and the run wrote it as a 0-byte .srt and answered its path with `[]`. The panel stored both: a green success tick on "No speech found, so there are no captions.", an empty focusable "Transcript preview", the first-run hint gone, Save .srt writing a 0-byte copy ("SRT saved"), and Burn into video handing the empty file to `subtitles=`, which ffmpeg refuses (exit 183, "Unable to open"; "Burn-in failed." mapped to "That file looks damaged...").
+- **Root cause.** T-161 (2) changed the SENTENCE that reports an empty result (its fold) and not what an empty result IS: a file that exists, a path the panel stores. And the whole-video burn never read its transcript, so a cue-less file, or an older one still holding its tags, reached `subtitles=` as it was; only the ranged burn read through `shiftSrtToRange`.
+- **Fix.** `runTranscribe` removes the run's own .srt (its name is per run, `<name>-<timestamp>`, so no earlier transcript is touched) and answers `srtPath: null, segments: []` when the cleaned text has no cue (`TranscribeResult.srtPath` is `string | null`). The panel clears that video's transcript with the path (`setSrtPathFor(startedFor, null)`, its stale check first, then `setDerivedFor(..., { transcript: null })`), so it is at its first-run state, and the toast is the neutral warning (the stale answer's icon), not `toast.success`. `runBurnIn` takes ONE path for both burns: `range ? shiftSrtToRange(raw, ...) : cleanTranscriptSrt(raw)`; an empty result means no subtitle stage and `captioned: false`, a text that differs from the file burns from the same temporary copy (`shiftedSrtPath`, removed where the ranged copy was), an unchanged one burns where it is.
+- **Test.** transcribeClean.test.ts "T-162 (1)" (a tag-only output answers null and `[]` and leaves no file; an earlier transcript beside it is untouched; a mixed output is unchanged); media.spec.ts "T-162 (1)" (a whole-video burn of a 0-byte transcript and of a tag-only one writes the video uncaptioned with `captioned: false`, of a tag-and-speech one draws only the speech, of a speech-only one burns as it did, and no temporary copy is left), red on the unchanged tree (exit 183, tags drawn); video-pipelines.spec.ts "T-162 (1)" (a stubbed `srtPath: null` answer: the hint, no preview, no Save .srt, no Burn into video, a warning icon and not the success mark; a later empty run clears a transcript that was there). Two older pins moved with the read, in place: cancelSentinel.test.ts's burn-in row (a fake path) now has a transcript to read, and media.spec.ts's whole-video missing-SRT case now expects the read's ENOENT (which `userFacingError` words as a file that is not there) where it expected ffmpeg's "Unable to open" (worded as a damaged file).
+- **Lesson.** **When a filter can empty a result, the empty is a state, not a value.** Change the type at the boundary (`string | null`) so the compiler walks every consumer, and give the one reader of a stored file the same cleaning the writer did: a file written by an older release is a second writer.
+
+### (2) [LOW] - A surround file's sound came out of the extraction 7.6-10 dB under its own level
+
+- **Bug.** Executed on the bundled ffmpeg 7.0.2: a centre-only 5.1 tone at -24.08 dBFS extracted at -34.75 per side, a front-left-only one at -31.74 on the left, a centre-only 7.1 one at -36.98. With Even volume off, Clean audio's re-attached video and an Audio Studio import of a 5.1/7.1 recording played far below the source, against the Levels copy "Otherwise the export keeps your levels as they are".
+- **Root cause.** `-ac 2` down-mixes in the s16 OUTPUT conversion, where swresample normalises the matrix (5.1 by 1/2.414), so every channel drops 7.6 dB (7.1 about 9.9). In float it does not normalise, and the matrix is the player's: fronts at unity, centre and surrounds 0.7071, LFE dropped.
+- **Fix.** For a 2-channel target and a probe of more than 2 channels the filter is `aresample=async=1:first_pts=0,aformat=sample_fmts=fltp:channel_layouts=stereo` (`SURROUND_TO_STEREO_FILTER`, audio/extract.ts). A loud full-range mix can pass full scale as it does in a player, and the s16 conversion clips it (it does not wrap: pinned). Mono keeps T-161 (3)'s pan; stereo, a failed probe and the transcription's 1-channel extract are unchanged.
+- **Test.** media.spec.ts "T-162 (2)" (centre-only 5.1 and 7.1 tones at -3.01 dB of the source, front-left-only at unity and silent on the right, the surrounds on their own side, the LFE dropped, an AAC 5.1 file, 3/4/5/7-channel files, full-scale in-phase tones on FL, FC and BL clipped at the rail and never sign-flipped, a stereo and a mono source unchanged), red on the unchanged tree (-34.7 / -31.7 / -37.0); the T-161 (3) pin that held the 5.1 output now holds -3.01 dB of the source's centre; extract.test.ts "T-162 (2)" (the filter for 3 to 8 channels; 1, 2 and null unchanged; the 1-channel extract of a surround file unchanged).
+- **Lesson.** **Where a conversion happens decides what it does.** The same `-ac 2` is a player's matrix in float and a normalised one in s16; a level promise needs a per-channel measurement on a source whose layout differs from the target's, one coefficient at a time (a tone on ONE channel reads one entry of the matrix).
+- **Fold (not counted).** The comments at audio/extract.ts and audio/probe.ts said ffmpeg picks the audio stream with the most channels. ffmpeg 7 prefers a default-flagged stream (a mono default plus a stereo track extracts the mono stream while the probe says 2). They say so now, and that T-110 (ap) holds the mixed-track case. No behaviour change.
+
+### Fold: the whole-video burn's toast
+
+- **Bug.** Since (1) a whole-video burn reads its transcript through `cleanTranscriptSrt`, so a transcript with no speech (a project reopened from disk restores only `srtPath`; one written before T-161 (2) can hold nothing but "[MUSIC]") burns uncaptioned and answers `captioned: false`. The panel toasted "No captions in this range", for a burn that had no range.
+- **Root cause.** `burnInDoneMessage(false)` had one sentence, written when only a ranged burn could come back uncaptioned (T-89).
+- **Fix.** `burnInDoneMessage(captioned, ranged)`: a whole-video burn that wrote no captions says "No speech in this transcript — exported without captions."; the ranged sentence is unchanged. The panel passes `ranged`, the same value that decided whether the request carried a range, at both call sites.
+- **Test.** captions.test.ts "burnInDoneMessage names the burn it answers"; interactionWiring.test.ts (the flag is the burn's own range decision, never a constant); video-pipelines.spec.ts "T-162 fold" (the real burn of a tag-only transcript, whole then ranged, toasts each sentence with the warning icon). Red on the unchanged tree; a constant `true` and a constant `false` at the call site both fail the e2e and the pin.
+- **Lesson.** **A message keyed on an outcome must also be keyed on the scope the outcome happened in.** When a change makes an old outcome reachable from a new scope, the sentence written for the old scope is now wrong.
+
+## 2026-11-05 - T-162 (round 111), Track B: a sentence is true of what happened; a sample obeys its own rule; what is heard is what is metered
+
+The forty-eighth sweep, Track B (items 3 to 6).
+
+### (3) [LOW] - A cancel before any file finished still pointed at the folder
+
+- **Bug.** A two-file Export canceled during its first job toasted "Export canceled. Files already finished are in your folder." with nothing in the folder; the rows said Canceled and no file had landed. The Clip Kit had the right sentence for this since T-113 (`kitCanceledMessage`); the Export queue's was a constant.
+- **Root cause.** `runExportBatch` passed one fixed string as the canceled sentence, true only when something had finished.
+- **Fix.** `exportCanceledMessage(finished)` beside `runExportBatch` (0 gives "Export canceled.", more keeps the folder sentence), fed by the count of rows that hold an output path when the batch rejects. Main sends each job's `video:jobComplete` before the next job starts and before the batch rejects, so the rows are current. Every e2e pin of the old sentence was read for what its scenario produces: the single-job and first-job cancels (leave-and-return, re-export, the card's Cancel, Clip Kit's disabled title) now expect the short form; the cancel between two jobs and the partial-export cancel, which follow a finished file, keep the folder sentence; the three-job cancel's timing varies, so it counts the Show in folder buttons and expects the sentence that is true of that count; the two "the second press did not cancel" guards refuse both forms.
+- **Test.** exportQueue.test.ts "exportCanceledMessage" (both ways, and the rows a first-job and a later cancel leave); video-pipelines.spec.ts "T-162 (3)" (a cancel inside job 1 of two toasts exactly "Export canceled." and writes nothing, red on the base; a cancel after job 1 landed keeps the folder sentence); interactionWiring.test.ts "T-162" (the count's source).
+- **Lesson.** **A sentence that describes a result is chosen by the result.** When two paths of one feature say the same thing, check that both say it only when it is true, and give the choice a name a test can call.
+
+### (4) [LOW] - The channel-art sample name sat outside both of its own safe frames
+
+- **Bug.** "YOUR\nCHANNEL" at y 700 and 140 px on two lines ran y 700-980: below the TV-safe frame (551-889) and the all-device frame (508-931), under the template's own hint "TV-safe - keep load-bearing text inside".
+- **Root cause.** The sample was placed when the frames were a 1106x350 marker (round 16) and was not moved when the frames became the documented rectangles; nothing compared the sample's box with the frame.
+- **Fix.** One line, "YOUR CHANNEL", at y 650 and 140 px, still a hint, in the same font and fill. It is 1108 px wide at the fallback font (measured in the built app: Impact is not installed where the suite runs), so x 725 centres that widest case in the frame (662 + (1235 - 1108) / 2); a narrower Impact sits inside it.
+- **Test.** templateTruth.test.ts "the channel-art sample name sits inside the TV-safe frame" (the vertical box from fontSize x lines inside the rect, read from the template's own layers, and below the hint line); image.spec.ts "T-162 (4)" (the drawn text node's client rect inside the drawn TV-safe rect on all four sides, red on the base: bottom 980 against 889).
+- **Lesson.** **A template's sample obeys the rule its own hint states, and the test reads both from the data.** A box is `y + fontSize x lines` (Konva's lineHeight 1); the width is only knowable in the app, so it is measured there and the e2e re-measures it.
+
+### (5) [LOW] - The whole-video toast named highlights after a chat spike
+
+- **Bug.** "Removed the whole-video clip - the highlights are your clips now." after a chat spike's + Clip, where nothing called a highlight was found.
+- **Root cause.** The one constant was written for Scan VOD's rows and shown by both finders; BRANDING's one-name rule keeps a name for one thing.
+- **Fix.** `WHOLE_VIDEO_DROPPED_MESSAGE` = "Removed the whole-video clip now that you have added a clip. Press Ctrl+Z to keep it." (true for both).
+- **Test.** video-pipelines.spec.ts: the ChatHighlightPanel case (a pasted log, + Clip on a spike over the untouched whole-video clip) and the HighlightPanel case, their pins edited in place and red on the base; interactionWiring.test.ts "T-162".
+- **Lesson.** **A shared message is written for the intersection of its callers.** Read each caller's words for the thing it found before a constant names it.
+
+### (6) [LOW] - A 7.1 file played and metered without its centre and surrounds
+
+- **Bug.** Web Audio's speakers rule folds 1, 2, 4 and 6 channels; eight fall back to the discrete rule, so only FL and FR passed. A 7.1 file with its voice on the centre read "-60 dB" and, because playback went through the same graph to a stereo destination, was heard without it.
+- **Root cause.** The meter's fold fed only the readout, and the destination applied its own rule to the raw source.
+- **Fix.** For 8 channels the fold is an explicit matrix (`FOLD_7_1`: a ChannelSplitter(8), one gain per used channel, a ChannelMerger(2); FL and FR at unity, FC, BL, BR, SL and SR at 0.7071, the LFE dropped), the values of ffmpeg's float down-mix and the 5.1 rule extended. Playback now runs source, fold, analyser, destination, and the left/right analysers read the fold's output, so what is heard is what is metered for every count (mono, stereo and 5.1 are unchanged: the destination applies the same rule). `WaveformView` passes the probe's channel count; the media-element source is made once per element and only the fold is rebuilt when the count changes. Counts with no rule (3, 5, 7, more than 8) keep the discrete fold under a `// simplification:` comment.
+- **Test.** audio.spec.ts "T-162 (6)" (an 8-channel WAV from the bundled ffmpeg with the tone on FC only: "-3 dB" while it plays, red on the base: "-60 dB"; the 5.1 and stereo meter cases unchanged); interactionWiring.test.ts "T-162" (the graph's connections and the matrix's gains, two older pins edited in place because the source no longer reaches the analyser directly).
+- **Lesson.** **Meter what is played, through the same node.** A readout fed by its own side-chain can disagree with the speakers for any layout the side-chain does not cover.
+
+---
+
 ## 2026-11-05 - T-161 (round 110), Track A: the media a person gets is the media they made
 
 The forty-seventh sweep, Track A (items 1 to 3).

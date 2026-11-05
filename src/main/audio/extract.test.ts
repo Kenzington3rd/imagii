@@ -89,7 +89,7 @@ vi.mock('node:child_process', () => ({
 let probedChannels: number | null = null
 vi.mock('./probe', () => ({ probeAudioChannels: async () => probedChannels }))
 
-const { extractAudioFromVideo, cancelAllExtractions, __extractTesting__, EXTRACT_CLOCK_FILTER } = await import('./extract')
+const { extractAudioFromVideo, cancelAllExtractions, __extractTesting__, EXTRACT_CLOCK_FILTER, SURROUND_TO_STEREO_FILTER } = await import('./extract')
 
 let scratch = ''
 const ARG = (s: Spawned, flag: string): string | undefined => s.args[s.args.indexOf(flag) + 1]
@@ -336,8 +336,8 @@ describe('a mono source is duplicated, not up-mixed (T-161 (3))', () => {
     expect(ARG(s, '-ac')).toBe('2')
   })
 
-  it('stereo, multichannel and an unreadable file are extracted as they were', async () => {
-    for (const channels of [2, 6, 8, null]) {
+  it('stereo and an unreadable file are extracted as they were (T-162 (2): surround folds, below)', async () => {
+    for (const channels of [2, null]) {
       spawned = []
       const s = await run(channels)
       expect(ARG(s, '-af'), `${channels}`).toBe(EXTRACT_CLOCK_FILTER)
@@ -347,6 +347,43 @@ describe('a mono source is duplicated, not up-mixed (T-161 (3))', () => {
 
   it('the transcription extract (1 channel) is not probed and is unchanged', async () => {
     const s = await run(1, TRANSCRIPTION_AUDIO)
+    expect(ARG(s, '-af')).toBe(EXTRACT_CLOCK_FILTER)
+    expect(ARG(s, '-ac')).toBe('1')
+  })
+})
+
+describe('a surround source folds to stereo in float, not in the s16 conversion (T-162 (2))', () => {
+  const run = async (channels: number | null, format?: Parameters<typeof extractAudioFromVideo>[2]): Promise<Spawned> => {
+    probedChannels = channels
+    spawned = []
+    const done = extractAudioFromVideo('/v.mkv', undefined, format)
+    await vi.waitFor(() => expect(spawned).toHaveLength(1))
+    const s = spawned[0] as Spawned
+    s.child.emit('close', 0, null)
+    await done
+    return s
+  }
+
+  it('the stage is a float stereo layout conversion', () => {
+    expect(SURROUND_TO_STEREO_FILTER).toBe('aformat=sample_fmts=fltp:channel_layouts=stereo')
+  })
+
+  it('6 and 8 probed channels (and every count above 2) get the clock stage then the float fold; -ac 2 stays', async () => {
+    for (const channels of [3, 4, 5, 6, 7, 8]) {
+      const s = await run(channels)
+      expect(ARG(s, '-af'), `${channels}`).toBe(`${EXTRACT_CLOCK_FILTER},aformat=sample_fmts=fltp:channel_layouts=stereo`)
+      expect(s.args.indexOf('-af')).toBeLessThan(s.args.indexOf('-acodec'))
+      expect(ARG(s, '-ac')).toBe('2')
+    }
+  })
+
+  it('1 and 2 channels and an unreadable file do not get it', async () => {
+    expect(ARG(await run(1), '-af')).toBe(`${EXTRACT_CLOCK_FILTER},pan=stereo|c0=c0|c1=c0`)
+    for (const channels of [2, null]) expect(ARG(await run(channels), '-af'), `${channels}`).toBe(EXTRACT_CLOCK_FILTER)
+  })
+
+  it('the transcription extract (1 channel) of a surround file is not probed and is unchanged', async () => {
+    const s = await run(6, TRANSCRIPTION_AUDIO)
     expect(ARG(s, '-af')).toBe(EXTRACT_CLOCK_FILTER)
     expect(ARG(s, '-ac')).toBe('1')
   })

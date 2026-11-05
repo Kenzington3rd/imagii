@@ -5504,3 +5504,53 @@ test.describe('T-161 (4): the volume meter folds a 5.1 file\'s centre channel in
     }
   })
 })
+
+// T-162 (6): the volume meter (and the sound that plays) folds a 7.1 file's centre in. Web Audio's speakers rule covers 1, 2, 4 and 6 channels; an
+// 8-channel input fell back to the discrete rule and passed FL and FR only, so a 7.1 file's voice on the centre read "-60 dB" and was not heard. The fold
+// for 8 channels is an explicit matrix (centre x0.7071 into both sides). The fixture is an EIGHT-channel WAV from the bundled ffmpeg with the sine on FC alone.
+test.describe('T-162 (6): the volume meter folds a 7.1 file\'s centre channel in', () => {
+  type Sample = { text: string; cls: string }
+  async function centreOnly71(outPath: string, gain: number): Promise<void> {
+    const r = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8', '-af', `volume=${gain},pan=7.1|FC=c0`, '-ar', '44100', '-c:a', 'pcm_s16le', outPath])
+    if (r.code !== 0) throw new Error(`7.1 tone ffmpeg exit ${r.code}: ${r.stderr.slice(-600)}`)
+    const probe = await runBinary(ffmpegPath, ['-i', outPath])
+    expect(probe.stderr, 'the fixture really has eight channels').toMatch(/7\.1|8 channels/)
+  }
+  const label = (window: Page) => window.getByText('Meter', { exact: true }).locator('xpath=following-sibling::span')
+
+  test('a tone on the centre channel only of a 7.1 file reads its folded level (about 3 dB under its peak) while it plays, not "-60 dB"', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t162-meter-71')
+    const { window } = studio
+    try {
+      const wav = path.join(studio.root, 'source', 'centre71-t162.wav')
+      // 7.7 is a peak of 0.9625 (-0.33 dBFS); folded into each side at 0.7071 it is 0.6806 (-3.34 dBFS), which the ceil label prints as "-3 dB".
+      await centreOnly71(wav, 7.7)
+      await dropOnImporter(window, wav, 'centre71-t162.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(window.getByText('44100 Hz · 8 ch'), 'the probe sees eight channels').toBeVisible()
+      await window.evaluate(() => {
+        const w = window as unknown as { __t162: Sample[]; __t162Timer: number }
+        w.__t162 = []
+        const el = Array.from(document.querySelectorAll('span.font-mono')).find((s) => / dB$/.test(s.textContent ?? ''))
+        if (!el) throw new Error('no meter dB label found')
+        w.__t162Timer = window.setInterval(() => w.__t162.push({ text: el.textContent ?? '', cls: el.className }), 16)
+      })
+      await playButton(window).click()
+      await expect(window.locator(WAVEFORM).getByRole('button', { name: 'Pause', exact: true })).toBeVisible({ timeout: 10_000 })
+      await window.waitForTimeout(3_000)
+      const samples = await window.evaluate(() => {
+        const w = window as unknown as { __t162: Sample[]; __t162Timer: number }
+        window.clearInterval(w.__t162Timer)
+        return w.__t162
+      })
+      expect(samples.length, 'the sampler ran').toBeGreaterThan(50)
+      for (const s of samples.slice(-20)) {
+        expect(s.text, 'the folded centre, 3.3 dB under the tone\'s peak').toBe('-3 dB')
+        expect(s.cls).toContain('text-ink-muted')
+      }
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

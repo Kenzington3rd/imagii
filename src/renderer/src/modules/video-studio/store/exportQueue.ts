@@ -102,6 +102,14 @@ export const useExportQueue = create<ExportQueueState>((set, get) => ({
 }))
 
 /**
+ * What a canceled batch says (T-162 (3)). "Files already finished are in your folder" is only true when a file finished: a cancel in the first
+ * job wrote nothing, and the sentence sent the person looking for a folder with nothing in it. The model is `kitCanceledMessage` (T-113).
+ */
+export function exportCanceledMessage(finished: number): string {
+  return finished > 0 ? 'Export canceled. Files already finished are in your folder.' : 'Export canceled.'
+}
+
+/**
  * Run a batch of export jobs against the queue, and report how it ended. Nothing here is a component: the panel that started it can be gone
  * (the person went to Home) and the rows still advance, the toast still says how it went, and the queue is free again when it ends.
  */
@@ -137,7 +145,9 @@ export async function runExportBatch(opts: {
     // did not finish keep saying so after the toast fades.
     const { cancelled, message } = reportFailure(err, {
       failed: 'Export failed.',
-      canceled: 'Export canceled. Files already finished are in your folder.'
+      // T-162 (3): only a batch with a file that landed points at the folder. Main sends each job's complete event before the next job starts
+      // and before the batch rejects, so the rows hold every finished file by now.
+      canceled: exportCanceledMessage(useExportQueue.getState().jobs.filter((j) => j.outputPath).length)
     })
     useExportQueue.getState().settle({ cancelled, message })
   } finally {

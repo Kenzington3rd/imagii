@@ -398,3 +398,35 @@ describe('hint layers: guidance and sample words that never ship in an export', 
     for (const [id, l] of design) expect(l.hint === true, `${id} / "${l.name}"`).toBe(false)
   })
 })
+
+// T-162 (4): the channel-art template tells the person "TV-safe - keep load-bearing text inside", and its own sample name sat below both frames
+// ("YOUR\nCHANNEL" at y 700, 140 px on two lines, ran y 700-980 against the TV-safe frame's 551-889). The sample is the template's example of the
+// rule, so it obeys it: its box (y to y + fontSize x lines, Konva's lineHeight 1) is inside the TV-safe rect and below the hint line.
+describe('the channel-art sample name sits inside the TV-safe frame it advertises (T-162 (4))', () => {
+  const banner = CANVAS_TEMPLATES.find((t) => t.id === 'yt-banner-channel')
+  const layer = (name: string): CanvasLayer => {
+    const l = banner?.doc.layers.find((c) => c.name === name)
+    if (!l) throw new Error(`the channel banner has no "${name}" layer`)
+    return l
+  }
+
+  it('the sample\'s vertical box lies inside the TV-safe rect, read from the template\'s own layers', () => {
+    const tv = layer('TV-safe area')
+    const sample = layer('Channel name')
+    if (tv.type !== 'rect' || sample.type !== 'text') throw new Error('layer types changed')
+    const lines = sample.text.split('\n').length
+    expect(sample.y, 'the box starts inside the frame').toBeGreaterThanOrEqual(tv.y)
+    expect(sample.y + sample.fontSize * lines, 'the box ends inside the frame').toBeLessThanOrEqual(tv.y + tv.height)
+    expect(sample.x, 'the box starts inside the frame').toBeGreaterThanOrEqual(tv.x)
+  })
+
+  it('it is one line, "YOUR CHANNEL", still a hint, and below the "Safe area hint" line', () => {
+    const sample = layer('Channel name')
+    const hint = layer('Safe area hint')
+    if (sample.type !== 'text' || hint.type !== 'text') throw new Error('layer types changed')
+    expect(sample.text).toBe('YOUR CHANNEL')
+    expect(sample.hint).toBe(true)
+    expect(sample.y, 'clear of the hint text above it').toBeGreaterThanOrEqual(hint.y + hint.fontSize)
+  })
+})
+

@@ -24,7 +24,8 @@ export interface TranscribeRequest {
 
 export interface TranscribeResult {
   jobId: string
-  srtPath: string
+  /** T-162 (1): null when the run found no speech (every cue was a tag): no file is kept. */
+  srtPath: string | null
   segments: CaptionSegment[]
   durationMs: number
 }
@@ -369,12 +370,14 @@ export function staleCaptionsMessage(fileName: string): string {
 /**
  * The toast after a burn-in. A ranged burn over a stretch nobody speaks in
  * still writes the clip — without a subtitle stage (T-81) — and "Captions
- * burned in" over a file with none is a false success.
+ * burned in" over a file with none is a false success. T-162 fold: a burn of the
+ * whole video had no range, so its sentence is about the transcript.
  */
-export function burnInDoneMessage(captioned: boolean): string {
-  return captioned
-    ? 'Captions burned in'
-    : 'No captions in this range — exported without captions.'
+export function burnInDoneMessage(captioned: boolean, ranged: boolean): string {
+  if (captioned) return 'Captions burned in'
+  return ranged
+    ? 'No captions in this range — exported without captions.'
+    : 'No speech in this transcript — exported without captions.'
 }
 
 /** Phase 4E: Whisper model auto-install progress events. */

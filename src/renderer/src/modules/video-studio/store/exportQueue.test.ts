@@ -5,7 +5,7 @@ import { CANCELLED_MESSAGE } from '@shared/cancel'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { isValidElement, type ReactNode } from 'react'
 import { useVideoStore } from './videoStore'
-import { cancelExportBatch, remainingExportJobs, requestExportCancel, runExportBatch, useExportQueue, type JobStatus } from './exportQueue'
+import { cancelExportBatch, exportCanceledMessage, remainingExportJobs, requestExportCancel, runExportBatch, useExportQueue, type JobStatus } from './exportQueue'
 
 /**
  * T-135 (1) - the Export queue is a module store and its batch runs outside any component.
@@ -248,5 +248,40 @@ describe('the finished toast of a batch always carries the way to its first file
     install(() => Promise.resolve([]))
     await runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
     expect(toast.success).toHaveBeenCalledWith('Exported 2 files')
+  })
+})
+
+describe('exportCanceledMessage - what a canceled batch says depends on what survived (T-162 (3))', () => {
+  it('says only that it was canceled when no file had finished, and never points at a folder', () => {
+    expect(exportCanceledMessage(0)).toBe('Export canceled.')
+    expect(exportCanceledMessage(0)).not.toMatch(/folder/)
+  })
+
+  it('names the folder once any file had finished', () => {
+    for (const finished of [1, 2, 20]) {
+      expect(exportCanceledMessage(finished)).toBe('Export canceled. Files already finished are in your folder.')
+    }
+  })
+
+  it('a cancel during the FIRST job leaves its row saying only that it was canceled', async () => {
+    const held = gate()
+    install(() => held.promise)
+    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    held.reject(new Error(CANCELLED_MESSAGE))
+    await done
+    const [a, b] = useExportQueue.getState().jobs
+    expect(a?.error).toBe('Export canceled.')
+    expect(b?.error).toBe('Export canceled.')
+    expect(a?.canceled && b?.canceled).toBe(true)
+  })
+
+  it('a cancel after the first file finished keeps the folder sentence on the rows left', async () => {
+    const held = gate()
+    const bridge = install(() => held.promise)
+    const done = runExportBatch({ queue: [spec('a'), spec('b')], statuses: [row('a'), row('b')], dir: '/out', sourcePath: '/v/a.mp4' })
+    bridge.complete[0]?.({ jobId: 'a', outputPath: '/out/a.mp4' })
+    held.reject(new Error(CANCELLED_MESSAGE))
+    await done
+    expect(useExportQueue.getState().jobs[1]?.error).toBe('Export canceled. Files already finished are in your folder.')
   })
 })

@@ -342,7 +342,7 @@ export const ALREADY_IN_CLIPS_MESSAGE = 'Already in the Clips list'
  *  'added-dropped-whole-video'. Neutral on purpose — nothing was lost, and the
  *  last clause is how to say "no, keep it". */
 export const WHOLE_VIDEO_DROPPED_MESSAGE =
-  'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
+  'Removed the whole-video clip now that you have added a clip. Press Ctrl+Z to keep it.'
 
 /**
  * T-94 — is this the whole-video clip `loadSource` made, untouched since?

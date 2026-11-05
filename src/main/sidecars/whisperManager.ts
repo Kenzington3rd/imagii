@@ -307,6 +307,13 @@ async function transcribeUnderRun(
     // Save .srt, the burn-in, the Clip Kit and the panel's line count all read the same transcript. (Not whisper's own `--suppress-nst`: the person installs
     // their own whisper-cli, and an older one rejects an argument it does not know.)
     const srtContent = cleanTranscriptSrt(await readFile(srtPath, 'utf8'))
+    // T-162 (1): a run whose every cue was a tag has NO transcript. Its file (named for this run alone, `<name>-<timestamp>`, so no earlier transcript is touched) is removed
+    // and the answer is `srtPath: null`: a 0-byte .srt was offered by Save .srt (a 0-byte copy) and Burn into video (`subtitles=` cannot open a cue-less file, exit 183).
+    if (srtContent === '') {
+      await run.guard(unlink(srtPath).catch(() => undefined))
+      onProgress({ jobId: req.jobId, phase: 'done', percent: 100 })
+      return { jobId: req.jobId, srtPath: null, segments: [], durationMs: Date.now() - startedAt }
+    }
     await run.guard(writeFileAtomic(srtPath, srtContent))
     const segments = parseSrt(srtContent)
 
@@ -452,25 +459,23 @@ export async function runBurnIn(
     // written and before any spawn, in the run so that a Cancel that lands while the paths resolve is a Cancel (T-98).
     await run.guard(refuseOutputOverInputs([req.outputPath], [req.videoPath, req.srtPath]))
     // The SRT the `subtitles` stage reads; null = no subtitle stage.
-    let burnSrt: string | null = range ? null : req.srtPath
-    if (range) {
-      const shifted = shiftSrtToRange(
-        await readFile(req.srtPath, 'utf8'),
-        range.startSec,
-        range.endSec
-      )
-      // An empty result is a real answer — nobody speaks in this span — and
-      // ffmpeg's `subtitles` cannot open a cue-less file ("Unable to open"),
-      // so that window burns with no subtitle stage at all: the clip,
-      // uncaptioned, exactly what a startSec-0 range with no cue in it has
-      // always produced.
-      if (shifted !== '') {
-        tempSrt = shiftedSrtPath(req.srtPath, randomUUID())
-        await writeFile(tempSrt, shifted, 'utf8')
-        burnSrt = tempSrt
-      } else {
-        captioned = false
-      }
+    let burnSrt: string | null = null
+    const rawSrt = await readFile(req.srtPath, 'utf8')
+    // T-162 (1c): the whole video reads the transcript through the cleaner (a transcript written before T-161 (2) still holds its tags) the way a range reads it through the shift
+    // (which cleans first); one path, one answer for both.
+    const burnText = range ? shiftSrtToRange(rawSrt, range.startSec, range.endSec) : cleanTranscriptSrt(rawSrt)
+    // An empty result is a real answer - nobody speaks in this span, or the transcript holds no speech - and
+    // ffmpeg's `subtitles` cannot open a cue-less file ("Unable to open"), so that burn has no subtitle stage at all:
+    // the clip, uncaptioned, exactly what a startSec-0 range with no cue in it has always produced.
+    if (burnText === '') {
+      captioned = false
+    } else if (range || burnText !== rawSrt) {
+      // A ranged burn always reads its shifted copy; a whole-video one only when cleaning changed the file (an unchanged one burns where it is).
+      tempSrt = shiftedSrtPath(req.srtPath, randomUUID())
+      await writeFile(tempSrt, burnText, 'utf8')
+      burnSrt = tempSrt
+    } else {
+      burnSrt = req.srtPath
     }
 
     // T-111: the picture the captions are drawn on (their size follows its shape)

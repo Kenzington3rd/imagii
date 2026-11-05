@@ -57,6 +57,9 @@ class FakeChild extends EventEmitter {
 
 let children: FakeChild[] = []
 let scratch = ''
+// T-162 (1): the whole-video burn READS its transcript now (it is cleaned like a range's), so the table's burn-in row has a real one - in a folder of its own, because the cases
+// assert what `scratch` holds.
+let transcriptDir = ''
 
 /**
  * T-98: a probe the test can hold. Every runner that waits on ffprobe (or on
@@ -482,7 +485,7 @@ const CASES: Case[] = [
         {
           jobId,
           videoPath: '/tmp/in.mp4',
-          srtPath: '/tmp/in.srt',
+          srtPath: path.join(transcriptDir, 'in.srt'),
           outputPath: path.join(scratch, 'burn.mp4'),
           fontSizePct: 3.5
         },
@@ -564,6 +567,8 @@ beforeEach(() => {
   extractGate = null
   extractCalls = 0
   scratch = mkdtempSync(path.join(tmpdir(), 'imagii-cancel-sentinel-'))
+  transcriptDir = mkdtempSync(path.join(tmpdir(), 'imagii-cancel-transcript-'))
+  writeFileSync(path.join(transcriptDir, 'in.srt'), '1\n00:00:01,000 --> 00:00:02,000\nhello\n', 'utf8')
   renameHook = null
   // Nothing in flight between cases; also proves each registry empties itself.
   cancelAllExportJobs()
@@ -581,6 +586,7 @@ beforeEach(() => {
 
 afterEach(() => {
   rmSync(scratch, { recursive: true, force: true })
+  rmSync(transcriptDir, { recursive: true, force: true })
 })
 
 /** The two shapes a SIGKILL'd child closes with: Windows, then POSIX. */

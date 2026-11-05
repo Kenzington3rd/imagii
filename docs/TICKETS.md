@@ -7781,7 +7781,7 @@ IMG-PREC.
   `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
   gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 111)
+- **Status:** done (round 111 — see the Done entry)
 
 ---
 
@@ -8352,6 +8352,49 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 111 — T-162, all six counted items and the folds, landed in
+the commit that carries this entry. Two Sonnet workers in fresh clones
+of 3813431, disjoint source files, merged by the expediter; a third
+worker made the fold on the merged tree. Track A: a transcription that
+finds no speech removes its own empty file and answers no path, so the
+panel stays in its first-run state with a neutral toast; the
+whole-video burn reads its transcript through the cleaner the way a
+ranged burn reads it through the shift, so a cue-less transcript burns
+uncaptioned instead of failing in `subtitles=`; a surround source
+folds to stereo in float before the s16 output, so a 5.1 or 7.1 file
+keeps the player's levels (centre -3.01 dB, fronts at unity) instead
+of losing 7.6-10 dB; the extract and probe comments say which stream
+ffmpeg 7 picks (fold). Track B: a canceled export batch points at the
+folder only when a file finished; the channel-art sample is one line
+inside its TV-safe frame; the whole-video toast is true after a chat
+spike's + Clip; a 7.1 file in Audio Studio is heard and metered
+through one explicit fold. Fold (merged tree): a whole-video burn of a transcript with
+no speech says "No speech in this transcript — exported without
+captions." (a ranged one keeps "No captions in this range").
+Deviations, accepted: A edited cancelSentinel.test.ts (the burn row
+needs a real transcript now) and the missing-SRT media pin (the
+whole-video burn fails on the read, worded as a missing file); B
+updated 11 pins of the old cancel sentence, not 6, and rewrote the
+T-160 (3) / T-161 (4) wiring pins the playback change removed.
+Ledgers: A 4 RED / 25 mutations (one equivalent survivor: an unchanged
+transcript always copied writes the same output), B 8 RED / 24, the
+fold 3 RED / 5, all others killed. Found not fixed: 3, 5, 7 and more
+than 8 channels keep the discrete fold in Audio Studio (a
+`// simplification:`); the channel-art sample is centred for the Inter
+fallback (Impact, narrower, sits left inside the frame); the probe
+still keys the surround fold off the widest stream (T-110 (ap)).
+Expedited personally: one independent mutation per track at a seam no
+ledger row names — A: the unchanged whole-video transcript burned with
+no subtitle stage → Layer 5 "T-162 (1)" red ("the words are drawn:
+expected 0 to be greater than 40"); B: the meter's first wiring with a
+fixed 2 channels → audio.spec "T-162 (6)" red ("-60 dB") — each
+restored byte-identical, sha256 verified; the fold: the captioned branch gated on `ranged`
+→ captions.test.ts "a burn with captions on it says so, ranged or
+not" red, restored; on the MERGED tree:
+verify x2 (208/6222), test:media 480 passed | 17 skipped of 497 on 7.0.2, FULL Playwright
+661/661 (42.3 min). Applied to 3813431 by `git apply` with every file
+byte-identical to the expedited merge.
 
 Round 110 — T-161, all eight counted items and the folds, landed in
 the commit that carries this entry. Three Sonnet workers in fresh

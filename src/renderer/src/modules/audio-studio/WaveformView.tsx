@@ -231,7 +231,7 @@ export function WaveformView(): JSX.Element | null {
           {source.probe.sampleRate} Hz · {source.probe.channels} ch
         </div>
       </div>
-      <VolumeMeter audioElement={mediaEl} />
+      <VolumeMeter audioElement={mediaEl} channels={source.probe.channels} />
       {cutRegions.length > 0 ? (
         <div className="flex flex-wrap gap-2 text-xs">
           <span className="text-ink-muted">Removed when you export:</span>

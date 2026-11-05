@@ -165,6 +165,13 @@ export function CaptionsPanel(): JSX.Element | null {
         })
         return
       }
+      // T-162 (1): a run that found no speech has no transcript (srtPath null): the preview is cleared with the path, so the panel is back at its first-run state (the hint, no
+      // preview, no Save .srt, no Burn into video), and the toast is neutral - not a green tick over nothing.
+      if (result.srtPath === null) {
+        useVideoStore.getState().setDerivedFor(startedFor, { transcript: null })
+        toast(captionsReadyMessage(0), { icon: <Icon name="warning" size={18} /> })
+        return
+      }
       useVideoStore.getState().setDerivedFor(startedFor, { transcript: result.segments })
       toast.success(captionsReadyMessage(result.segments.length))
     } catch (err) {
@@ -218,6 +225,7 @@ export function CaptionsPanel(): JSX.Element | null {
         toast.error('Pick a clip first to use trim-to-clip burn-in.')
         return
       }
+      const ranged = selectedClip !== null
       if (!useCaptionsRun.getState().begin({ job: 'burn-in', name: source.fileName })) return
       useCaptionsProgress.setState({ progress: null })
       try {
@@ -230,7 +238,7 @@ export function CaptionsPanel(): JSX.Element | null {
           // when it's set, falling back to fontSizePct * 10 otherwise.
           fontSizePct: style.fontSize / 10,
           style,
-          ...(selectedClip && {
+          ...(ranged && {
             startSec: selectedClip.startSec,
             endSec: selectedClip.endSec
           })
@@ -241,9 +249,9 @@ export function CaptionsPanel(): JSX.Element | null {
         // toast says so (a longer sentence, so it stays up as long as a toast that carries a button does).
         const note = landedBesideNote(outputPath, result.outputPath, 'burn-in')
         if (result.captioned) {
-          toast.success(note ? `${burnInDoneMessage(true)}. ${note}` : burnInDoneMessage(true), note ? { duration: ACTION_TOAST_MS } : undefined)
+          toast.success(note ? `${burnInDoneMessage(true, ranged)}. ${note}` : burnInDoneMessage(true, ranged), note ? { duration: ACTION_TOAST_MS } : undefined)
         } else {
-          toast(note ? `${burnInDoneMessage(false)} ${note}` : burnInDoneMessage(false), { icon: <Icon name="warning" size={18} />, duration: note ? ACTION_TOAST_MS : 6000 })
+          toast(note ? `${burnInDoneMessage(false, ranged)} ${note}` : burnInDoneMessage(false, ranged), { icon: <Icon name="warning" size={18} />, duration: note ? ACTION_TOAST_MS : 6000 })
         }
       } catch (err) {
         reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })

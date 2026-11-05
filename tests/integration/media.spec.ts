@@ -8948,10 +8948,11 @@ describe('caption burn-in (real ffmpeg)', () => {
     expect(await srtSiblings(srt)).toEqual([])
   })
 
-  it('rejects a missing SRT with the burn-in runner error', async () => {
-    // Unranged on purpose: this is the path where ffmpeg itself opens the
-    // SRT, so it is the one that pins the runner's own error shape. A ranged
-    // burn has to READ the SRT first (T-81) — the test after this one.
+  it('rejects a missing SRT on the read, before any ffmpeg (T-162 (1): the whole video reads its transcript too)', async () => {
+    // Unranged on purpose. Until T-162 (1) this was the path where ffmpeg itself opened the SRT and the runner's own error shape
+    // ("burn-in exit N: ... Unable to open") was pinned here; the whole-video burn now READS the transcript first, as the ranged
+    // burn has since T-81 (the test after this one), so a missing file is the read's ENOENT, which `userFacingError` words as a
+    // file that is not there (ffmpeg's "Unable to open" read as a damaged file).
     const outputPath = path.join(workDir, 'burnin-missing.mp4')
     await expect(
       runBurnIn(
@@ -8964,7 +8965,7 @@ describe('caption burn-in (real ffmpeg)', () => {
         },
         () => {}
       )
-    ).rejects.toThrow(/^burn-in exit \d+: .*Unable to open .*no-such-file\.srt/s)
+    ).rejects.toThrow(/^ENOENT: no such file or directory, open .*no-such-file\.srt/)
     expect(existsSync(outputPath)).toBe(false)
   })
 
@@ -12284,8 +12285,11 @@ describe('a mono take keeps its level through Clean audio\'s extract (real ffmpe
     try {
       expect((await ffprobeJson(extracted.wavPath)).streams[0]?.channels).toBe(2)
       const [l, r] = await channelPeaks(extracted.wavPath)
-      // The down-mix is the player's own (centre at -3 dB, the whole matrix normalised): the voice on the centre is on both sides, equally, and not silent.
-      expect(l ?? -Infinity, 'the centre is audible on the left').toBeGreaterThan(-45)
+      // T-162 (2): the down-mix is the player's own, in float (centre at -3.01 dB, the matrix NOT normalised; this pin held the s16 conversion's normalised -10.6): the voice on the centre is on both sides,
+      // equally, at 3 dB under the source's centre. (The matrix coefficients for each channel are pinned in the T-162 (2) describe.)
+      // (`channelPeaks` cannot read a silent channel's "-inf", so on this one-voiced file the loudest value it finds IS the centre's.)
+      const centre = Math.max(...(await channelPeaks(surroundSrc)))
+      near(l ?? NaN, centre - 3.0103, 0.1, 'the centre on the left, against the source (dBFS)')
       near(r ?? NaN, l ?? NaN, 0.1, 'and equally on the right (dBFS)')
     } finally {
       await extracted.cleanup()
@@ -12328,5 +12332,246 @@ describe('a mono take keeps its level through Clean audio\'s extract (real ffmpe
     } finally {
       await extracted.cleanup()
     }
+  }, 120_000)
+})
+
+describe('a whole-video burn reads the transcript clean, as a ranged one does (real ffmpeg, T-162 (1))', () => {
+  // T-161 (2) cleans a transcript as it is made, but a transcript from before it still holds its tags, a transcription that found only tags left a 0-byte file, and the whole-video burn handed
+  // whichever it was straight to `subtitles=` (ffmpeg: "Unable to open", exit 183, for a file with no cue). The ranged burn has always read through `shiftSrtToRange`. How frames are compared: the
+  // picture is flat gray, so a caption is any spread of luma in a frame (min to max over the whole frame, or its bottom third); "no tag drawn" is a frame with none at the time the tag's cue says it
+  // was on, and "the speech is drawn" is a spread there. Burned from a scratch folder of its own so a leftover temporary copy beside the transcript is visible.
+  let gray = ''
+  let dir = ''
+  const bottomThird = 'crop=iw:ih/3:0:ih*2/3'
+  const wholeFrame = 'crop=iw:ih:0:0'
+
+  beforeAll(async () => {
+    dir = path.join(workDir, 't162-1')
+    await mkdir(dir, { recursive: true })
+    gray = path.join(dir, 'gray.mp4')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'color=c=gray:s=640x360:r=15:d=8', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=8',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', gray
+    ])
+  }, 60_000)
+
+  const burn = async (name: string, srt: string): Promise<{ out: string; captioned: boolean; srtFile: string }> => {
+    const srtFile = path.join(dir, `${name}.srt`)
+    await writeFile(srtFile, srt, 'utf8')
+    const out = path.join(dir, `${name}-burn.mp4`)
+    const res = await runBurnIn({ jobId: `t162-1-${name}`, videoPath: gray, srtPath: srtFile, outputPath: out, fontSizePct: 6 }, () => {})
+    return { out, captioned: res.captioned, srtFile }
+  }
+  const spread = async (file: string, at: number, crop: string): Promise<number> => {
+    const f = await regionLuma(file, at, crop)
+    return f.max - f.min
+  }
+  const hasPicture = async (file: string): Promise<boolean> => (await ffprobeJson(file)).streams.some((s) => s.codec_type === 'video')
+
+  it('a 0-byte transcript burns the video uncaptioned and says so', async () => {
+    const { out, captioned } = await burn('empty', '')
+    expect(captioned, 'there is nothing to caption').toBe(false)
+    expect(await hasPicture(out), 'the video is written').toBe(true)
+    expect(await spread(out, 3.5, wholeFrame), 'and nothing is drawn on it').toBeLessThanOrEqual(3)
+  }, 120_000)
+
+  it('a transcript of tags alone burns the video uncaptioned and says so', async () => {
+    const { out, captioned } = await burn('tags', '1\n00:00:01,000 --> 00:00:02,500\n [MUSIC]\n\n2\n00:00:03,000 --> 00:00:04,500\n [BLANK_AUDIO]\n\n3\n00:00:05,000 --> 00:00:06,000\n (upbeat music)\n')
+    expect(captioned, 'a tag is not a caption').toBe(false)
+    expect(await hasPicture(out)).toBe(true)
+    for (const at of [1.5, 3.5, 5.5]) expect(await spread(out, at, wholeFrame), `nothing is drawn at ${at} s`).toBeLessThanOrEqual(3)
+  }, 120_000)
+
+  it('a transcript with a tag cue and a speech cue draws only the speech', async () => {
+    const { out, captioned, srtFile } = await burn(
+      'mixed',
+      '1\n00:00:01,000 --> 00:00:02,500\n [MUSIC]\n\n2\n00:00:03,000 --> 00:00:04,500\n spoken words here\n\n3\n00:00:05,000 --> 00:00:06,000\n (upbeat music)\n'
+    )
+    expect(captioned, 'the words are a caption').toBe(true)
+    expect(await spread(out, 3.5, bottomThird), 'the words are drawn (the control)').toBeGreaterThan(40)
+    for (const [at, what] of [[1.5, '[MUSIC]'], [5.5, '(upbeat music)']] as const) {
+      expect(await spread(out, at, wholeFrame), `the frame at the time of ${what} is the uncaptioned one`).toBeLessThanOrEqual(3)
+    }
+    // The cleaned copy the burn read is gone, and the person's transcript is as it was (source-absolute, tags and all).
+    expect((await readdir(dir)).filter((n) => n.includes('.clip-')), 'no temporary copy is left beside the transcript').toEqual([])
+    expect(await readFile(srtFile, 'utf8')).toContain('[MUSIC]')
+  }, 120_000)
+
+  it('a transcript with only speech burns from where it is, captioned (the unchanged path)', async () => {
+    const { out, captioned, srtFile } = await burn('speech', '1\n00:00:03,000 --> 00:00:04,500\n spoken words here\n')
+    expect(captioned).toBe(true)
+    expect(await spread(out, 3.5, bottomThird), 'the words are drawn').toBeGreaterThan(40)
+    expect(await spread(out, 1.5, wholeFrame), 'and only when they are on').toBeLessThanOrEqual(3)
+    expect((await readdir(dir)).filter((n) => n.includes('.clip-'))).toEqual([])
+    expect(existsSync(srtFile)).toBe(true)
+  }, 120_000)
+})
+
+describe('a surround file keeps its level through the extract (real ffmpeg, T-162 (2))', () => {
+  // `-ac 2` down-mixed in the s16 output conversion, where swresample NORMALISES the matrix (5.1 by 1/2.414), so every channel came out 7.6 dB under (7.1 about 9.9). Executed on 7.0.2, a centre-only 5.1
+  // tone at -24.08 dBFS extracted at -34.75 per side and a front-left-only one at -31.74. The fold now happens in float (the player's matrix: fronts at unity, centre and surrounds at 0.7071, LFE dropped).
+  // Every tone is a 440 Hz sine at -24.08 dBFS (sine's own 1/8 amplitude, halved) on ONE channel of the layout, so each case reads a single coefficient of the matrix.
+  const TONE = 'sine=frequency=440:sample_rate=48000:duration=3,volume=-6dB'
+  const MINUS_3 = -3.0103
+  let dir = ''
+  const make = async (name: string, layout: string, channel: number, ext = 'wav'): Promise<string> => {
+    const file = path.join(dir, `${name}.${ext}`)
+    const codec = ext === 'wav' ? ['-c:a', 'pcm_s16le'] : ['-c:a', 'aac', '-b:a', '384k']
+    await ff(['-y', '-f', 'lavfi', '-i', TONE, '-af', `pan=${layout}|c${channel}=c0`, ...codec, file])
+    return file
+  }
+
+  /** The peak (dBFS) of each channel of `file` from astats; a silent channel is -Infinity (the T-161 (3) helper above cannot read "-inf"). */
+  async function peaks(file: string): Promise<number[]> {
+    const { stderr } = await ff(['-hide_banner', '-i', file, '-af', 'astats=measure_perchannel=Peak_level:measure_overall=none', '-f', 'null', '-'])
+    // One block per channel (the text between one "Channel: n" and the next); its own "Peak level dB" is the number or "-inf".
+    const out = stderr
+      .split(/Channel: \d+/)
+      .slice(1)
+      .map((block) => /Peak level dB:\s*(-?inf|-?[\d.]+)/.exec(block)?.[1])
+      .filter((v): v is string => v !== undefined)
+      .map((v) => (v === '-inf' ? -Infinity : Number(v)))
+    if (out.length === 0) throw new Error(`no astats peaks in: ${stderr.slice(-400)}`)
+    return out
+  }
+  const extractedPeaks = async (file: string): Promise<number[]> => {
+    const extracted = await extractAudioFromVideo(file)
+    try {
+      expect((await ffprobeJson(extracted.wavPath)).streams[0], 'the extract is 48 kHz stereo s16').toMatchObject({ codec_name: 'pcm_s16le', channels: 2, sample_rate: '48000' })
+      return await peaks(extracted.wavPath)
+    } finally {
+      await extracted.cleanup()
+    }
+  }
+  /** What a source channel's peak is, measured, so the expectation is "the source's own level minus the matrix coefficient" and not a constant. */
+  const sourcePeak = async (file: string, channel: number): Promise<number> => (await peaks(file))[channel] as number
+
+  beforeAll(async () => {
+    dir = path.join(workDir, 't162-2')
+    await mkdir(dir, { recursive: true })
+  })
+
+  it('a centre-only 5.1 tone extracts at -3.01 dB of the source on each side', async () => {
+    const src = await make('fc51', '5.1', 2)
+    const own = await sourcePeak(src, 2)
+    expect(own, 'the fixture is at -24 dBFS').toBeCloseTo(-24.08, 0)
+    const [l, r] = await extractedPeaks(src)
+    near(l ?? NaN, own + MINUS_3, 0.1, 'left against the centre (dBFS)')
+    near(r ?? NaN, own + MINUS_3, 0.1, 'right against the centre (dBFS)')
+  }, 120_000)
+
+  it('a front-left-only 5.1 tone extracts at unity on the left and is silent on the right', async () => {
+    const src = await make('fl51', '5.1', 0)
+    const own = await sourcePeak(src, 0)
+    const [l, r] = await extractedPeaks(src)
+    near(l ?? NaN, own, 0.1, 'left against the front left (dBFS)')
+    expect(r, 'the right side holds nothing of it').toBe(-Infinity)
+  }, 120_000)
+
+  it('a centre-only 7.1 tone extracts at -3.01 dB of the source on each side', async () => {
+    const src = await make('fc71', '7.1', 2)
+    const own = await sourcePeak(src, 2)
+    const [l, r] = await extractedPeaks(src)
+    near(l ?? NaN, own + MINUS_3, 0.1, 'left against the centre (dBFS)')
+    near(r ?? NaN, own + MINUS_3, 0.1, 'right against the centre (dBFS)')
+  }, 120_000)
+
+  it('the surrounds reach their own side at -3.01 dB, and the LFE reaches neither (5.1, 5.1 side, 7.1)', async () => {
+    for (const [name, layout, channel, side] of [
+      ['bl51', '5.1', 4, 'left'],
+      ['br51', '5.1', 5, 'right'],
+      ['sl51side', '5.1(side)', 4, 'left'],
+      ['bl71', '7.1', 4, 'left'],
+      ['sr71', '7.1', 7, 'right']
+    ] as const) {
+      const src = await make(name, layout, channel)
+      const own = await sourcePeak(src, channel)
+      const got = await extractedPeaks(src)
+      const [on, off] = side === 'left' ? [got[0], got[1]] : [got[1], got[0]]
+      near(on ?? NaN, own + MINUS_3, 0.1, `${name}: its own side (dBFS)`)
+      expect(off, `${name}: the other side is silent`).toBe(-Infinity)
+    }
+    for (const [name, layout] of [['lfe51', '5.1'], ['lfe71', '7.1']] as const) {
+      const got = await extractedPeaks(await make(name, layout, 3))
+      expect(got, `${name}: the LFE is dropped, as a player drops it`).toEqual([-Infinity, -Infinity])
+    }
+  }, 240_000)
+
+  it('an AAC 5.1 file in an MP4 extracts to the same levels', async () => {
+    const src = await make('fc51aac', '5.1', 2, 'm4a')
+    const own = (await sourcePeak(src, 2)) as number
+    const [l, r] = await extractedPeaks(src)
+    near(l ?? NaN, own + MINUS_3, 0.3, 'left against the decoded centre (dBFS)')
+    near(r ?? NaN, own + MINUS_3, 0.3, 'right against the decoded centre (dBFS)')
+  }, 120_000)
+
+  it('3, 4, 5 and 7 channel files still extract to stereo, with their front left on the left', async () => {
+    for (const [name, layout] of [['c3', '3.0'], ['c4', 'quad'], ['c5', '5.0'], ['c7', '7.0']] as const) {
+      const src = await make(name, layout, 0)
+      const own = await sourcePeak(src, 0)
+      const [l, r] = await extractedPeaks(src)
+      near(l ?? NaN, own, 0.1, `${name}: the front left is at unity (dBFS)`)
+      expect(r, `${name}: and not on the right`).toBe(-Infinity)
+    }
+  }, 240_000)
+
+  it('full-scale in-phase tones on FL, FC and BL clip the left side at full scale and never wrap', async () => {
+    // 1.0 amplitude on three channels: L = FL + 0.7071 FC + 0.7071 BL = 2.414 x the tone, past full scale, as in a player. The s16 conversion must clip it. A wrap would flip the sign of the loud part of
+    // the wave, so the sign of every loud sample is compared with the source's. (The unfolded base normalised the matrix by 1/2.414 and never clipped: its left is the tone itself, at the rail 0%.)
+    const loud = path.join(dir, 'loud51.wav')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3,volume=8', '-af', 'pan=5.1|c0=c0|c2=c0|c4=c0', '-c:a', 'pcm_s16le', loud])
+    const extracted = await extractAudioFromVideo(loud)
+    try {
+      const [l] = await peaks(extracted.wavPath)
+      expect(l ?? NaN, 'the peak reaches full scale').toBeGreaterThan(-0.05)
+      // Raw s16le of the source's front left and of the extract (interleaved L R).
+      const srcRaw = path.join(dir, 'loud51-fl.raw')
+      const outRaw = path.join(dir, 'loud51-out.raw')
+      await ff(['-y', '-i', loud, '-af', 'pan=mono|c0=c0', '-f', 's16le', '-acodec', 'pcm_s16le', srcRaw])
+      await ff(['-y', '-i', extracted.wavPath, '-f', 's16le', '-acodec', 'pcm_s16le', outRaw])
+      const src = await readFile(srcRaw)
+      const out = await readFile(outRaw)
+      const n = Math.min(src.length / 2, out.length / 4)
+      expect(n, 'about three seconds of samples').toBeGreaterThan(100_000)
+      let loudSamples = 0
+      let flipped = 0
+      let atRail = 0
+      for (let i = 0; i < n; i++) {
+        const s = src.readInt16LE(i * 2)
+        const o = out.readInt16LE(i * 4)
+        if (Math.abs(o) >= 32767) atRail++
+        if (Math.abs(s) > 3000) {
+          loudSamples++
+          if (Math.sign(s) !== Math.sign(o)) flipped++
+        }
+      }
+      expect(loudSamples, 'the control: the source has loud samples').toBeGreaterThan(50_000)
+      expect(flipped, 'no loud sample changes sign (a wrap would)').toBe(0)
+      // A 2.414x sine sits at the rail for the 73% of its cycle where |sin| > 0.414: clipped, and clearly so.
+      expect(atRail / n, 'the left spends most of the wave at the rail').toBeGreaterThan(0.6)
+    } finally {
+      await extracted.cleanup()
+    }
+  }, 120_000)
+
+  it('a stereo source is unchanged: each side keeps its own peak', async () => {
+    const src = path.join(dir, 'stereo.wav')
+    await ff([
+      '-y', '-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=48000:duration=3,volume=-6dB', '-f', 'lavfi', '-i', 'sine=frequency=660:sample_rate=48000:duration=3,volume=-14dB',
+      '-filter_complex', '[0:a][1:a]amerge=inputs=2[a]', '-map', '[a]', '-c:a', 'pcm_s16le', src
+    ])
+    const [srcL, srcR] = await peaks(src)
+    const [l, r] = await extractedPeaks(src)
+    near(l ?? NaN, srcL ?? NaN, 0.1, 'left (dBFS)')
+    near(r ?? NaN, srcR ?? NaN, 0.1, 'right (dBFS)')
+  }, 120_000)
+
+  it('a mono source is unchanged: a unity duplicate on both sides', async () => {
+    const src = path.join(dir, 'mono.wav')
+    await ff(['-y', '-f', 'lavfi', '-i', TONE, '-ac', '1', '-c:a', 'pcm_s16le', src])
+    const [own] = await peaks(src)
+    const [l, r] = await extractedPeaks(src)
+    near(l ?? NaN, own ?? NaN, 0.1, 'left (dBFS)')
+    near(r ?? NaN, own ?? NaN, 0.1, 'right (dBFS)')
   }, 120_000)
 })

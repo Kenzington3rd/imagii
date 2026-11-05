@@ -1154,7 +1154,7 @@ test.describe('ChatHighlightPanel — the whole-video clip (T-94)', () => {
       await card.locator('li').first().getByRole('button', { name: '+ Clip' }).click()
       await expectToast(
         window,
-        'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
+        'Removed the whole-video clip now that you have added a clip. Press Ctrl+Z to keep it.'
       )
       await expect(list.locator('h3')).toHaveText('Clips (2)')
       expect((await clipRows(window)).map((r) => r.name)).toEqual(['Clip 2', 'Chat spike 1'])
@@ -1275,7 +1275,7 @@ test.describe('HighlightPanel', () => {
       const exp = exportCard(window)
       const undo = window.getByRole('button', { name: 'Undo' })
       const WHOLE_GONE =
-        'Removed the whole-video clip — the highlights are your clips now. Press Ctrl+Z to keep it.'
+        'Removed the whole-video clip now that you have added a clip. Press Ctrl+Z to keep it.'
 
       // ── before: the whole-video clip, and a button that counts FILES ──
       expect(await clipRows(window)).toEqual([{ name: 'Clip 1', range: '0:00 → 0:14' }])
@@ -2750,7 +2750,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
         .poll(async () => Number(await card().getByRole('progressbar', { name: 'Clip 1 · YouTube' }).getAttribute('aria-valuenow')), { timeout: 120_000, intervals: [500] })
         .toBeGreaterThan(0)
       await cancel.click()
-      await expectToast(window, 'Export canceled. Files already finished are in your folder.')
+      await expectToast(window, 'Export canceled.')
       await expect(card().getByText('Canceled', { exact: true })).toBeVisible()
       await expect(card().getByRole('button', { name: /^Export 1 file/ })).toBeEnabled({ timeout: 30_000 })
       expect(mp4sOnDisk(outDir), 'the canceled job left nothing behind').toEqual([])
@@ -3762,10 +3762,11 @@ test.describe('ExportPanel', () => {
       await card.getByRole('button', { name: 'Cancel', exact: true }).click()
       await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
       // T-84: neutral, in the panel's words, and it says what survived.
-      await expectCanceledNotFailed(
-        window,
-        'Export canceled. Files already finished are in your folder.'
-      )
+      // T-162 (3): what the toast says depends on whether a file had finished when the Cancel landed (job 1 of three can end before the confirm is
+      // answered, or not): wait for the toast, count the files shown, and expect the sentence that is true of that.
+      await expect.poll(async () => (await readToastEntries(window)).some((e) => e.text.startsWith('Export canceled.')), { timeout: 30_000 }).toBe(true)
+      const finishedAtCancel = await card.getByRole('button', { name: 'Show in folder', exact: true }).count()
+      await expectCanceledNotFailed(window, finishedAtCancel > 0 ? 'Export canceled. Files already finished are in your folder.' : 'Export canceled.')
       await expect(card.getByRole('button', { name: 'Export 3' })).toBeEnabled({ timeout: 30_000 })
       await expect(card.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
       // The batch is sequential, so killing the running job stops the rest:
@@ -6106,7 +6107,7 @@ test.describe('single-output panels', () => {
         ['pipeline_Clip 1_youtube.mp4', 'pipeline_Clip 2_480px_15fps.gif', 'pipeline_Clip 2_reframe-1080x1920-center.mp4', 'pipeline_compilation.mp4', 'pipeline_pip.mp4'].sort()
       )
       const toasts = await readToastLog(window)
-      for (const canceled of ['Export canceled. Files already finished are in your folder.', 'Reframe canceled.', 'GIF canceled.', 'Compilation canceled.', 'Picture-in-picture canceled.']) {
+      for (const canceled of ['Export canceled.', 'Export canceled. Files already finished are in your folder.', 'Reframe canceled.', 'GIF canceled.', 'Compilation canceled.', 'Picture-in-picture canceled.']) {
         expect(toasts, `"${canceled}": the second press did not cancel the first job`).not.toContain(canceled)
       }
       expect((await chooserCalls(app)).filter((c) => c.folder), 'no folder chooser: the folder was remembered').toEqual([])
@@ -6146,7 +6147,9 @@ test.describe('single-output panels', () => {
       await expect(card.getByRole('button', { name: 'Export 1 file', exact: true }), 'free again once it has finished').toBeEnabled({ timeout: 60_000 })
       expect(mp4sIn(seeded), 'one file, and it is the export').toEqual(['pipeline_Clip 1_youtube.mp4'])
       const toasts = await readToastLog(window)
-      expect(toasts, 'the second press did not cancel the export').not.toContain('Export canceled. Files already finished are in your folder.')
+      // T-162 (3): one job and none finished, so a cancel that landed would read the short form; both forms are refused.
+      expect(toasts, 'the second press did not cancel the export').not.toContain('Export canceled.')
+      expect(toasts, 'nor the long form').not.toContain('Export canceled. Files already finished are in your folder.')
       // T-146: the toast carries Show in folder now, so its text is the sentence and then the button's name.
       expect(toasts.filter((t) => t.startsWith('Exported 1 file')), 'and it said it exported').toHaveLength(1)
     } finally {
@@ -11586,7 +11589,7 @@ test.describe('T-140 (1): the file a render replaces is whole until the new one 
       await expect.poll(() => partialsOnly(readdirSync(seeded)).length, { timeout: 120_000, intervals: [200] }).toBe(1)
       expect(sha256(first), 'the earlier export is untouched while the second one writes').toBe(before)
       await card.getByRole('button', { name: 'Cancel', exact: true }).click()
-      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      await expectCanceledNotFailed(window, 'Export canceled.')
       await expect(card.getByRole('button', { name: 'Export 1 file', exact: true })).toBeEnabled({ timeout: 60_000 })
       expect(sha256(first), 'and after the Cancel').toBe(before)
       expect(withEverything(readdirSync(seeded)), 'no partial and no "(2)" is left').toEqual(['t140-reexport_Clip 1_youtube.mp4'])
@@ -12277,7 +12280,7 @@ test.describe('T-144 (1): closing the video leaves the running job on screen, wi
 
       await cardCancel(window).click()
       await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
-      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      await expectCanceledNotFailed(window, 'Export canceled.')
       await expect(cardCancel(window), 'the card goes with the batch').toHaveCount(0, { timeout: 60_000 })
       await expect(window.getByText('The video is closed;')).toHaveCount(0)
       await expect.poll(() => withEverything(readdirSync(seeded)), { timeout: 30_000, intervals: [200] }).toEqual([])
@@ -12298,7 +12301,7 @@ test.describe('T-144 (1): closing the video leaves the running job on screen, wi
       await expect(window.getByText(`Export — ${path.basename(longSrc)}: file 1 of 1`)).toBeVisible()
       await cardCancel(window).click()
       await expect(window.getByRole('dialog'), 'one job left: nothing to ask').toHaveCount(0)
-      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      await expectCanceledNotFailed(window, 'Export canceled.')
       await expect(cardCancel(window)).toHaveCount(0, { timeout: 60_000 })
       await expect.poll(() => withEverything(readdirSync(seeded)), { timeout: 30_000, intervals: [200] }).toEqual([])
     } finally {
@@ -13024,7 +13027,7 @@ test.describe('T-155 (4): Export and Clip Kit wait for each other', () => {
 
       // The export ends (one job: Cancel asks nothing): Clip Kit is back, with its own title.
       await card.getByRole('button', { name: 'Cancel', exact: true }).click()
-      await expectToast(window, 'Export canceled. Files already finished are in your folder.')
+      await expectToast(window, 'Export canceled.')
       await expect(kitStart(window)).toBeEnabled({ timeout: 60_000 })
       await expect(kitStart(window)).toHaveAttribute('title', 'Export this clip for all 5 platforms + 3 thumbnails into one folder')
       await expect(kitStart(window)).toHaveText('Clip Kit (5 + thumbs)')
@@ -13052,7 +13055,7 @@ test.describe('T-156 (3): Clip Kit\'s title while an export runs tells the perso
       await expect(kit).toHaveAttribute('title', 'An export is running. Start Clip Kit when it is done.')
       // The export ends: the kit is enabled with its idle title, and it did not start by itself.
       await card.getByRole('button', { name: 'Cancel', exact: true }).click()
-      await expectToast(window, 'Export canceled. Files already finished are in your folder.')
+      await expectToast(window, 'Export canceled.')
       await expect(kit).toBeEnabled({ timeout: 60_000 })
       await expect(kit).toHaveAttribute('title', 'Export this clip for all 5 platforms + 3 thumbnails into one folder')
       await expect(kit).toHaveText('Clip Kit (5 + thumbs)')
@@ -13205,6 +13208,219 @@ test.describe('T-161 (6): the setup card waits for the status', () => {
       }
       await app.evaluate(() => (globalThis as unknown as { __st: { release: () => void } }).__st.release())
       await expect(window.getByText('Captions need setup'), 'a known not-ready status shows the card').toBeVisible({ timeout: 10_000 })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-162 (1): a transcription that finds no speech leaves NO transcript. Main answers `srtPath: null, segments: []` (the engine itself is not installed in any test environment, so main's
+// `captions:transcribe` is stubbed as the other caption cases do; the cleaning and the removal of the run's file are held by transcribeClean.test.ts and the Layer 5 burn). The panel is
+// the product's own: red on 3813431, where `null` was stored with `[]` and the panel showed an empty "Transcript preview", Save .srt, Burn into video, and a green tick on the sentence.
+test.describe('T-162 (1): the captions panel after a run that found no speech', () => {
+  const HINT = /Transcribe the source video, then save the text as \.srt/
+  const NO_SPEECH = 'No speech found, so there are no captions.'
+
+  async function engineReady(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => ({
+        exeInstalled: true,
+        exePath: 'whisper-cli.exe',
+        modelInstalled: true,
+        modelPath: 'model.bin',
+        modelsDir: 'models',
+        ready: true
+      }))
+    })
+  }
+  /** What the next `captions:transcribe` answers: a transcript (the path and its lines) or none (null, []). */
+  async function answerWith(app: ElectronApplication, srtPath: string | null, lines: number): Promise<void> {
+    await app.evaluate(
+      ({ ipcMain }, arg) => {
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', (_e, req: { jobId: string }) => ({
+          jobId: req.jobId,
+          srtPath: arg.srtPath,
+          segments: Array.from({ length: arg.lines }, (_v, i) => ({ startSec: i, endSec: i + 0.8, text: `spoken line ${i + 1}` })),
+          durationMs: 5
+        }))
+      },
+      { srtPath, lines }
+    )
+  }
+  /** Whether the toast reading `text` drew an icon of the app's own (an svg: the warning icon) beside it, and whether it drew react-hot-toast's success mark (no svg: its animated check). */
+  async function toastKind(window: Page, text: string): Promise<{ appIcon: boolean; drewIcon: boolean }> {
+    return window.evaluate((needle) => {
+      const el = [...document.querySelectorAll('[data-rht-toaster] [role="status"]')].find((n) => (n.textContent ?? '').trim() === needle)
+      const bar = el?.parentElement
+      return { appIcon: !!bar?.querySelector('svg'), drewIcon: (bar?.childElementCount ?? 1) > 1 }
+    }, text)
+  }
+
+  test('keeps the first-run hint: no preview, no Save .srt and no Burn into video, and the toast is a neutral warning, not a success', async () => {
+    test.setTimeout(180_000)
+    const studio = await launchHome('t162empty')
+    const { app, window, userDataDir } = studio
+    try {
+      await engineReady(app)
+      await answerWith(app, null, 0)
+      await gotoVideoStudio(window)
+      await dropOnVideoImporter(window, clipSrc, 'pipeline.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      await installToastLog(window)
+      const card = captionsCard(window)
+      await expect(card.getByText(HINT)).toBeVisible({ timeout: 15_000 })
+
+      // ── a run with no speech: the first-run state, and a toast that says nothing was made ──
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectToast(window, NO_SPEECH)
+      await expect(card.getByText(HINT), 'the first-run hint is still there').toBeVisible()
+      await expect(card.getByRole('region', { name: 'Transcript preview' }), 'no empty preview').toHaveCount(0)
+      await expect(card.getByText('Transcript preview')).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }), 'the header still reads Transcribe').toBeVisible()
+      const none = await toastKind(window, NO_SPEECH)
+      expect(none, 'the sentence is on a neutral warning (the app\'s own icon), not react-hot-toast\'s success mark').toEqual({ appIcon: true, drewIcon: true })
+
+      // ── the control: a run WITH speech is a success toast (no app icon, the success mark), and the panel offers its transcript ──
+      const srtPath = path.join(userDataDir, 'captions', 't162-speech.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,800\nspoken line 1\n\n2\n00:00:01,000 --> 00:00:01,800\nspoken line 2\n', 'utf8')
+      await answerWith(app, srtPath, 2)
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectToast(window, 'Captions ready (2 lines)')
+      await expect(card.getByRole('region', { name: 'Transcript preview' })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toBeVisible()
+      await expect(card.getByRole('button', { name: 'Burn into video' })).toBeVisible()
+      await expect(card.getByText(HINT)).toHaveCount(0)
+      const ok = await toastKind(window, 'Captions ready (2 lines)')
+      expect(ok, 'a success toast is the mark react-hot-toast draws, not the app\'s warning icon').toEqual({ appIcon: false, drewIcon: true })
+
+      // ── and a later run with no speech takes that transcript away: the panel is back at the first-run state ──
+      await answerWith(app, null, 0)
+      await card.getByRole('button', { name: 'Re-transcribe', exact: true }).click()
+      await expect.poll(async () => (await readToastLog(window)).filter((t) => t === NO_SPEECH).length, { timeout: 30_000 }).toBe(2)
+      await expect(card.getByText(HINT)).toBeVisible()
+      await expect(card.getByRole('region', { name: 'Transcript preview' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeVisible()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-162 (3): a cancel in a batch's FIRST job wrote nothing, and the toast still said "Files already finished are in your folder." (the batch's
+// canceled sentence was fixed). The sentence is now chosen by what finished (`exportCanceledMessage`): none -> "Export canceled.", any -> the folder
+// sentence. Both ends are driven on a real two-file batch: the cancel lands inside job 1's held encode, and inside job 2's held probe after job 1's file.
+test.describe('T-162 (3): a canceled batch says only that it was canceled when no file had finished', () => {
+  test('a Cancel during the first of two jobs toasts exactly "Export canceled." (no folder, no file), and the rows say Canceled', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t162-3-first', clipSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await presetBox(window, 'X / Twitter').check()
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 60_000 }])
+      await card.getByRole('button', { name: 'Export 2' }).click()
+      await expect
+        .poll(async () => (await readSpawnLog(app)).filter((k) => k === 'ffmpeg').length, { timeout: 30_000, intervals: [100] })
+        .toBe(1)
+      // Two jobs are left, so the Cancel asks first.
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await expectCanceledNotFailed(window, 'Export canceled.')
+      const toasts = await readToastLog(window)
+      expect(toasts.filter((t) => t.startsWith('Export canceled')), 'one cancel toast, and it is the short form').toEqual(['Export canceled.'])
+      await expect(card.getByText('Canceled', { exact: true })).toHaveCount(2)
+      await expect(card.getByRole('button', { name: 'Show in folder', exact: true })).toHaveCount(0)
+      expect(mp4sOnDisk(outDir), 'nothing landed').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a Cancel after the first file finished keeps the folder sentence', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t162-3-after', clipSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await presetBox(window, 'X / Twitter').check()
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 2, ms: 8000 }])
+      await card.getByRole('button', { name: 'Export 2' }).click()
+      await expect(card.getByRole('button', { name: 'Show in folder', exact: true })).toHaveCount(1, { timeout: 120_000 })
+      await card.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expectCanceledNotFailed(window, 'Export canceled. Files already finished are in your folder.')
+      expect(mp4sOnDisk(outDir), 'the finished file is there').toHaveLength(1)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-162 fold: a WHOLE-video burn whose transcript holds no speech (a project reopened from disk restores only `srtPath`; a transcript written before T-161 (2) can hold nothing
+// but "[MUSIC]") writes the video uncaptioned and answers `captioned: false`. The toast said "No captions in this range" for a burn that had no range. It says what happened now.
+// The burn is the real runner on the 2 s source; nothing is stubbed but the save dialog.
+test.describe('T-162 fold: a whole-video burn of a transcript with no speech', () => {
+  test('toasts "No speech in this transcript" with the warning icon, writes the whole video, and the ranged case keeps its own sentence', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchHome('t162foldburn')
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'tags-only.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:01,500\n[MUSIC]\n', 'utf8')
+      const projectPath = path.join(root, `t162fold-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: {
+            sourcePath: clipSrc,
+            clips: [{ id: 'c1', name: 'Clip', startSec: 0, endSec: 1, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }],
+            selectedClipId: 'c1',
+            watermark: null,
+            srtPath
+          }
+        }),
+        'utf8'
+      )
+      const outWhole = path.join(outDir, 'whole-captioned.mp4')
+      const outRange = path.join(outDir, 'range-captioned.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [outWhole, outRange] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await expect(card.getByRole('checkbox'), 'the range box is off: this is a whole-video burn').not.toBeChecked()
+
+      const SENTENCE = 'No speech in this transcript — exported without captions.'
+      await burn.click()
+      await expectToast(window, SENTENCE)
+      const entry = (await readToastEntries(window)).find((e) => e.text === SENTENCE)
+      expect(entry?.hasIcon, 'a heads-up with the app\'s own warning icon').toBe(true)
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/in this range|Captions burned in/)
+      await expect.poll(() => existsSync(outWhole), { timeout: 60_000 }).toBe(true)
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      const whole = await ffprobeJson(outWhole)
+      expect(Number(whole.format?.duration), 'the whole 2 s video, not a range').toBeGreaterThan(1.7)
+
+      // ── the ranged burn of the same transcript keeps the range sentence ──
+      await card.getByRole('checkbox').check()
+      await burn.click()
+      await expectToast(window, 'No captions in this range — exported without captions.')
+      await expect.poll(() => existsSync(outRange), { timeout: 60_000 }).toBe(true)
+      expect((await readToastLog(window)).filter((t) => t === SENTENCE)).toHaveLength(1)
     } finally {
       await app.close()
     }
