@@ -8165,6 +8165,115 @@ IMG-PREC.
 
 ---
 
+## T-167 — sweep-53 fixes (round 116)
+
+- **Spec:** the fifty-third sweep's five verified findings (candidate clean pass #1 on b3f3ad1), each confirmed by
+  the expediter against source; items 1 and 2 also by execution (both QA renderer readers ran the real helpers and
+  store). Audio, privacy, Electron (a scratch build driven under Xvfb), both design readers, both UX readers (the lens
+  split from the start) and both streamer readers clean on their lens; QA main read all 94 main/shared/preload files and executed the pure helpers and an hour-long scan; ffmpeg ran ~320 fuzzed encodes and a two-pass audio fuzz on 7.0.2 and 6.1.1. Items 1 and 5 are new consequences of
+  T-166. Not counted: an 80-character sentence on the Bold thumbnail at 3.68:1 and a two-line title on the POG emote
+  (the documented best-place ceiling); the Export safe-zone question on every multi-platform export (T-83); a pasted
+  title at the proportional size (T-140 (2)); the window size clamped to the primary display (deliberate); Scan VOD rows
+  with no length cap and a short hype word list (initiatives); the Export folder chip enabled while exporting (IC 3505);
+  the mood-board tile ✕ without the Ctrl+Z hint; no new-blank-canvas action; libass and a non-ASCII path on the shipped
+  win32 ffmpeg (unverified here — a release hand-check). Two tracks, disjoint files.
+
+  **Track A — Stream Graphics keeps pasted text on the page and its Undo honest (items 1-2 and a fold).**
+  1. **[LOW] A tall pasted text lands partly below the page** (shared/newText.ts:270-278 `candidatePlaces`;
+     shared/imageBounds.ts:59-74 `placementFor`). The home place comes from `placementFor`, a PICTURE rule that first
+     scales a box down to `LAYER_DRAWN_MAX_DIM` (800), so a text box over 800 px on a side gets its margin from a
+     shrunken box and its real (line-aware since T-166) bottom overhangs. Executed by both QA renderer readers: a white
+     1200x800 page and 25 lines of 45 characters -> size 32 at (60, 59.26), box 864x800, bottom 859; 1920x1080 with 24
+     lines ends at 1092, 25 at 1135; 475-1597 of 6000 brute-forced shapes past the bottom, every one over 800 px on a
+     side. T-166 promised "wholly inside". Fix: `candidatePlaces`' home is the margin rule on the word's REAL box —
+     `{ x: max(0, min(PLACEMENT_MARGIN, doc.width - size.width)), y: max(0, min(PLACEMENT_MARGIN, doc.height -
+     size.height)) }` (a document that is not a size keeps `{ PLACEMENT_MARGIN, PLACEMENT_MARGIN }`); for a box up to
+     800 px this is exactly what `placementFor` gave, so a one-word or one-line placement does not move.
+  Fold (not counted): the code calls the 0.6 em estimate an "UPPER bound", which it is not for capitals (Inter measured
+  by the reader: 0.607 em per character for an all-caps sentence at 400, 0.614 at 700, 0.87 for "WWWW MMMM"), so a long
+  all-caps line sized to the width overhangs the right edge by 20-80 px. Fix: `estimatedTextBox` estimates by class —
+  every character 0.6 em as now except A-Z (other than W and M) and W, M, each at the widest advance of that class
+  measured from the bundled Inter at 400 and 700 (measure in the built app with the canvas's measureText; record the
+  numbers in the comment and in the test). Pinned "+ Add text" literals that move are updated in place with the old and
+  new numbers stated.
+  2. **[LOW] A Stream Graphics edit that changes nothing records an undo step and wipes Redo**
+     (image-studio/state/canvasStore.ts:153-166 `updateLayer`, :216-226 `setRotation`). Executed by QA renderer a: a
+     rect rotated 45, Undo (Redo available), then the "0" preset on the layer now at 0 -> Redo gone, `past` 2, a
+     byte-identical document. A snapped drag shorter than half a cell (Canvas.tsx:322-329, `updateLayer(id, {x, y})`)
+     does the same. The class T-166 (3) fixed in videoStore and T-141 (8) in `removeLayer`. Fix: `setRotation` returns
+     when the layer is missing or already at that rotation; `updateLayer` returns (before history and the key) when the
+     layer is missing or every patched field already equals the layer's after `applyLayerPatch`'s normalising (compare
+     the patched layer with the stored one); `reorderLayers` returns when the order is the same. List every other
+     canvasStore writer and say which can be reached with a no-op (toggles always flip).
+  Covering tests: unit (NEW describes at the end of newText.test.ts and canvasStore.test.ts), each red on b3f3ad1:
+  `newTextLook` for 25 lines x 45 characters on 1200x800 and 24/25 short lines on 1920x1080 and 3840x2160 keeps
+  `y + height <= doc.height` and `x + width <= doc.width`; a brute-force sweep (lines 1-60 x characters 1-300, the five
+  page sizes the readers used) finds no box outside the page; an all-caps 90-character line at its chosen size fits
+  by the class estimate; `textLayerFor` with no word for the default page and both emotes stays where it was (control);
+  `setRotation(id, current)`, `updateLayer(id, {x, y})` at the layer's own place and `reorderLayers(sameOrder)` leave
+  `history` (past and future) unchanged; a real change still pushes one step and clears Redo (control). e2e (NEW
+  describe at the end of image.spec.ts), red on b3f3ad1: a 25-line paste on the default page lands with its stage box
+  inside the page; rotate 45, Undo, press the "0" preset: Redo is still enabled.
+
+  **Track B — Video Studio says what a late scan and a failed kit left, the keyboard's menu opens at the field, and a
+  hot master with gain still exports (items 3-5 and the (z) fold).**
+  3. **[LOW] A Scan VOD that ends after its video is closed or replaced says nothing**
+     (video-studio/HighlightPanel.tsx:106-120, :163-173, :202-209). Since T-144/T-145 the Close question promises "The
+     scan that is running keeps going; its Cancel stays on screen." and the closed-video card shows "Scan VOD — x.mp4
+     NN%", but when it ends `setDerivedFor` returns false and the result is dropped with no word, where every sibling late
+     job says so (`staleCaptionsMessage`, `previewCopySkippedMessage`, the importer's skipped sentence); meanwhile
+     another open video's finder shows that scan as "Scanning…" without naming the file. Fix: a pure
+     `lateScanMessage(fileName)` in src/shared/highlights.ts — "The scan of <file> finished after that video was closed
+     or replaced, so its highlights weren't added. Scan again when you're ready." (the staleCaptionsMessage pattern; two
+     sentences keep their periods — add it to copyConventions' two-sentence list) — raised as a plain toast when
+     `stored(...)` is false, with the file name captured at the scan's start. Fold: the scan's ProgressTrack label names
+     the file the run is for (`Scanning ${scanRun.name} for highlights`), so on another video it reads as that
+     video's scan.
+  4. **[LOW] A Clip Kit that fails mid-batch does not say its finished files are in the folder**
+     (video-studio/ClipKitButton.tsx:344-357; clipKit.ts:205). The folder is removed only when nothing landed, so a kit
+     that fails on platform 3 of 5 (a full disk) keeps two files, but the toast is "Clip Kit failed." plus the cause,
+     where a canceled kit says "Files already finished are in your folder." Fix: a pure `kitFailedMessage(landed)` beside
+     `kitCanceledMessage`: landed > 0 -> "Clip Kit failed. The N file(s) already finished are in your folder." (countOf,
+     is/are), else "Clip Kit failed."; passed as reportFailure's `failed` (the cause still follows it).
+  5. **[LOW] A context menu opened from the keyboard pops at the mouse pointer** (src/main/index.ts:213-216). The
+     Menu key or Shift+F10 on a focused text box raises `context-menu` with the field's `x`/`y` and `menuSourceType:
+     'keyboard'`, but `popup({ window: win })` defaults to the cursor (electron.d.ts:20297-20305), so the menu opens
+     wherever the pointer is parked — off the field, even on another monitor. Fix: `popup({ window: win, x: params.x, y:
+     params.y, sourceType: params.menuSourceType })`. Keep docClaims' pinned index.ts lines where they are.
+  Fold (not counted; T-110 (z), executed by the ffmpeg reader and reachable): a loudnorm pass-1 measurement that is
+  finite but outside ffmpeg's accepted ranges fails pass 2 — a -9.8 LUFS master with +12 dB Manual gain and Even volume
+  sends `measured_I=2.16` and pass 2 exits 222 ("Numerical result out of range") on both majors, so the export fails;
+  the single-pass loudnorm of the same chain lands on -16.0. Fix (the ledgered one): `parseLoudnormJson`
+  (main/audio/chain.ts) returns null — the no-measurement fallback, as for a non-finite value — when any field is outside
+  loudnorm's option range (measured_I and measured_thresh -99..0, measured_LRA 0..99, measured_TP -99..99, offset
+  -99..99; read af_loudnorm's option table and state the source). IMG-PREC: a Layer 5 case.
+  Also check (not counted): a click on the crop box with no drag may store a rectangle a float step off
+  (CropOverlay.tsx:195-203 divides by the picture size) and so push an undo step past T-166 (3)'s guard — drive it in
+  e2e; if Undo lights, skip the store write when the box did not move (say what you found either way).
+  Covering tests: unit (NEW describes at the end of src/shared/highlights.test.ts and the clipKit test file), each red
+  on b3f3ad1: `lateScanMessage`, `kitFailedMessage` (0, 1, 2 landed). e2e (NEW describes at the end of
+  video-pipelines.spec.ts and references.spec.ts), each red on b3f3ad1: a Scan VOD held in main (the suite's
+  held-spawn pattern), the video closed, the scan released — the late-scan toast names the file and no "Found" toast
+  appears (extend the existing pin at video-pipelines.spec.ts:9786-9826 in place if that is where it lives); a kit whose
+  third job fails (the suite's failing-job pattern) — the failure toast says the two finished files are in the folder;
+  a keyboard-sourced context menu (Shift+F10 through `webContents.sendInputEvent` on the focused Search box, or the
+  event emitted with keyboard params — say which) — the recorded popup options carry the params' x, y and sourceType
+  'keyboard'. Layer 5 (a NEW describe at the end of media.spec.ts), red on b3f3ad1: the -9.8 LUFS master with +12 dB
+  gain and Even volume exports through the real `runAudioExport` and lands within 1 LU of -16; `parseLoudnormJson` unit
+  cases for each field just past its range.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or a new behavior needs one (B: the late scan, the failed kit); STYLE_GUIDE where the
+  new-word rule is described (A: the home place, the class estimate).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice
+  and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
+  run by the expediter on the merge; Track B, which changes the audio chain, also runs `npm run test:media`) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 116)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
