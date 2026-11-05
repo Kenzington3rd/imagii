@@ -7577,6 +7577,102 @@ IMG-PREC.
 
 ---
 
+## T-161 — sweep-47 fixes (round 110)
+
+- **Spec:** the forty-seventh sweep's eight verified findings (candidate clean pass #1 on 9b4ccfe), each
+  confirmed by the expediter against source; four by execution (the compile segment on 7.0.2, the mono extract on
+  7.0.2, the 5.1 meter in the repo's Electron — the reviewer's run, checked against the Web Audio splitter rule —
+  and the shipped segment's streams). Privacy, Electron, a11y and UX clean on their whole lens; QA read all 214
+  non-test files (two readers); design, streamer and QA each took two readers. Not counted: a renderer crash
+  mid-take deleting the streamed webm (T-124 (3) chose it; it joins T-110 (ah) for the owner); an L = -R file
+  drawing a flat waveform and transcribing as silence (polarity-inverted material only; named for the owner);
+  "Logged posts (N)" under "Posting log" (the copy sweep's deliberate list header — the BRANDING row is the fold);
+  the Clip Kit button's "(5 + thumbs)" count beside the name the tour uses; bulk platform selection / kit-all, a
+  kit watermark without an export, image file names, recover-last-take, platform-shaped burn-in, a Discord 10 MB
+  target, a scan-length cap and a letterbox option (initiatives, named for the owner). Three tracks, disjoint files.
+
+  **Track A — the media a person gets is the media they made (items 1-3).**
+  1. **[MED] A compilation of a source with a text subtitle track comes out short, and says "Saved"**
+     (ffmpeg/concat.ts:272-310). The segment command maps by default (no `-sn`/`-dn`, no `-map`) and writes
+     Matroska, so a source's srt/ass/mov_text track rides into each segment; its last cue sets `-shortest` and the
+     container duration, and the concat demuxer offsets the next segment by that. Executed on 7.0.2: a 10 s MKV with
+     three srt cues, range 1-5 s, as shipped: video + audio + subtitle, 4.477 s, 119 frames; with `-sn`: video +
+     audio, 4.000 s, 120 frames (the reviewer measured a two-clip compilation at 4.498 s for 5.0 s on both majors).
+     Fix: `-sn` and `-dn` on the segment command (and check the join's inputs carry no other stream).
+  2. **[MED] Whisper's non-speech tags reach the captions** (sidecars/whisperManager.ts:250-261, :300-305;
+     shared/captions.ts shiftSrtToRange). Nothing suppresses or filters cues such as "[BLANK_AUDIO]", "[MUSIC]",
+     "(upbeat music)" or "♪", so they reach Save .srt, the burned video and the kit's _captions.srt, and the panel
+     has no transcript editing. Fix direction: a pure `cleanTranscriptSrt` in src/shared/captions.ts (drop every
+     cue whose whole text is one bracketed or parenthesised tag or only music notes, renumber; a cue with words and
+     a tag keeps its words) applied where whisper's .srt is written (the file is rewritten once, so every consumer
+     reads it clean), and inside shiftSrtToRange (so a transcript saved before this release is clean in a kit and a
+     ranged burn). NOT whisper's `--suppress-nst` flag: the person installs their own whisper-cli, and an older one
+     rejects an unknown argument.
+  3. **[LOW] Clean audio's extract turns a mono take into stereo 3 dB down per channel** (audio/extract.ts:27,
+     :117-120 `-ac 2`). A player puts a mono track on both speakers at unity (the repo's own rule, chain.ts:200-206,
+     STYLE_GUIDE:1020), so with Even volume off a re-attached video plays 3 dB quieter than the take, against the
+     Levels copy "Otherwise the export keeps your levels as they are". Executed on 7.0.2: a mono take peaking
+     -23.92 dBFS extracts to L = R = -26.93 dBFS. Fix: a mono source extracts as a unity duplicate
+     (`pan=stereo|c0=c0|c1=c0`, by the probed channel count); stereo and multichannel are unchanged.
+  Covering tests: Layer 5 (NEW describes at the end of media.spec.ts), each red on 9b4ccfe: a compilation of a
+  source with an srt track (MKV) and one with mov_text (MP4) is the sum of its ranges within a frame, with every
+  frame; the transcript cleaner on a real burn-in of a fixture SRT holding tag cues (no tag drawn: the burned
+  frames at the tag's time match a frame with no captions, or the cleaned SRT the burn reads has no tag cue); a
+  mono take extracted for Clean audio reads L = R = its own peak within 0.1 dB and a stereo source is unchanged.
+  Unit: `cleanTranscriptSrt` beside its helper (tags alone, tags with words, renumbering, an empty result).
+
+  **Track B — the studios say what is there (items 4-6).**
+  4. **[LOW] The T-160 meter drops a 5.1 file's centre channel** (audio-studio/VolumeMeter.tsx:37-45, :78-84). A
+     ChannelSplitter(2) takes channels 0 and 1 only (its input is explicit and discrete), so a multichannel file
+     opened in Audio Studio with its voice on the centre reads "-60 dB" and never turns red, where the old mono
+     analyser's speakers down-mix read it. Fix: a stereo down-mix ahead of the splitter (a GainNode, channelCount 2,
+     'explicit', 'speakers'), so 5.1 folds its centre into both sides and a mono source becomes L = R.
+  5. **[LOW] Close names edits that do not exist** (video-studio/store/videoStore.ts:296-305). Since T-147 (3) a
+     session with only a scan's results, a pasted chat log, found spikes or undo steps is a loss, but the question
+     always reads "N clip(s) and its/their edits will be discarded" — a person who ran Scan VOD and edited nothing is
+     told their edits go and not that the scan goes. Fix: name what is lost, as `audioCloseMessage` does ("Close this
+     video? The scan's results and the pasted chat log will be discarded."): the clips and their edits only when the
+     clips changed, then the scan's results, the pasted chat log, the chat spikes found, the undo history (when it is
+     the only loss), joined as a list.
+  6. **[LOW] A false "Captions need setup" flashes on the first Video Studio open** (CaptionsPanel.tsx:457;
+     store/runs.ts:67 `status: null`). `!status?.ready` is true while the status is unknown, so the ember card paints
+     until the status IPC answers, even with captions installed. Fix: the card shows only for a known status that is
+     not ready (`status !== null && !status.ready`).
+  Covering tests: e2e (NEW describes): audio.spec.ts — a 5.1 file with a tone on the centre only reads near full
+  scale in the meter (red on 9b4ccfe: "-60 dB"), the T-159/T-160 meter cases stay green; video-core.spec.ts — a
+  scan-only session's Close names the scan's results and not edits (red on 9b4ccfe); video-pipelines.spec.ts — with
+  the status IPC held, the setup card does not paint before the answer (red on 9b4ccfe). Unit: each loss kind's
+  sentence (videoStore.test.ts), the card's condition pinned.
+
+  **Track C — the dialogs say what they do (items 7-8 and a fold).**
+  7. **[LOW] The Variants output line drops the card's size note and claims "as the Export card" for an emote**
+     (image-studio/ThumbnailVariants.tsx:256-262; ExportDialog.tsx:214, :348-351). The line T-160 (4) added reuses
+     the card's JPG note but not `thumbnailSizeNote` ("Bigger than YouTube's thumbnail size…"), so a HiDPI 2× default
+     writes 2560×1440 variants with no warning the card would give; on an emote document it reads "112×112 PNG, as
+     the Export card" while the card writes the 28/56/112 pack. Fix: the dialog shows the card's size note under the
+     line, and on an emote document the line names the variants' own size without "as the Export card". Fold: the
+     previews' freshness keys on JPG quality only when the format is JPG.
+  8. **[LOW] The Delete board question says "and all 0 items" / "and all 1 item"** (references/MoodBoardPanel.tsx:168).
+     Fix: an empty board is `Delete "X"? Ctrl+Z brings it back.`, one item `Delete "X" and the 1 item in it? …`, more
+     `Delete "X" and all N items? …`.
+  Fold (not counted): BRANDING_GUIDE's "Posting log" row says the feature is "Posting log" and its list is headed
+  "Logged posts (N)" (the copy sweep's deliberate header, LESSONS "Posting log ('Logged posts (N)' for the list)").
+  Covering tests: e2e (NEW describes): image.spec.ts — at 2× PNG on the 1280×720 template the Variants dialog shows
+  the size note (red on 9b4ccfe), an emote document's line names 112×112 without "as the Export card" (red);
+  references.spec.ts — Delete on an empty board and on a one-item board (red on 9b4ccfe). Unit pins on each.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong; STYLE_GUIDE where a ffmpeg rule changes (the segment's stream selection, the mono
+  extract).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 110)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
