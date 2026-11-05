@@ -7785,6 +7785,88 @@ IMG-PREC.
 
 ---
 
+## T-163 — sweep-49 fixes (round 112)
+
+- **Spec:** the forty-ninth sweep's five verified findings (candidate clean pass #1 on da73bf2), each confirmed by
+  the expediter against source. Privacy, Electron, ffmpeg (executed on 7.0.2 and 6.1.1), audio, QA (main half;
+  renderer by three readers), streamer (both halves) and design reader 1 clean on their whole lens; UX read the
+  whole renderer and src/shared over two passes. Not counted: OutputPreview's 240 px canvas soft at a pixel ratio
+  above 1 (polish; the DPI section asks for no manual scaling); Record not remembering the mic and camera picks
+  (USER_GUIDE:176 says only the corner and MP4 choice persist — an initiative); Reframe Left/Right stopping short of
+  the edge (honest hint, (be)); the 9:16 crop preset at 90% height (initiative); the surround fold hard-clipping a
+  loud correlated mix (T-162 (2)'s own deliberate trade, pinned — named for the owner with its levers: an alimiter
+  above full scale after the fold, or a float scratch WAV); the export/reframe/burn commands without `-sn -dn`
+  (REFUTED by execution: an MKV with an srt track exports video and audio only). Two tracks, disjoint files.
+
+  **Track A — Video Studio says what happened (items 1-3 and a fold).**
+  1. **[LOW] A transcription that finds no speech leaves no trace after its 4 s toast**
+     (video-studio/CaptionsPanel.tsx:170-174, :637-641). A NEW consequence of T-162 (1): the run stores
+     `transcript: null`, the same state as never-run, so after the toast the panel shows the first-run hint and
+     "Transcribe" again — the class T-149 (3) fixed for Scan VOD ("No standout moments found in this video.") and
+     T-136 (9) for chat spikes. Fix: a no-speech run stores `transcript: []` with `srtPath: null` ("ran, found
+     nothing"); the panel reads it apart from `null`: the preview renders only for a non-empty transcript, the
+     header says "Re-transcribe" when a transcript is held (`[]` included) or a path is, the first-run hint shows only
+     for `null` with no path, and an always-mounted line says "No speech found in this video, so there are no
+     captions" for `[]` with no path (hidden while a transcription runs). It goes with the transcript's existing
+     reset rules (a new video, a Clear, a new run). The toast stays.
+  2. **[LOW] The safe-zone warning's intro contradicts its own rows for a vertical frame**
+     (video-studio/SafeZoneWarningModal.tsx:46-49). It always says "the tall ones keep only the middle of the frame";
+     for a 9:16 crop or a portrait source the rows say "TikTok frame → cut down for YouTube" (T-83: the wide platform
+     is the one cut down). Fix: "Wide and tall platforms need different shapes. Each platform keeps the middle of the
+     frame in its own shape, and anything outside that shape is lost." (true for both orientations).
+  3. **[LOW] Helper-built single-sentence result toasts end with a period** (shared/captions.ts:353, :376-381;
+     BRANDING:165-166 "a toast that reports a result has no trailing period when it is a single sentence"):
+     "No speech found, so there are no captions." and both `burnInDoneMessage(false, …)` sentences.
+     copyConventions.test.ts checks only literal toast arguments, so a sentence a helper builds escapes it. Fix: drop
+     the trailing periods; where the panel appends a note to the uncaptioned sentence it joins with ". " as the
+     captioned branch already does; and copyConventions checks the result-toast helpers' outputs too (every exported
+     `*Message` builder in src/shared whose result is toasted as a result — read how the renderer uses each).
+  Fold (not counted): the Chat spike finder's "+ Clip" toasts "Clip added" where Scan VOD's says "Clip added — see
+  the Clips list" for the same action in the same column; both say the Scan VOD sentence.
+  Covering tests: e2e (NEW describe at the end of video-pipelines.spec.ts; `captions:transcribe` stubbed in main as
+  the suite does): after a no-speech run the line is there once the toast has gone, through a trip to Home, and gone
+  for a different video and after a run with speech (red on da73bf2); the safe-zone dialog for a 9:16-cropped clip
+  exported for YouTube and TikTok reads the new intro (the 4:3 pin at :3388 moves with it); the chat "+ Clip" pin at
+  :1002 moves. Unit: copyConventions' helper check (red on da73bf2 for the two captions helpers), captions.test.ts
+  for the new sentences.
+
+  **Track B — Stream Graphics and Home do only what is asked (items 4-5 and a fold).**
+  4. **[LOW] Stream Graphics' paste listener does not stand down for an open dialog**
+     (image-studio/ImportPanel.tsx:98-122). Every other window-level studio key stands down for a dialog claim
+     (ImageStudio.tsx:51, useUndoRedoHotkeys, RecordStudio.tsx:180 — `anyDialogClaim()`); the `paste` listener was
+     missed. Ctrl+V with an image on the clipboard while the Variants, Templates or another dialog — or the tutorial
+     coachmark — is open adds a layer behind the scrim, and an open Variants dialog drops its previews and the focused
+     button. Fix: `if (anyDialogClaim()) return` first in `onPaste` (no `preventDefault`, so a text field inside a
+     dialog still pastes), and ImportPanel joins the interactionWiring pin of the window-level guards.
+  5. **[LOW] Home "Save project" with nothing open writes an empty project and says "Project saved"**
+     (routes/Home.tsx:25-33; ipc/project.ts:28-55). `project:save` validates the shape only; autosave refuses the same
+     empty project (projectValidation.ts:497-512, "Only autosave if there is actual user state"). Opening the file
+     says "Project loaded" and opens nothing; a person who picks an existing project in the dialog overwrites it with
+     nothing. Fix, at the trust boundary: `project:save` refuses a project with no studio state (`hasStudioState`)
+     BEFORE the dialog with a finished sentence, "Nothing to save yet. Open a video, a sound or a canvas first."
+     (a shared constant), which `reportFailure` shows as written (userFacingError tier 2, the T-117 pattern).
+  Fold (not counted): USER_GUIDE:550-552 says a 5.1 or 7.1 file is folded to stereo — true for a video's sound,
+  AIFF/WMA (extracted) and the preview, but a WAV/FLAC/MP3/AAC/M4A/OGG/Opus file opens directly and exports at its
+  own channel count. Scope the sentence to what is true.
+  Covering tests: e2e (NEW describes at the end of image.spec.ts and home-chrome.spec.ts or the spec that holds Save
+  project): with the Variants dialog open, a real clipboard image and Ctrl+V add no layer and the previews stay
+  (red on da73bf2); with the Templates dialog open, the same; with no dialog, Ctrl+V still adds the layer; Save
+  project with nothing open opens no dialog, writes no file and toasts the sentence (red on da73bf2), and with a
+  video open still saves. Unit: the project:save refusal on the real handler (a project with no studio state throws
+  the sentence before `showSaveDialog`), the userFacingError pass-through.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong (Track A: the captions panel after no speech, the safe-zone dialog; Track B: Save
+  project, the surround fold sentence); BRANDING only if a quoted toast changes.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice,
+  `npm run test:media` and the FULL Playwright suite green before handback — a hand-back with an unrun
+  gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 112)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
