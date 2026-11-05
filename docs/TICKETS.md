@@ -7979,6 +7979,98 @@ IMG-PREC.
 
 ---
 
+## T-165 — sweep-51 fixes (round 114)
+
+- **Spec:** the fifty-first sweep's seven verified findings (candidate clean pass #1 on 71539ad), each confirmed by
+  the expediter against source. QA main, QA renderer a, ffmpeg (executed on 7.0.2 and 6.1.1), Electron, audio,
+  privacy, a11y and the streamer main/shared half clean on their whole lens; design's first reader built the tip and
+  drove it at 1024×640, 1920×1080 and 3840×2160. Three are new consequences of T-164 (items 1, 2 and 6). Not
+  counted: the Fix wizard's summary step has no Cancel (audio.spec.ts:2167 pins it; Esc and the scrim dismiss — a
+  guide-versus-pin tension named for the owner); template and asset tile previews are background swatches (the
+  documented simplification); Record's Start button needs a scroll at 1024×640 (the root scrolls by design); the
+  closed-video card's phase words are aria-hidden (the T-144 disposition); initiatives for the owner — a stream-copy
+  import fast path, a YouTube Shorts preset, +faststart on the .m4a export. Two tracks, disjoint files.
+
+  **Track A — Stream Graphics pastes, selects and names things the way a person expects (items 1, 6, 7 and a fold).**
+  1. **[MED] T-164 (7)'s paste guard drops a picture pasted while a text field has focus**
+     (image-studio/ImportPanel.tsx:106). The guard returns for ANY text-entry target before it looks at the
+     clipboard, so a snipped screenshot pasted with focus back in Properties' Text or Name box (after an alt-tab)
+     adds no layer and says nothing — before T-164 it added the picture. Fix: the text-entry guard returns only when
+     the clipboard carries text (`clipboardData.types` includes `text/plain`); a clipboard with a picture and no text
+     falls through and adds the image layer as before (with `preventDefault`), whatever has focus. T-164's case stays:
+     text AND a picture pasted into a focused field pastes the text and adds no layer.
+  Fold (UX51-1, not counted): a text-only paste with no text field focused does nothing and says nothing beside
+  "Drop, paste (Ctrl+V), or pick a file." Fix: with a canvas open (`layers.length > 0`), it adds a text layer
+  holding the pasted text (trimmed; whitespace-only adds nothing) — `addLayer({ ...textLayerFor(doc), text })`, the
+  "+ Add text" layer with the person's words, selected and undoable, with `preventDefault`; on the empty start
+  screen (no layers) it refuses with `toast.error("Paste a picture to start from it, or pick a template to add your
+  text to.")`. A held Ctrl+V stays one paste (the `pasteHeld` guard runs first, as now).
+  6. **[LOW] The selection frame is the same accent as the app's own default shape stroke**
+     (image-studio/Canvas.tsx:542-544; state/canvasStore.ts:338-339). T-164 (8) drew the Transformer border in
+     ACCENT and `makeRectLayer` strokes in ACCENT, so on a freshly drawn rectangle the frame sits on the shape's own
+     stroke and cannot be told from it (on the "Accent bar" template layer it vanishes into the fill); only the pale
+     handles show the selection. Fix: the Transformer frame stands off the layer and reads as UI — `padding={4}`
+     (the frame 4 px outside the layer's box) and `borderDash={[6, 4]}`, keeping the T-164 (8) token colors; the
+     anchors, keepRatio, shiftBehavior and boundBoxFunc are unchanged. DESIGN_GUIDE's Transformer sentence says so.
+  7. **[LOW] An emote template's name is a description with unitless numbers** (image-studio/templates.ts:370).
+     "Emote · auto-exports 28/56/112 trio" against BRANDING "A label names the thing" (sibling: "Emote · Text "POG"");
+     and every 112×112 PNG exports the pack (ExportDialog.tsx:210), so the name singles out one of two templates that
+     both do it. Fix: the name is "Emote · Blank circle"; the "Emote · Text "POG"" description gains the blank
+     template's sentence ("Export emits a 3-PNG Twitch pack at 28, 56, and 112 px.") so both tiles say it; the
+     INIT-B comment is updated; references.spec.ts:2310 follows the new name.
+  Covering tests: e2e (NEW describe at the end of image.spec.ts), each red on 71539ad except the controls: an
+  image-only clipboard (Electron `clipboard.writeImage`) pasted with Properties' Name box focused adds the image
+  layer; text AND a picture pasted into the focused Name box pastes the text and adds no layer (control, T-164); a
+  text-only clipboard pasted with the canvas focused adds one text layer holding that text, selected, and Ctrl+Z
+  removes it; whitespace-only adds nothing (control); a text-only paste on the empty start screen shows the refusal
+  toast and adds nothing; the Transformer's `padding()` and `borderDash()` read from the stage; with a fresh
+  rectangle selected on a white document, a screenshot pixel 2 px outside the rectangle's stroke on its top edge is
+  the document's white (the gap), where on 71539ad it is the frame; the template grid shows "Emote · Blank circle"
+  and the text emote's description names the pack.
+
+  **Track B — Record, Audio Studio and Video Studio say only what is true (items 2-5 and a fold).**
+  2. **[LOW] T-164 (10)'s webcam hint shows when no webcam will be recorded** (record-studio/RecordStudio.tsx:893-896).
+     The sentence ("Your webcam is added to a corner of the recording. You can see it in the preview while you
+     record.") sits outside the `showCam` gates, so it reads under the unticked box (the default) and under "No
+     camera found", where the take is screen-only — a new consequence of T-164 (10). Fix: the hint renders only when
+     `showCam && cams.length > 0` (with the Corner control), wording unchanged.
+  3. **[LOW] Audio Studio's Export card shows a greyed "MP3" beside an .mp4 export**
+     (audio-studio/ExportDialog.tsx:145-156). With "Re-attach to video (output .mp4)" ticked — the state Clean audio
+     opens a video's sound in — the Format select stays on screen, disabled at its value, while the file written is
+     an .mp4 (AAC inside); the Bitrate select already hides in that state. Fix: the Format select hides under the same
+     condition as the Bitrate one (`source.fromVideo && muxBack`); unticking brings it back at the format the person
+     had.
+  4. **[LOW] A held Enter on "+ Log post" stacks red toasts** (video-studio/PostChecklist.tsx:291). The button has no
+     `onKeyDown={ignoreHeldEnter}`: the first press logs the post and clears the name, then each auto-repeat (a
+     keyboard click, detail 0, which `isRepeatPress` lets through) raises "Add a clip name first" — the T-141 (4)
+     class every other add button guards (repeatPress.ts:13-21). Fix: `onKeyDown={ignoreHeldEnter}` on it.
+  5. **[LOW] The caption style controls do not say they have no live preview** (video-studio/CaptionsPanel.tsx:526-567),
+     against BRANDING:148 ("A slider with no live preview says so in one line"); ColorGradePanel has its line. Fix:
+     one line under the Preset row: "Style changes show up in the burned-in video, not in this preview."
+  Fold (not counted): the preset buttons show no pressed state. Fix: a pure `captionStyleMatches(style, presetStyle)`
+  in shared/captions.ts (every field of the preset's style equal), and each preset button carries
+  `aria-pressed={captionStyleMatches(style, preset.style)}` with CropOverlay's pressed styling
+  (`bg-accent text-bg-base` when pressed); moving any dial off a preset leaves none pressed.
+  Covering tests: e2e (NEW describes at the end of record.spec.ts, audio.spec.ts, and the spec that holds the
+  PostChecklist and Captions cases), each red on 71539ad: Record's webcam card with the box unticked has no hint,
+  and with the box ticked and no camera has no hint (and with a camera, if the suite has a fake camera, has it —
+  otherwise a component test does); the Audio Export card with Re-attach ticked has no Format select and with it
+  unticked shows it at the prior value; a held Enter (repeat keydowns) on "+ Log post" logs one post and raises no
+  "Add a clip name first"; the caption style line is on screen; a preset click sets that button pressed and the
+  others not, and moving Size leaves none pressed. Unit: `captionStyleMatches` beside captions.ts.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or a new behavior needs one (A: pasting text adds a text layer; B: the caption
+  style line if the caption section is described); DESIGN_GUIDE (A: the Transformer frame).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice
+  and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
+  run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 114)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
