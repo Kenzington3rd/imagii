@@ -8071,6 +8071,100 @@ IMG-PREC.
 
 ---
 
+## T-166 — sweep-52 fixes (round 115)
+
+- **Spec:** the fifty-second sweep's four verified findings (candidate clean pass #1 on 16839d2), each confirmed by
+  the expediter against source; items 1 and 4 also by execution (design's first reader and the Electron reader drove the built tip). QA main and
+  both renderer readers, privacy, a11y, design's second reader, both streamer readers and UX's second readers clean on
+  their lens; UX took three readers (the first handed back a partial read). Two are new consequences of T-165 (items
+  1 and 2). Not counted: Record's device scan opens the camera for a moment to learn its name (devices.ts:78-82, T-88's
+  per-kind probe — the light may blink on opening Record; named for the owner); no pre-record webcam preview and no
+  global Record hotkey (initiatives / T-88); the empty-screen paste refusal stacks on repeated deliberate pastes; the
+  emote-pack toast's unitless "28, 56, 112"; Open project without a confirm (T-110 (n)); the stock View zoom roles persist
+  a page zoom across launches (executed by the Electron reader; part of T-110 (aj), the application-menu decision the owner
+  holds with (ah) — the detail is added there). ffmpeg (executed on 7.0.2 and 6.1.1 through the real runners) and audio clean on the chain. Two tracks,
+  disjoint files.
+
+  **Track A — pasted words land whole, inside the picture and readable (item 1 and a fold).**
+  1. **[MED] Pasted words are sized, placed and inked for the word "Text"** (image-studio/ImportPanel.tsx:132;
+     state/canvasStore.ts:393-396). T-165's words branch builds `{ ...textLayerFor(doc), text: words }`, and
+     `textLayerFor` calls `newTextLook(doc, inks)` with no word, though `newTextLook` / `newTextSize` take one
+     (shared/newText.ts:52-58, :290-294). Executed in the built tip: on "YouTube · Bold thumbnail" (1280 wide) a pasted
+     "Subscribe now for more streams" lands at x=1150, size 29, ~446 px wide — about 70% off the canvas, only
+     "Subscribe" visible; on both 112×112 emotes the pasted words' ink against their real box is 1.00:1 (invisible).
+     "+ Add text"'s rule (T-140/T-141: wholly inside, inked against what is under the word) is bypassed. Fix:
+     `textLayerFor(doc, word?)` passes the word to `newTextLook` and the paste branch passes `words`
+     (`{ ...textLayerFor(doc, words), text: words }`); `estimatedTextBox` becomes line-aware — width from the longest
+     line, height `lines × fontSize` (Konva's line height 1; the rule `surfacesUnder` already applies to existing text
+     layers at newText.ts:217, which then uses it) — and `newTextSize`'s fit takes both (`min(docWidth / box.width,
+     docHeight / box.height)` at size 1), so a pasted two-line title fits too. A single line sizes exactly as before.
+     `// simplification:` a long paragraph is sized down to fit on one canvas line per line it has (no wrap; the
+     upgrade is a wrap width on text layers).
+  Fold (not counted): HotkeyOverlay.tsx:43 "Paste image from clipboard" no longer says what Ctrl+V does in Stream
+  Graphics; it reads "Paste a picture, or words as a text layer".
+  Covering tests: unit (NEW describes at the end of newText.test.ts and canvasStore.test.ts), each red on 16839d2:
+  `estimatedTextBox` of a two-line string (longest line, two lines tall); `newTextSize` for a long word on a 1280×720
+  page and a 112×112 page fits it; `newTextLook` with "Subscribe now for more streams" on the Bold thumbnail
+  template's document and on both emote documents keeps the whole box inside the page with ink at or above
+  `READABLE_CONTRAST`; `textLayerFor(doc)` with no word is unchanged (control). e2e (NEW describe at the end of
+  image.spec.ts), red on 16839d2: the Bold thumbnail template, "Subscribe now for more streams" pasted with the canvas
+  focused — the new layer's client rect (or its stage box) lies inside the document's; the overlay row's text
+  (update any pin in hotkeyTable.test.ts in place).
+
+  **Track B — Video Studio's Undo records only changes, the Audio tour names what is on screen, and a right-click
+  pastes (items 2-4).**
+  2. **[LOW] The Audio tour's Export step names a control a video's sound does not show**
+     (tutorials/audioTutorial.ts:60). "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'." — for a
+     video's sound (Re-attach ticked by default) T-165 (3) hides Format, so the tour points at nothing; USER_GUIDE was
+     updated, the tour was not. Fix: "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For a video's
+     sound, 'Re-attach to video' is ticked and puts the cleaned sound back on the original as an .mp4; untick it to
+     pick a Format instead."
+  3. **[LOW] A crop, color or In/Out edit that changes nothing pushes an undo step that undoes nothing**
+     (video-studio/store/videoStore.ts:424-436, :700-721; CropOverlay.tsx:93-138; ColorGradePanel.tsx:74-79).
+     `setClipCrop`, `setClipColorGrade` and `applyRange` call `snapshot()` without comparing the new value with the
+     stored one, and `endGesture()` has just reset the coalescing key — so ticking then unticking Crop on an uncropped
+     clip (`clearCrop` -> `setClipCrop(id, null)` on a null crop), Reset with no crop, Reset color on the default grade,
+     or I/O at the mark's own position each light Undo on an untouched video; Ctrl+Z visibly does nothing and the dead
+     steps count against `HISTORY_LIMIT`. `removeClip` guards the class (videoStore.ts:606) and References fixed it in
+     T-149 (4). Fix: each of the three returns before `snapshot` when the clip's stored value equals the new one —
+     crop: both null or the four fields equal; grade: every field equal; range: the floored start and end equal the
+     clip's. Grep the store's other setters and apply the same guard to any a person can reach with a no-op (say
+     which).
+  4. **[MED] Right-click in a text box shows no menu — no Cut, Copy, Paste or Select all** (src/main/index.ts:211-221;
+     nothing in src handles `context-menu`). Executed by the Electron reader: `webContents.listenerCount('context-menu')`
+     is 0 and a right-click on the focused Reference Search input shows nothing (a `Menu.popup` from main in the same
+     session does). Electron has no built-in context menu, so the mouse path a Windows streamer expects (right-click,
+     Paste a chat log into Video Studio's chat box, a name into a board field, a title into Properties) does not exist.
+     Fix: a pure `contextMenuTemplate(params)` in a new `src/shared/contextMenu.ts` (no electron import: it returns
+     plain items `{ role, enabled }` / `{ type: 'separator' }`) — an editable target gets Undo, Redo, separator, Cut,
+     Copy, Paste, separator, Select all, each `enabled` from `params.editFlags` (canUndo, canRedo, canCut, canCopy,
+     canPaste, canSelectAll); a non-editable target with selected text gets Copy alone; anything else gets no menu
+     (an empty list, and main pops nothing). In `createWindow`, `win.webContents.on('context-menu', (_e, params) =>
+     { const items = contextMenuTemplate(params); if (items.length) Menu.buildFromTemplate(items).popup({ window: win }) })`.
+     Spellcheck stays off, so there are no suggestions; the canvas and the waveform get no menu (not editable).
+  Covering tests: unit (NEW describe at the end of the videoStore test file), each red on 16839d2: `setClipCrop(id,
+  null)` on a null crop, `setClipColorGrade` with the current grade and `setClipStart` at the clip's own start each
+  leave `history` unchanged; a real change still pushes one step (control); `contextMenuTemplate` for an editable
+  target (roles in order, enabled per flag), a selection in plain text (Copy alone), and neither (empty) — in
+  src/shared/contextMenu.test.ts. e2e (NEW describes at the end of
+  video-core.spec.ts or the spec holding the Crop cases, and audio.spec.ts), each red on 16839d2: open a video, tick
+  then untick Crop — Undo stays disabled; the Audio tour's Export step shows the new sentence; a right-click (a real
+  `click({ button: 'right' })`) on a focused text field with text on the clipboard: main records the popped menu's
+  roles (wrap `Menu.prototype.popup` in main through `app.evaluate`), and clicking its Paste item puts the clipboard
+  text in the field (the end state); a right-click on the canvas pops nothing. IC row for the context menu.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong (A: pasted words; B: the tour if quoted); DESIGN_GUIDE where the new-word rule is
+  described (A).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice
+  and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
+  run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 115)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -8288,7 +8382,9 @@ IMG-PREC.
   reload kept four partial webms and the fifth `recording:begin`
   was refused "too many open sessions"; only the
   render-process-gone path abandons sessions, so the same decision
-  covers abandoning them on a main-frame navigation); (ai) the portable exe unpacks itself on EVERY launch
+  covers abandoning them on a main-frame navigation; sweep 52, executed: the stock View zoom roles under the same
+  menu also persist a page zoom across launches — zoom out three times and the next launch opens at -1.5, so the same
+  decision covers zoom); (ai) the portable exe unpacks itself on EVERY launch
   (electron-builder's portable template deletes and re-extracts
   its install dir each start; nothing sets `unpackDirName`), a
   10-15 s no-window wait on every start — T-120 rewords the five
