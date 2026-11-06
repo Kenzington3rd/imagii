@@ -8774,6 +8774,80 @@ IMG-PREC.
   processes stopped by explicit PID only.
 - **Status:** done (round 122 — see the Done entry)
 
+## T-174 — sweep-60 fixes (round 123)
+
+- **Spec:** the sixtieth sweep's five verified findings (candidate clean pass #1 on 70eb049), each confirmed by the
+  expediter against source. Privacy, a11y, Electron, audio, QA main and both renderer readers, design reader 2 and
+  streamer main clean on their lens. Items 1 and 5 are siblings of T-173 (3) and (4). Not counted: a 5.1 centre-only voice
+  reaching whisper through `-ac 1` (unmeasured; the engine is level-tolerant); ClipList's rename not selecting its clip
+  (the T-17 split); a "TikTok bold" caption on a landscape burn (the platform-shaped class); the Fix wizard summary's
+  lower-case ids; "Close this audio?" beside "The sound is closed"; `probeVideo` taking cover art from an audio file
+  picked through All files. Two tracks, disjoint source files.
+
+  **Track A — Record starts what it says, and a Pencil stroke is a Pencil (items 1, 2 and 3).**
+  1. **[LOW] Start with the webcam ticked before the first device scan settles records the screen alone and says "No
+     camera found"** (record-studio/RecordStudio.tsx:401, :409, :943-949). The start reads `cams` while the scan (which
+     waits for both probes, devices.ts:97-98) has not reported, so `effectiveCamId` is null and the camera's T-42 path
+     throws "No camera found." — the toast "No camera found. Recording screen only." about a camera that exists (a slow
+     or virtual one), and a take without the facecam the box asked for. T-173 (3) made the hints wait for the scan; the
+     Start decision still reads the same emptiness. Fix: while the webcam is ticked and the first scan has not settled,
+     Start is disabled and reads "Checking devices…"; it enables when `devicesScanned` turns true.
+  2. **[LOW] With the webcam off (the default), a screen that sends no picture opens a take of nothing** (RecordStudio.tsx
+     :368-373, :448-513; compositor.ts `playWithin`). T-172 (1)'s 10 s first-picture check runs only inside the
+     compositor, so only a start with the webcam on is protected; with it off, `getUserMedia` resolves and the recorder
+     starts and counts over a minimized window. The code's own comment (:430-431) says a stalled screen "would open a
+     take of nothing". Fix: compositor.ts exports one `waitForFirstPicture(stream)` (a hidden muted `<video>`, the same
+     `playWithin(…, 'screen')` race, torn down on every outcome); when the take's picture is the raw screen (no
+     compositor: the webcam off, or the camera fallback), the start awaits it before the main-process session opens,
+     and a `NoPictureError('screen')` reaches the start's one catch as now (the screen sentence; Start back).
+  3. **[LOW] Pencil strokes are named "Line" in the Layers panel** (image-studio/Canvas.tsx:249, state/canvasStore.ts:386-
+     390). The Pencil and the Line tool both make a layer named "Line" (the "Polygon" branch is unreachable: no caller
+     passes `closed`), against the toolbar's "Pencil" and the tutorial's "Line (L) and Pencil (P)". Fix: a Pencil stroke's
+     layer is named "Pencil"; the unreachable `closed`/"Polygon" naming goes (the `LineLayer.closed` field stays, false).
+
+  **Track B — what was set aside comes back (items 4 and 5).**
+  4. **[MED] A Restore or project open whose video or sound cannot be opened says "load it again", and loading it again
+     brings none of its work back** (project/ProjectIO.ts:217-230 `describeUnavailableSources`, :436-457, :518-521). The
+     clips (and `srtPath`) are applied only when the video loads, the chain (cuts, cleanup, second track) only when the
+     sound does; the sentence sends the person to load the file again, which opens it fresh; and for an autosave the next
+     save replaces the only copy (the drive unplugged, the file renamed). Fix (the promise is right): ProjectIO keeps,
+     for the session, each studio part a project or an autosave could not apply because its file was unavailable or
+     failed (not a skip — the person chose another file): the video part by its original path (`clips`,
+     `selectedClipId`, `srtPath`), the sound part by its original (`chain`). `captureProject` writes a kept part while
+     its studio has nothing open, so the autosave keeps it; when the same file is opened again (`videoKey` /
+     `soundKey` equal), the kept part is applied as `applyProject` applies it and dropped; opening a different file in
+     that studio drops it. The sentence is unchanged.
+  5. **[MED] A transcription that finishes after its video was closed is thrown away** (video-studio/CaptionsPanel.tsx
+     :175-181; store/videoStore.ts `setSrtPathFor`; shared/captions.ts `staleCaptionsMessage`; VideoJobsRunning's Close
+     sentence "The transcription that is running keeps going"). T-173 (4) holds a finished transcript by `videoKey` for
+     the session; a result that lands while its video is closed or another is open is refused before it is held, and
+     the toast says to transcribe again (minutes of whisper; the .srt orphaned in the captions folder). Fix: the
+     transcription captures the probe duration at its start; a refused late result is held under its key
+     (`holdTranscriptFor(key, { srtPath, transcript, duration })`, the same entry shape), so opening that video again
+     gives it back; the toast: "Captions for <file> are ready. Open it again to see them." (cues) / "No speech found in
+     <file>, so there are no captions." (none). The Scan VOD late path is unchanged.
+
+  Covering tests: unit (NEW describes at the end of the files they touch) and e2e (NEW describes at the end of
+  record.spec.ts, image.spec.ts, video-pipelines.spec.ts / video-core.spec.ts and home-chrome.spec.ts / audio.spec.ts as
+  fits), each red on the base except the stated controls: with the scan held and the webcam ticked, Start is disabled
+  and reads "Checking devices…" (red: enabled), and once the scan settles with a camera the take has the camera
+  (control: with no camera listed, the T-42 sentence); a frameless screen with the webcam OFF ends the start with the
+  screen sentence, no take and nothing live (red: REC counts); a working screen starts as before (control); a Pencil
+  stroke's layer is "Pencil" and a Line's "Line" (red: "Line"); an autosave whose video is missing restores the rest,
+  the autosave written after keeps the clips (red: gone), and opening the same video again brings its clips and
+  transcript back while a different video drops them (control); the same for a sound's chain; a transcription released
+  after Close and then the video opened again has its transcript and Save .srt (red: first-run), with the new toast.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE where a
+  sentence is now wrong or new (A: the Start label while checking, the screen check with the webcam off, the Pencil
+  layer name; B: what a Restore keeps, the late transcription).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 123)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
