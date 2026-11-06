@@ -8592,6 +8592,91 @@ IMG-PREC.
 
 ---
 
+## T-172 — sweep-58 fixes (round 121)
+
+- **Spec:** the fifty-eighth sweep's six verified findings (candidate clean pass #1 on 482ccf3), each confirmed by the
+  expediter against source (item 1 also by the reviewer on the shipped Electron 31 binary; items 5 and 6's rendering
+  measured by the reviewer in a built app). QA main and renderer a, Electron (full-read standard), audio, privacy,
+  a11y, UX reader 2, design reader 2 and the three streamer readers clean on their lens; ffmpeg still running at
+  dispatch (any finding of its own becomes a Track C on main-process files). Two of the six are consequences of T-171
+  (items 4 and 5). Not counted: a countdown or minimize at Record's Start so a Screen take does not open and close on
+  imagii's own window (a feature; owner item); Start partly below the fold at 1024x640 with the microphone hint showing
+  (no guide promises it). Two tracks, disjoint source files.
+
+  **Track A — the same video is the same video (items 2 and 5).**
+  2. **[LOW] A converted import re-opened is "another video", and its late results are dropped** (convert.ts:365 names
+     each working copy `<base>-<nanoid8>.mp4`; ExportPanel.tsx:187 and :600, CaptionsPanel.tsx:496, ReframePanel.tsx:167,
+     GifPanel.tsx:170, ClipKitButton.tsx:373, VideoJobsRunning.tsx:231 compare `run.videoPath !== source.filePath`;
+     videoStore.ts `setSrtPathFor` / `setDerivedFor` / `setPreviewCopyFor` compare `source.filePath`). Import
+     stream.flv, start an export, a transcription or a scan, Close (the question says the job keeps going), re-open
+     stream.flv from Recent: a NEW working copy, so every panel prints "Started on another video: export of
+     stream.flv." under stream.flv, Export's rows vanish when the batch ends, and a transcription or scan that finishes
+     afterwards is refused ("…finished after that video was closed or replaced…") — minutes of work for the same
+     recording thrown away. An .mp4 re-opened keeps them all. Fix: ONE identity for "the same video" — the original
+     the person opened, `convertedFrom ?? filePath` (the name `fileName` already shows; ProjectIO already saves it) —
+     used by every same-video comparison and by the three `set*For` guards.
+  5. **[LOW] The Clip Kit's other-video caption hides its ellipsis** (ClipKitButton.tsx:375). `text-right` on the
+     two-line clamp: a long file name is cut after two lines with no "…" (measured at 1024, 1920 and 3840; forcing
+     left alignment shows it), so the sentence reads as complete while cut mid-name. Fix: the caption is drawn as the
+     other four other-video lines are (left-aligned text; the box may stay at the column's end).
+
+  **Track B — Record, Stream Graphics and the copy say and show what is so (items 1, 3, 4, 6).**
+  1. **[LOW] A camera that opens but sends no picture leaves Start on "Starting…" for good**
+     (record-studio/compositor.ts:211-213). `await Promise.all([screenVid.play(), camVid.play()])` runs BEFORE the
+     10 s `waitForMetadata` race, and `play()` on a MediaStream-backed video stays pending until the first frame
+     (measured: a `captureStream(0)` source's `play()` still pending after 4 s, readyState 0). The file header and the
+     `waitForMetadata` doc promise the opposite. Start stays disabled with no Cancel, the screen and camera stay live,
+     and the two offscreen videos stay in the document until the person leaves Record. Fix: each `play()` is raced
+     against the same 10 s limit; on the limit the setup's existing catch tears down and rethrows, and RecordStudio's
+     camera fallback then records screen-only with its toast. The limit's error is a finished sentence naming the
+     source ("The camera sent no picture for 10 seconds." / "The screen capture sent no picture for 10 seconds."), so
+     the toast reads "The camera sent no picture for 10 seconds. Recording screen only."
+  3. **[LOW] The YouTube channel banner is told it is bigger than a YouTube thumbnail** (image-studio/ExportDialog.tsx
+     :65-76, :214; ThumbnailVariants.tsx:142; templates.ts:261-290). `thumbnailSizeNote` keys on 16:9 and opaque, so the
+     2560x1440 "YouTube · Channel banner" template shows "Bigger than YouTube's thumbnail size (1280×720)." on a
+     YouTube asset whose own size is right; following it (0.5x) gives a 1280x720 banner. The 2K thumbnail template is
+     the same size, so size cannot tell them apart. Fix: `CanvasDocument` gains an optional `kind?: 'channel-art'`
+     (shared/canvas.ts), the channel-banner template's doc sets it, and `thumbnailSizeNote` is null for it (both call
+     sites). It rides in the doc: a project and an autosave round-trip it (projectValidation keeps the doc as is), a
+     different template or a new document drops it.
+  4. **[LOW] T-171's microphone remedy says "untick"** (record-studio/devices.ts:136, RecordStudio.tsx:48).
+     BRANDING_GUIDE: "Check" a box, never "tick" (T-116). copyConventions' renderer scan reads JSX text and toast
+     arguments, not a helper's returned string or a constant interpolated into a toast, so the word passed. Fix: "To
+     record without one, uncheck Record microphone." / "To record without it, uncheck Record microphone."; the word
+     rules (US spelling and "tick") also read every string literal under src/renderer, as they already do for main,
+     shared and preload.
+  6. **[LOW] The template / asset card is pasted three times** (image-studio/ImportPanel.tsx:260-280,
+     TemplatesDialog.tsx:69-91, references/AssetLibraryPanel.tsx:92-113): the same button, checkerboard-or-fill
+     thumbnail, name, description and "W × H" with identical classes; STYLE_GUIDE "Shared affordances": repeated UI
+     is a component. Fix: one `SpecCard` (components/SpecCard.tsx: name, description, doc size and background, onClick,
+     an optional extra line for the Asset Library's license), listed under Shared affordances. TemplatesDialog's unread
+     `setHover` state and its mouse handlers (scaffolding for a "planned hover-preview feature") go with the copy.
+
+  Covering tests: unit (NEW describes at the end of the files they touch) and e2e (NEW describes at the end of
+  video-pipelines.spec.ts, video-core.spec.ts, record.spec.ts and image.spec.ts), each red on the base except the stated
+  controls: an .flv imported, an export / a transcription / a scan held, Close, the same .flv re-opened — no "Started on
+  another video" line anywhere, Export's rows still drawn after the batch ends, and the late transcript / scan
+  candidates land (an .mp4 re-opened, the control, behaves the same before and after); a DIFFERENT converted file
+  opened still gets the line and the refusal; the Clip Kit caption with a 130-character name is left-aligned like its
+  siblings; `startCompositor` with a stream whose `play()` never settles rejects after the limit and leaves no
+  offscreen video in the document (unit, fake timers), and Record with a frameless camera starts a screen-only take with
+  the camera toast (e2e, a stubbed camera stream); the channel-banner template's Export card and Variants show no
+  thumbnail note while the 2K thumbnail template still does, and a saved-and-reopened banner project keeps it so;
+  the microphone hint and the Start-failure toast say "uncheck"; the widened word scan fails on "untick" in a helper's
+  returned string and in a constant; the three card sites render the same markup through `SpecCard` (their existing
+  e2e and the IC rows stay green).
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or new (A: a re-opened converted video keeps its jobs; B: the camera that sends no
+  picture, "uncheck", the banner's Export card); STYLE_GUIDE Shared affordances (B: `SpecCard`); BRANDING_GUIDE's
+  copy-conventions sentence on where the word rules read (B).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 121)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
