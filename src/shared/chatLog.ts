@@ -22,6 +22,13 @@ export interface ChatMessage {
 const CHAT_LINE_RE =
   /^\[(\d{1,3}:\d{2}(?::\d{2})?(?:[.,]\d+)?)\]\s*(?:<[^>]+>|[\p{L}\p{M}\p{N}_-]+:?)\s*(.*)$/u
 
+/**
+ * T-168 (5): what both chat-log panels say when a pasted log parses to no message: the Chat spike finder in a toast when "Find spikes" is
+ * pressed, the Smart highlight finder under its box (it scores audio-only otherwise, with the Chat bar at 0 and no word why).
+ */
+export const CHAT_LOG_FORMAT_MESSAGE =
+  'No timestamped messages found. Each line should start like [12:34] username: message'
+
 /** Parse a "[hh:mm:ss[.fff]]" or "[mm:ss[.fff]]" timestamp to seconds. */
 export function parseTimestampToSec(ts: string): number {
   assert(typeof ts === 'string', 'parseTimestampToSec expects a string')

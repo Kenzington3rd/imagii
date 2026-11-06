@@ -14,6 +14,70 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-06 - T-168 (round 117), Track A: the late scan's toast stays, the scan names its file on screen, a click on a crop handle stores nothing, and an unreadable chat log says so
+
+The fifty-fourth sweep, Track A (items 1-3 and 5; item 4 and the tour double-click are Track B's).
+
+### (1) [LOW] - The late-scan toast faded in 4 seconds
+
+- **Bug.** T-167 (3)'s sentence ("The scan of stream.mp4 finished after that video was closed or replaced, so its highlights weren't added. Scan again when you're ready.", about 27 words) was up for react-hot-toast's default 4 s, with the search icon, where the sibling dropped-result toasts (captions, the preview copy, the importers) use the warning icon and 8 s.
+- **Root cause.** The toast copied the sibling's shape without its options: the new call site set an icon and no duration, and the default is not a property anyone reads at the call site. BRANDING "Toasts" says a sentence that is the only place a fact is said lasts `ACTION_TOAST_MS`.
+- **Fix.** `{ icon: <Icon name="warning" size={18} />, duration: ACTION_TOAST_MS }`.
+- **Test.** video-pipelines.spec.ts "T-168 Track A" (1): the warning triangle's path, still visible 6 s after the toast appeared, gone within 10 s more. Red on 01edf08 (the magnifier's path).
+- **Lesson.** **A toast's duration is part of its copy.** When a new message is modelled on a sibling, copy the sibling's options with its words; the default is a decision somebody else made for a different sentence.
+
+### (2) [LOW] - The scan bar named its video only to assistive tech
+
+- **Bug.** USER_GUIDE promised "Scanning stream.mp4 for highlights", and the name was only the progress bar's `aria-label`: a sighted person on another video saw an anonymous bar.
+- **Root cause.** T-167 (3) fixed the name where the accessible name was read (the label) and the guide's sentence was taken to be satisfied. `ProgressTrack` draws no text.
+- **Fix.** A `min-w-0 truncate` span before the bar with the same words and the whole name as its `title`; the track keeps `min-w-[3rem]` so a long name gives way, not the bar.
+- **Test.** "T-168 Track A" (2): another video open (the line names the first file, its title holds it), and a 70-character name (ellipsis, one row, the bar 40 px or more, no sideways overflow). Red on 01edf08 (no such text).
+- **Lesson.** **An accessible name is not the visible copy.** When a guide promises text a person reads, assert it as text on screen, not as a role's name.
+
+### (3) [LOW] - A plain click on a crop resize handle pushed an undo step
+
+- **Bug.** A press and release on a corner or an edge of the crop box, with no movement, added an undo step (a 9:16, 4:5 or 1:1 crop).
+- **Root cause.** T-167 skipped the no-move press in `onDragStop` and left `onResizeStop`: re-resizable calls it on any press and release of a handle, and the handler stored `ref.offsetWidth / picture.w` (whole pixels) over a box drawn at the fractional `cropRect.w * picture.w`, past `setClipCrop`'s exact equality guard.
+- **Fix.** `onResizeStart` records the box's whole-pixel size; `onResizeStop` ends the gesture and returns when the size is unchanged. (The first cut read react-rnd's `delta` argument; re-resizable sets it only in its constructor and on a move and never resets it per press, so a plain click after a real resize was handed that resize's stale non-zero delta and still pushed a step.)
+- **Test.** "T-168 Track A" (3): two corners and two edges (the edges exist only with the ratio Free); a real resize still pushes its own step (control); a click after a real resize and a preset that leaves the box fractional pushes none (red on the delta-only guard, M-a3e); a height-only edge resize is still a step (control). Red on 01edf08 (Undo still enabled after one Undo).
+- **Lesson.** **A fix to one of a pair of handlers is half a fix.** When a library fires its "stop" on any press, every stop handler of the component needs the no-change guard; grep the siblings (`onDragStop`, `onResizeStop`) when one is fixed. And do not trust a library callback argument that is state kept on the instance: re-resizable's `delta` is stale on the next press, so compare against what you recorded at the press.
+
+### (5) [LOW] - The Smart highlight finder ignored a chat log it could not parse, in silence
+
+- **Bug.** `[2024-05-01 12:34:56] user: msg` or `12:34 user: msg` pasted into the finder parsed to no message, the ranking was audio-only and the Chat bar stayed 0, with nothing saying why; the Chat spike finder prints a format sentence for the same input.
+- **Root cause.** Two panels share a parser and only one handled its empty result; the sentence lived in one panel's `analyze`.
+- **Fix.** The sentence is `CHAT_LOG_FORMAT_MESSAGE` in `src/shared/chatLog.ts`, used by both; the finder shows it (text-xs, warn ink) under the box when the debounced text is non-blank and parses to nothing, from the parse the scoring memo already makes.
+- **Test.** chatLog.test.ts (the constant; its own example parses; the two shapes; a supported control) and "T-168 Track A" (5). Red on 01edf08 (the constant is missing; the sentence is not on screen); the shape and control cases pass on the unchanged parser by design.
+- **Lesson.** **When two panels share a parser, they share its failure message.** A shared function with an empty result needs one caller-visible sentence, owned beside the function, so a second caller cannot forget it.
+
+## 2026-11-06 - T-168 (round 117), Track B: a running job says whose it is, and a double-click's second press reaches nothing
+
+The fifty-fourth sweep, Track B (item 4 and its fold, the expediter's item 6, and three small folds).
+
+### (4) [MED] - With another video open, the Export panel showed the earlier video's running batch with nothing naming it
+
+- **Bug.** An export started on A, A closed, B opened: B's Export button read "Exporting…" over A's rows and a Cancel nobody could attribute. The GIF, Compile and Picture-in-picture cards said a bare "Exporting…" / "Stitching…" / "Compositing…" over a job whose subject the person could not read off the card.
+- **Root cause.** The queue became a module store in T-135 (1), so its rows outlive the video: `jobs` is kept while `running` whatever the open source, and the rows print only `clip · preset`. The store has held `sourceName` since T-164 (5) for the closed-video card, and the audio export names its file for the same shape (`otherSoundLabel`, T-147 (2)); the video panel never read it. The three side cards' run stores carry a `name` (T-144), which the closed-video card reads and the panels did not.
+- **Fix.** When the running batch is not the open video's, one line above the Queue reads "Export of <name>, started on another video." (`text-xs text-ink-dim`, truncated, the name as its title). GIF, Compile and Picture-in-picture draw "Exporting <clip>…", "Stitching <video>…" and "Compositing <base file>…" in the row that holds their Cancel, to its left (truncated, the name as the title). The button's own label is unchanged: it is the card's progress line for the GIF and its width is a measured guard against the second press of a double-click landing on Cancel (T-126 (20), T-131 (13)), so the name rides beside the Cancel instead of growing it.
+- **Test.** video-core.spec.ts "T-168 (4)": an export held in main on A, A closed, B opened (the line names stream-a.mp4, has it as its title, sits above the Queue heading, is absent on A, and goes when the batch ends), and the three side cards each held in main (the line names the clip, the video, the base file; the Cancel is still there; the line goes with the job). Red on 01edf08 except the controls.
+- **Lesson.** **A store that outlives the screen has to carry whose it is, and every reader has to say so.** T-164 (5) and T-147 (2) gave the same fact to two other surfaces; the panel that draws the same rows from the same store was missed because nothing failed, it was only anonymous. When a record moves out of a component, grep for every place that draws it, not for the place that broke.
+
+### (6) [MED] - A double-click on a dialog or tour button opened the control under it
+
+- **Bug.** A double-click on the tour's Done closed the card with its first press and, with the second, focused the Video Studio's "Watermark position" select under it and opened its native popup, which swallowed the next key. The home-chrome T-131 case ("the last step names the ? key") failed most standalone runs for that reason: the tour scrolls the studio as far as it gets in the time it has, so the select was under Done in some runs and not in others. On 01edf08 it passed 2 of 10 standalone.
+- **Root cause.** `swallowRepeatClicks` (T-131 (8)) dropped only `click` events with a count above 1. A press is three events; the repeat's `mousedown` and `mouseup` still landed, and a select takes focus and opens its popup on the MOUSEDOWN, not the click. The promise "its second press reaches nothing" was true of the click handlers and false of the page. Diagnosed with capture-phase logs: the keydown never reached the page and no modal was open (`openModals` 0); pressing Escape first passed 5 of 5.
+- **Fix.** One capture-phase handler on the window for `mousedown`, `mouseup` and `click`, the same `isSwallowedRepeat` rule, `stopImmediatePropagation` and `preventDefault`. The `preventDefault` on the repeat mousedown is what keeps the select focused-not and closed (stopping propagation alone leaves the browser's own default action). The once-flag stays.
+- **Test.** repeatPress.test.ts "swallowRepeatClicks - the whole repeat press is stopped" (a detail-2 mousedown, mouseup and click inside the window are stopped and canceled, heard in the capture phase; a detail-1 press and a detail-2 press after the window are not; a second close does not stack handlers). home-chrome.spec.ts "T-168 (6)": the studio is scrolled so the select's middle is under Done's (the precondition is asserted, since the tour's own scroll varies), a real double-click on Done, then no press with a count above 1 reached the page, no select has focus, and `?` opens the shortcuts. The T-131 case passes 10 of 10 standalone on the new build (2 of 10 on the base).
+- **Lesson.** **A guard on an event is a guard on one event.** Say which of a gesture's events the promise covers, and test the page's state after the gesture, not the handler you wrote: the T-131 (8) case counted clicks and was green while the select opened. And a flaky test that "passes with Escape first" is a product bug that depends on layout; make the layout a precondition of the new test instead of hoping for it.
+
+### Folds
+
+- **LayerPanel's empty-state line could never show.** `ImageStudio` mounts `LayerPanel` only in the branch with `layers.length > 0`; the other branch is the import panel alone. The "Drop or paste an image, or draw with the toolbar above." block was deleted (copy no path reaches is copy nobody notices going wrong, T-49).
+- **The Asset Library's footer count** goes through `countOf` like every other count; copyConventions.test.ts pins the call.
+- **DESIGN_GUIDE's raw-colour exceptions** now name the compositor's letterbox `'black'` (a colour name, so `noRawHex.test.ts` does not see it).
+
+---
+
 ## 2026-11-05 - T-167 (round 116), Track A: a tall pasted text stays on the page, the estimate holds for capitals, and a no-op edit leaves Redo alone
 
 The fifty-third sweep, Track A (items 1-2 and a fold).

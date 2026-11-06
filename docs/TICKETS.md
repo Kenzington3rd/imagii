@@ -8352,7 +8352,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
   run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 117)
+- **Status:** done (round 117 — see the Done entry)
 
 ---
 
@@ -8925,6 +8925,48 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 117 — T-168, all five counted items, the expediter item and the
+folds, landed in the commit that carries this entry. Two Sonnet workers
+in fresh clones of 01edf08, disjoint source files, merged by the
+expediter. Track A: the late-scan toast keeps the warning icon and stays
+8 s like every sibling dropped-result toast; the scan bar shows the file
+it is scanning in a visible, truncated line, not only to assistive tech;
+a press and release on a crop RESIZE handle that changes nothing is not
+an edit — compared with the whole-pixel size the box had when the press
+began (a handle cannot move the box without resizing it), because
+re-resizable never resets its `delta` between presses (found by the
+worker, confirmed by the expediter in the library source, sent back
+once); the Smart highlight finder says why a chat log it cannot read
+adds nothing, with the Chat spike finder's sentence, now one shared
+constant. Track B: the Export panel names the video a running batch
+belongs to when another video is open ("Export of <name>, started on
+another video."); the GIF, Compile and Picture-in-picture cards name
+what their running job is for, beside its Cancel; a double-click's
+second press on a dialog or tour button that closes on the first reaches
+nothing — its mousedown and mouseup are swallowed with its click, so the
+control under the card is neither focused nor opened (the home-chrome
+T-131 flake was this product bug: 10 of 10 standalone after the fix, 2
+of 10 on the base build). Folds: LayerPanel's unreachable empty line
+deleted; the Asset Library count goes through countOf; DESIGN_GUIDE
+lists the compositor's letterbox black. Deviations, accepted: A gives
+the ProgressTrack `min-w-[3rem]` so a long name cannot squeeze the bar
+away; the format line shows only while the chat box is open; the scan
+bar's accessible name reads through one `scanName`; A and B each moved
+pins in place (docClaims, a11ySweep, interactionWiring) for lines they
+changed. Ledgers: A 50 rows (25 mutations; two equivalent mutants
+disclosed), B 46 rows (one equivalent, disclosed), all others killed.
+Found not fixed: crop edge handles exist only with the ratio Free
+(existing). Expedited personally: one independent mutation per track at
+a seam no ledger row names — A: the press start measured from the
+stored, fractional size instead of the drawn box → the 9:16 handle-click
+cases red; B: the Compile busy label naming the open video instead of
+the run's — survived, sent back, the worker added a case that names it
+(row M-b4i), killed — each restored byte-identical, sha256 verified; on
+the MERGED tree: verify x2 (209 files / 6411 tests), test:media 495
+passed | 17 skipped of 512 on 7.0.2, FULL Playwright 728 of 728 (51.7
+min). Applied to 01edf08 by `git apply` with every file byte-identical
+to the expedited merge.
 
 Round 116 — T-167, all five counted items, the capitals fold, the T-110
 (z) fold and the crop-click check, landed in the commit that carries

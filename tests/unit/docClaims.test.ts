@@ -621,7 +621,7 @@ describe('T-139 Track B - the guides say what the code does', () => {
   it('(7) the decision order classifies each panel the guide lists the way the code draws it', () => {
     // 1. A progress row of the job's own: shown only while it runs, with its bar and its Cancel together, and no primary on it.
     expect(src('video-studio/ReframePanel.tsx')).toMatch(/\{running \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,600}?<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel reframe"/)
-    expect(src('video-studio/HighlightPanel.tsx')).toMatch(/\{scanning \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">\s*<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel scan"/)
+    expect(src('video-studio/HighlightPanel.tsx')).toMatch(/\{scanning \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,900}?<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel scan"/)
     const captions = src('video-studio/CaptionsPanel.tsx')
     expect(captions).toMatch(/\{progress \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,600}?<ProgressTrack[\s\S]{0,1200}?<RunningCancel title="Cancel burn-in"/)
     expect(captions).toMatch(/\{installing && installProgress \? \(\s*<div className="flex items-center gap-2 text-xs">\s*<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel download"/)
@@ -660,7 +660,8 @@ describe('T-139 Track B - the guides say what the code does', () => {
     // 5. The row under the primary: a wrapper that is its own row, in the three panels with no bar of their own and in the Export panel, with the Cancel after the primary's row.
     for (const [f, title] of [['GifPanel', 'Cancel GIF export'], ['CompilationPanel', 'Cancel compilation'], ['PipPanel', 'Cancel picture-in-picture composite']] as const) {
       const code = src(`video-studio/${f}.tsx`)
-      expect(code, f).toMatch(new RegExp(`\\{busy \\? \\(\\s*<div className="flex justify-end">\\s*<RunningCancel title="${title}"`))
+      // T-168 (fold): the row also holds the run's name, to the left of the Cancel (still the Cancel's own row, after the primary's).
+      expect(code, f).toMatch(new RegExp(`\\{busy \\? \\(\\s*<div className="flex items-center justify-end gap-2">\\s*(?:\\{[^}]*\\}\\s*)?\\{runName \\? \\([\\s\\S]{0,300}?\\) : null\\}\\s*<RunningCancel title="${title}"`))
       expect(code, `${f} has no bar of its own`).not.toContain('<ProgressTrack')
     }
     expect(exportPanel).toMatch(/\{running \? \(\s*<div className="flex justify-end">\s*<RunningCancel\s+title="Cancel export"/)

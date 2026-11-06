@@ -13932,3 +13932,344 @@ test.describe('T-167: a click on the crop box with no drag', () => {
     })
   }
 })
+
+// ── T-168 Track A: the late-scan toast stays, the scan names its file on screen, a click on a crop handle stores nothing, and an unreadable chat log says so ───────────────────────────
+//
+// (1) T-167 (3)'s late-scan toast took react-hot-toast's 4 s and the search icon, where every sibling dropped-result toast has the warning icon and ACTION_TOAST_MS (8 s): ~27 words faded before
+// they were read. The scan is held in MAIN (the handler is replaced by one that answers when the test says), the video is closed, the scan is released, and the toast is read 6 s after it appeared.
+// (2) The scan bar named its video only to assistive tech (its aria-label); the USER_GUIDE promised "Scanning stream.mp4 for highlights" on screen. The line is a visible span before the bar, with the
+// bar, the percent and the Cancel still on its row, and the name is what gives when it is long.
+// (3) re-resizable fires onResizeStop on any press and release of a handle; the handler stored the box's whole-pixel size over its fractional one, past setClipCrop's exact guard. The witness is T-167's:
+// the studio's Undo, after one Undo undoes the one crop. A real resize is the control: it IS a step, so the button stays on after one Undo.
+// (5) A pasted chat log in a shape the parser cannot read ([2024-05-01 12:34:56] user: msg, 12:34 user: msg) was scored audio-only in silence; the finder prints the Chat spike finder's sentence under its box.
+test.describe('T-168 Track A: the late scan\'s toast, the scan\'s visible name, the crop handles, the chat log\'s format line', () => {
+  /** Replace the scan's handler in main with one that answers with one candidate when `__scanRelease168` is called. */
+  async function holdScan(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      const g = globalThis as unknown as { __scanRelease168: () => void }
+      let release: () => void = () => undefined
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      g.__scanRelease168 = release
+      ipcMain.removeHandler('video:findHighlights')
+      ipcMain.handle('video:findHighlights', async () => {
+        await gate
+        return [{ startSec: 1, endSec: 5, peakDb: -10, reason: 'loud' }]
+      })
+    })
+  }
+  const release = (app: ElectronApplication): Promise<void> =>
+    app.evaluate(() => (globalThis as unknown as { __scanRelease168: () => void }).__scanRelease168())
+  async function closeIt(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+  const WARNING_PATH = 'M12 4l9 16H3l9-16z'
+
+  test('(1) the late scan\'s toast carries the warning icon and is still on screen 6 s after it appeared, then goes', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t168late', clipSrc)
+    try {
+      await holdScan(app)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeVisible()
+      await closeIt(window)
+      await release(app)
+      const sentence = `The scan of ${path.basename(clipSrc)} finished after that video was closed or replaced, so its highlights weren't added. Scan again when you're ready.`
+      const toastEl = window.locator('[data-rht-toaster] [role="status"]').filter({ hasText: 'finished after that video was closed or replaced' })
+      await expect(toastEl).toBeVisible({ timeout: 30_000 })
+      await expect(toastEl).toHaveText(sentence)
+      const icon = toastEl.locator('xpath=..').locator('svg')
+      await expect(icon, 'one icon').toHaveCount(1)
+      await expect(icon.locator('path').first(), 'the warning triangle, as every sibling dropped-result toast draws (not the magnifier)').toHaveAttribute('d', WARNING_PATH)
+      // react-hot-toast's own default is 4 s: the sentence is the only place the fact is said, so it lasts ACTION_TOAST_MS (8 s).
+      await window.waitForTimeout(6_000)
+      await expect(toastEl, 'still up six seconds after it appeared').toBeVisible()
+      await expect(toastEl, 'and it does go (a finite duration, not a sticky toast)').toBeHidden({ timeout: 10_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(2) with the scan running and another video open, the finder says on screen which file it is scanning; the title holds the whole name', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t168line', clipSrc)
+    try {
+      await holdScan(app)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeVisible()
+      const first = path.basename(clipSrc)
+      const line = highlightCard(window).getByText(`Scanning ${first} for highlights`, { exact: true })
+      await expect(line, 'on the video the scan is for').toBeVisible()
+      await closeIt(window)
+      await dropOnVideoImporter(window, burstSrc, path.basename(burstSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      // The second video is open; its finder shows the scan of the FIRST, and a sighted person can read whose it is.
+      await expect(line, 'visible text, not only the bar\'s accessible name, and it names the scanned file, not the open one').toBeVisible()
+      await expect(line).toHaveAttribute('title', first)
+      await expect(highlightCard(window).getByText(path.basename(burstSrc))).toHaveCount(0)
+      await release(app)
+      await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' })).toBeEnabled({ timeout: 30_000 })
+      await expect(line, 'and the line goes with the scan').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(2) a very long file name is cut with an ellipsis (whole name as the title) and the bar, the percent and Cancel stay on its row', async () => {
+    test.setTimeout(240_000)
+    const longName = `a-very-long-stream-recording-name-that-cannot-fit-in-the-column-${Date.now().toString(36)}.mp4`
+    const long = path.join(root, 'source', longName)
+    copyFileSync(clipSrc, long)
+    const { app, window } = await launchWithVideo('t168longline', long)
+    try {
+      await holdScan(app)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      const line = highlightCard(window).getByText(`Scanning ${longName} for highlights`, { exact: true })
+      await expect(line).toBeVisible()
+      await expectEllipsized(line, longName, 'the scan line')
+      const bar = highlightCard(window).getByRole('progressbar')
+      const percent = highlightCard(window).getByText('0%', { exact: true })
+      const cancel = highlightCard(window).getByRole('button', { name: 'Cancel', exact: true })
+      await expect(percent).toBeVisible()
+      await expect(cancel).toBeVisible()
+      const centre = async (l: Locator): Promise<{ y: number; w: number }> =>
+        l.evaluate((el) => {
+          const r = el.getBoundingClientRect()
+          return { y: r.top + r.height / 2, w: r.width }
+        })
+      const [a, b, c, d] = [await centre(line), await centre(bar), await centre(percent), await centre(cancel)]
+      for (const other of [b, c, d]) expect(Math.abs(other.y - a.y), 'the row stays one line').toBeLessThanOrEqual(3)
+      expect(b.w, 'the bar keeps a usable width: the name is what gives').toBeGreaterThanOrEqual(40)
+      await expectNoHorizontalOverflow(highlightCard(window), 'the Smart highlight finder')
+      await release(app)
+      await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' }).or(highlightCard(window).getByRole('button', { name: 'Re-scan' }))).toBeEnabled({ timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  /**
+   * Crop the clip to `shape` (one undo step), press and release on `handle` with no movement, then Undo ONCE. Returns the Undo button.
+   * A locked ratio (every preset but Free) leaves the four corners only, so an edge case switches to Free after the crop is made (that sets no rectangle and no step).
+   */
+  async function cropHandleClickUndo(window: Page, shape: string, handle: string, free: boolean): Promise<Locator> {
+    const undo = window.getByRole('button', { name: 'Undo' })
+    await expect(undo).toBeDisabled()
+    await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+    await window.getByRole('button', { name: shape, exact: true }).click()
+    await expect(undo).toBeEnabled()
+    if (free) await window.getByRole('button', { name: 'Free', exact: true }).click()
+    const box = window.locator('.react-draggable.border-accent')
+    await expect(box).toHaveCount(1)
+    const grip = box.locator(`div[style*="${handle}"]`).first()
+    const g = await grip.boundingBox()
+    if (!g) throw new Error(`no ${handle} handle on the crop box`)
+    await window.mouse.move(g.x + g.width / 2, g.y + g.height / 2)
+    await window.mouse.down()
+    await window.mouse.up()
+    await window.waitForTimeout(300)
+    await undo.click()
+    return undo
+  }
+
+  for (const [shape, handle, what, free] of [
+    ['9:16', 'se-resize', 'bottom-right corner', false],
+    ['9:16', 'col-resize', 'right edge', true],
+    ['4:5', 'nw-resize', 'top-left corner', false],
+    ['1:1', 'row-resize', 'top edge', true]
+  ] as const) {
+    test(`(3) with a ${shape} crop, a press and release on the ${what} handle adds no undo step`, async () => {
+      test.setTimeout(120_000)
+      const { app, window } = await launchWithVideo(`t168crop-${shape.replace(':', 'x')}-${handle}`)
+      try {
+        const undo = await cropHandleClickUndo(window, shape, handle, free)
+        await expect(undo, 'one Undo undid the one crop: the click on the handle pushed no step of its own').toBeDisabled()
+        await expect(window.getByRole('button', { name: 'Redo' }), 'and the one step is on the Redo side').toBeEnabled()
+      } finally {
+        await app.close()
+      }
+    })
+  }
+
+  test('(3) control: a real resize from the handle IS an undo step (one Undo leaves the button on)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t168crop-control')
+    try {
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window.getByRole('button', { name: '1:1', exact: true }).click()
+      const box = window.locator('.react-draggable.border-accent')
+      await expect(box).toHaveCount(1)
+      const before = (await box.boundingBox())!
+      const g = (await box.locator('div[style*="se-resize"]').first().boundingBox())!
+      const from = { x: g.x + g.width / 2, y: g.y + g.height / 2 }
+      await dragTo(window, from, { x: from.x - 40, y: from.y - 40 }, {
+        extent: {
+          label: 'crop se-handle resize -40px',
+          read: async () => (await box.boundingBox())!.width,
+          settled: (w) => w <= before.width - 30
+        }
+      })
+      await expect.poll(async () => (await box.boundingBox())!.width).toBeLessThan(before.width - 30)
+      await undo.click()
+      await expect(undo, 'the resize was its own step: the crop is still there to undo').toBeEnabled()
+      await undo.click()
+      await expect(undo).toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(3) control: after a real resize and a move, a press and release on a handle still adds no step (re-resizable keeps the last resize\'s delta)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t168crop-stale')
+    try {
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window.getByRole('button', { name: '4:5', exact: true }).click()
+      const box = window.locator('.react-draggable.border-accent')
+      await expect(box).toHaveCount(1)
+      const centreOf = async (l: Locator): Promise<{ x: number; y: number }> => {
+        const b = (await l.boundingBox())!
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+      }
+      // Step 2: a real resize from the bottom-right corner.
+      const before = (await box.boundingBox())!
+      const se = await centreOf(box.locator('div[style*="se-resize"]').first())
+      await dragTo(window, se, { x: se.x - 40, y: se.y - 40 }, {
+        extent: { label: 'crop resize -40px', read: async () => (await box.boundingBox())!.width, settled: (w) => w <= before.width - 30 }
+      })
+      await expect.poll(async () => (await box.boundingBox())!.width).toBeLessThan(before.width - 30)
+      // Step 3: a real move of the box.
+      const mid = await centreOf(box)
+      const moved0 = (await box.boundingBox())!
+      await dragTo(window, mid, { x: mid.x + 17, y: mid.y }, {
+        extent: { label: 'crop move +17px', read: async () => (await box.boundingBox())!.x, settled: (x) => x >= moved0.x + 12 }
+      })
+      await expect.poll(async () => (await box.boundingBox())!.x).toBeGreaterThan(moved0.x + 12)
+      // A plain click on the corner handle now: the handle's last delta is the resize's, not this press's.
+      const grip = await centreOf(box.locator('div[style*="se-resize"]').first())
+      await window.mouse.move(grip.x, grip.y)
+      await window.mouse.down()
+      await window.mouse.up()
+      await window.waitForTimeout(300)
+      // Three real steps (crop, resize, move) and no fourth: three Undos empty the stack.
+      await undo.click()
+      await undo.click()
+      await expect(undo, 'two steps are left after one Undo of three').toBeEnabled()
+      await undo.click()
+      await expect(undo, 'the click on the handle pushed no step of its own').toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(3) control: a real resize of the top edge alone (height only) IS an undo step', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t168crop-edge-control')
+    try {
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window.getByRole('button', { name: '1:1', exact: true }).click()
+      await window.getByRole('button', { name: 'Free', exact: true }).click()
+      const box = window.locator('.react-draggable.border-accent')
+      await expect(box).toHaveCount(1)
+      const before = (await box.boundingBox())!
+      const b = (await box.locator('div[style*="row-resize"]').first().boundingBox())!
+      const from = { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+      await dragTo(window, from, { x: from.x, y: from.y + 30 }, {
+        extent: { label: 'crop top edge +30px', read: async () => (await box.boundingBox())!.height, settled: (h) => h <= before.height - 25 }
+      })
+      await expect.poll(async () => (await box.boundingBox())!.height).toBeLessThan(before.height - 25)
+      expect((await box.boundingBox())!.width, 'the width did not change').toBeCloseTo(before.width, 0)
+      await undo.click()
+      await expect(undo, 'the edge resize was its own step: the crop is still there to undo').toBeEnabled()
+      await undo.click()
+      await expect(undo).toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(3) stale delta: after a real handle resize and a preset that leaves the box fractional, a press and release on a handle adds no step', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t168crop-staledelta')
+    try {
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+      await window.getByRole('button', { name: '1:1', exact: true }).click() // step 1
+      const box = window.locator('.react-draggable.border-accent')
+      await expect(box).toHaveCount(1)
+      const centreOf = async (l: Locator): Promise<{ x: number; y: number }> => {
+        const b = (await l.boundingBox())!
+        return { x: b.x + b.width / 2, y: b.y + b.height / 2 }
+      }
+      // Step 2: a real resize. re-resizable keeps its delta (non-zero) until the next move, whatever the next press does.
+      const before = (await box.boundingBox())!
+      const se = await centreOf(box.locator('div[style*="se-resize"]').first())
+      await dragTo(window, se, { x: se.x - 40, y: se.y - 40 }, {
+        extent: { label: 'crop resize -40px', read: async () => (await box.boundingBox())!.width, settled: (w) => w <= before.width - 30 }
+      })
+      await expect.poll(async () => (await box.boundingBox())!.width).toBeLessThan(before.width - 30)
+      // Step 3: a preset puts the box back at the fractional size it draws (0.9 of the picture), not the whole pixels the resize stored.
+      const resized = (await box.boundingBox())!.width
+      await window.getByRole('button', { name: '4:5', exact: true }).click()
+      await expect.poll(async () => Math.abs((await box.boundingBox())!.width - resized)).toBeGreaterThan(1)
+      const grip = await centreOf(box.locator('div[style*="se-resize"]').first())
+      await window.mouse.move(grip.x, grip.y)
+      await window.mouse.down()
+      await window.mouse.up()
+      await window.waitForTimeout(300)
+      for (let i = 0; i < 2; i++) await undo.click()
+      await expect(undo, 'one step is left after two Undos of three').toBeEnabled()
+      await undo.click()
+      await expect(undo, 'the press on the handle pushed no fourth step').toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(5) a chat log the parser cannot read shows the format line under the box; a supported one does not', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t168chatline', clipSrc)
+    try {
+      const card = highlightCard(window)
+      const SENTENCE = 'No timestamped messages found. Each line should start like [12:34] username: message'
+      const line = card.getByText(SENTENCE, { exact: true })
+      await card.getByRole('button', { name: 'Add chat log (optional)' }).click()
+      const box = card.locator('textarea')
+      await expect(line, 'an empty box says nothing').toHaveCount(0)
+
+      await box.fill('[2024-05-01 12:34:56] user: msg')
+      await expect(line, 'a date-and-time stamp is not a shape it reads').toBeVisible()
+      await expect(line).toHaveClass(/text-warn/)
+      // Under the box, in the card.
+      const lineY = (await line.boundingBox())!.y
+      const boxEnd = await box.evaluate((el) => el.getBoundingClientRect().bottom)
+      expect(lineY, 'the line sits under the textarea').toBeGreaterThanOrEqual(boxEnd - 1)
+
+      await box.fill('12:34 user: msg')
+      await expect(line, 'a bare time is not one either').toBeVisible()
+
+      await box.fill('[12:34] user: msg')
+      await expect(line, 'a supported line parses: nothing to say').toHaveCount(0)
+
+      // Each of the next two starts from the line SHOWN, so the absence is a change the debounced text has to bring (an absent-to-absent check passes before the 300 ms debounce has fired).
+      await box.fill('12:34 user: msg')
+      await expect(line).toBeVisible()
+      await box.fill('   \n  ')
+      await expect(line, 'blank is not unreadable').toHaveCount(0)
+
+      // A mix: one readable line is enough, the unreadable ones are skipped as the parser always did.
+      await box.fill('12:34 user: msg')
+      await expect(line).toBeVisible()
+      await box.fill('12:34 user: msg\n[12:35] user: msg')
+      await expect(line, 'a log with one readable line is read').toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+})

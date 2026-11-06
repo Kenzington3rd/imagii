@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseChatLog, parseTimestampToSec } from './chatLog'
+import { CHAT_LOG_FORMAT_MESSAGE, parseChatLog, parseTimestampToSec } from './chatLog'
 
 describe('parseTimestampToSec', () => {
   it('parses [hh:mm:ss] form', () => {
@@ -90,5 +90,33 @@ describe('parseChatLog', () => {
     const messages = parseChatLog(log)
     expect(messages).toHaveLength(1)
     expect(messages[0]?.text).toBe('real')
+  })
+})
+
+// ── T-168 (5): the Smart highlight finder says why a chat log it cannot read is ignored ───────────────────────────────────────────────────────────────────────────────────
+// The finder scores audio-only when the pasted log parses to nothing (Chat bar 0), and said nothing. It now prints the sentence the Chat spike finder prints, from here, so the two cannot
+// drift. The panel shows it when the log is non-blank and parseChatLog gives []: these are the shapes a streamer pastes from other tools, and the one that is supported.
+describe('CHAT_LOG_FORMAT_MESSAGE and the shapes parseChatLog cannot read (T-168 (5))', () => {
+  it('the sentence is the Chat spike finder\'s, word for word', () => {
+    expect(CHAT_LOG_FORMAT_MESSAGE).toBe(
+      'No timestamped messages found. Each line should start like [12:34] username: message'
+    )
+  })
+
+  it('the example the sentence gives is itself a line parseChatLog reads', () => {
+    const example = CHAT_LOG_FORMAT_MESSAGE.split('start like ')[1] ?? ''
+    expect(parseChatLog(example)).toEqual([{ tSec: 12 * 60 + 34, text: 'message' }])
+  })
+
+  it('a date-and-time stamp in brackets is not a timestamp it reads', () => {
+    expect(parseChatLog('[2024-05-01 12:34:56] user: msg')).toEqual([])
+  })
+
+  it('a bare time with no brackets is not a timestamp it reads', () => {
+    expect(parseChatLog('12:34 user: msg')).toEqual([])
+  })
+
+  it('control: a supported line parses, so the sentence is shown for the unsupported shapes only', () => {
+    expect(parseChatLog('[12:34] user: msg')).toEqual([{ tSec: 754, text: 'msg' }])
   })
 })

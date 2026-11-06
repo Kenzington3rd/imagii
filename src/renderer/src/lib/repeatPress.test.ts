@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { REPEAT_SWALLOW_MS, createHeldKeyGuard, ignoreHeldEnter, isRepeatPress, isSwallowedRepeat } from './repeatPress'
 
 // T-131 (4), (6), (8): the rule is the click COUNT. The e2e specs (a real double-click on the Fix wizard, the tour, a closing dialog) are
@@ -134,5 +134,79 @@ describe('ignoreHeldEnter - a held Enter is one press (T-120, T-141 (4))', () =>
       ignoreHeldEnter(e)
       expect(e.canceled, key).toBe(false)
     }
+  })
+})
+
+// T-168 (6): the swallow covered `click` only. The repeat's `mousedown` still landed - on the tour's Done (the card closes on the first press) that
+// focused and opened the Watermark position <select> under it, and its native popup swallowed the next key. The rule is the same one for all three
+// events a press is made of, from ONE handler; the e2e case (a real double-click on Done) is the proof it reaches the person.
+describe('swallowRepeatClicks - the whole repeat press is stopped, not only its click (T-168 (6))', () => {
+  type Handler = (e: unknown) => void
+  /** Install the listeners on a stand-in window, in a fresh module (its `listening` flag is module state), and hand back what was registered. */
+  async function install(): Promise<{ handlers: Map<string, Handler>; capture: Map<string, unknown>; swallow: (now: number) => void }> {
+    vi.resetModules()
+    const handlers = new Map<string, Handler>()
+    const capture = new Map<string, unknown>()
+    vi.stubGlobal('window', {
+      addEventListener: (type: string, fn: Handler, useCapture: unknown) => {
+        handlers.set(type, fn)
+        capture.set(type, useCapture)
+      }
+    })
+    const mod = await import('./repeatPress')
+    return { handlers, capture, swallow: (now) => mod.swallowRepeatClicks(now) }
+  }
+  const press = (detail: number, timeStamp: number): { detail: number; timeStamp: number; stopped: boolean; canceled: boolean; stopImmediatePropagation: () => void; preventDefault: () => void } => {
+    const e = {
+      detail, timeStamp, stopped: false, canceled: false,
+      stopImmediatePropagation: () => { e.stopped = true },
+      preventDefault: () => { e.canceled = true }
+    }
+    return e
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it.each(['mousedown', 'mouseup', 'click'])('a detail-2 %s inside the window is stopped and its default action is canceled', async (type) => {
+    const { handlers, capture, swallow } = await install()
+    swallow(1_000)
+    const handler = handlers.get(type)
+    expect(handler, `a ${type} listener is registered`).toBeTypeOf('function')
+    expect(capture.get(type), `${type} is heard in the capture phase, before React's handlers`).toBe(true)
+    const e = press(2, 1_100)
+    handler?.(e)
+    expect(e.stopped).toBe(true)
+    expect(e.canceled).toBe(true)
+  })
+
+  it.each(['mousedown', 'mouseup', 'click'])('a first %s (detail 1) inside the window is a press like any other', async (type) => {
+    const { handlers, swallow } = await install()
+    swallow(1_000)
+    const e = press(1, 1_100)
+    handlers.get(type)?.(e)
+    expect(e.stopped).toBe(false)
+    expect(e.canceled).toBe(false)
+  })
+
+  it.each(['mousedown', 'mouseup', 'click'])('a detail-2 %s after the window has passed is a press like any other', async (type) => {
+    const { handlers, swallow } = await install()
+    swallow(1_000)
+    const e = press(2, 1_000 + REPEAT_SWALLOW_MS)
+    handlers.get(type)?.(e)
+    expect(e.stopped).toBe(false)
+    expect(e.canceled).toBe(false)
+  })
+
+  it('a second close does not stack listeners, but it does move the window', async () => {
+    const { handlers, swallow } = await install()
+    swallow(1_000)
+    const first = handlers.get('mousedown')
+    swallow(5_000)
+    expect(handlers.get('mousedown')).toBe(first)
+    const e = press(2, 5_100)
+    first?.(e)
+    expect(e.stopped).toBe(true)
   })
 })

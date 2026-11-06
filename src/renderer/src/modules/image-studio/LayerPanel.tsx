@@ -47,11 +47,6 @@ export function LayerPanel(): JSX.Element {
   return (
     <div className="card p-3 flex flex-col gap-2" data-tutorial="image-layers">
       <PanelHeader icon="layers">Layers ({layers.length})</PanelHeader>
-      {layers.length === 0 ? (
-        <p className="text-xs text-ink-dim">
-          Drop or paste an image, or draw with the toolbar above.
-        </p>
-      ) : null}
       <ul className="flex flex-col gap-1">
         {[...layers].reverse().map((layer) => {
           const isSelected = layer.id === selectedLayerId

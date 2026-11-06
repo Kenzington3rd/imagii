@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import toast from 'react-hot-toast'
-import { parseChatLog } from '@shared/chatLog'
+import { CHAT_LOG_FORMAT_MESSAGE, parseChatLog } from '@shared/chatLog'
 import { countOf } from '@shared/plural'
 import {
   lateScanMessage,
@@ -22,6 +22,7 @@ import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
 import { isRepeatPress } from '../../lib/repeatPress'
+import { ACTION_TOAST_MS } from '../../lib/savedToast'
 import { ACCENT, EMBER, SIGNAL_PINK } from '../../styles/tokens'
 import { formatClock } from '@shared/clockTime'
 
@@ -89,16 +90,22 @@ export function HighlightPanel(): JSX.Element | null {
   // Phase 4B: combine audio candidates with chat data into a unified
   // ranked list. Chat input is optional — when empty, scoring degrades to
   // audio-only and behaves identically to the previous panel.
+  // T-168 (5): the parse is shared with the format line under the box (a non-blank log that parses to nothing is scored audio-only, and the person is told why).
+  const chatMessages = useMemo(
+    () => (debouncedChat.trim().length > 0 ? parseChatLog(debouncedChat) : []),
+    [debouncedChat]
+  )
+  const chatUnreadable = debouncedChat.trim().length > 0 && chatMessages.length === 0
   const scored: ScoredHighlight[] = useMemo(() => {
     if (!audioCandidates || audioCandidates.length === 0) return []
-    const chatMessages =
-      debouncedChat.trim().length > 0 ? parseChatLog(debouncedChat) : []
     return scoreHighlights(audioCandidates, chatMessages)
-  }, [audioCandidates, debouncedChat])
+  }, [audioCandidates, chatMessages])
 
   if (!source) return null
   // T-112: the scan listens for loud moments; a video with no sound track has none to find.
   const noSound = videoHasNoSound(source)
+  // The file the RUN is for (T-167 (3)): on another open video this is still the scanned one.
+  const scanName = scanRun?.name ?? 'the video'
 
   async function scan(): Promise<void> {
     if (!source || noSound) return
@@ -122,7 +129,8 @@ export function HighlightPanel(): JSX.Element | null {
       }))
       if (!stored(narrowed)) {
         // T-167 (3): the scan outlived its video (closed or replaced; the Close question promises it keeps going). Its candidates are dropped, and the person is told, as every sibling late job does.
-        toast(lateScanMessage(startedName), { icon: <Icon name="search" size={18} /> })
+        // T-168 (1): and as they do it - the warning icon and ACTION_TOAST_MS (BRANDING "Toasts"): the sentence is the only place the fact is said, and at react-hot-toast's 4 s it faded before it was read.
+        toast(lateScanMessage(startedName), { icon: <Icon name="warning" size={18} />, duration: ACTION_TOAST_MS })
         return
       }
       if (narrowed.length === 0) {
@@ -204,12 +212,18 @@ export function HighlightPanel(): JSX.Element | null {
             className="bg-bg-base rounded px-2 py-1 text-xs font-mono resize-y w-full mt-1.5"
           />
         ) : null}
+        {/* T-168 (5): a log that parses to nothing is scored audio-only and the Chat bar stays 0 - say why, in the sentence the Chat spike finder prints. */}
+        {showChatInput && chatUnreadable ? <p className="text-xs text-warn mt-1">{CHAT_LOG_FORMAT_MESSAGE}</p> : null}
       </div>
 
       {scanning ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
-          {/* T-167 (3) fold: the label names the file the RUN is for, so on another open video this reads as that video's scan. */}
-          <ProgressTrack label={`Scanning ${scanRun?.name ?? 'the video'} for highlights`} percent={progress} />
+          {/* T-167 (3) fold: the label names the file the RUN is for, so on another open video this reads as that video's scan.
+              T-168 (2): and the words are on screen, not only in the bar's name (a sighted person on another video saw an anonymous bar). The bar and the percent keep their widths; the name is what gives. */}
+          <span className="min-w-0 truncate" title={scanName}>
+            Scanning {scanName} for highlights
+          </span>
+          <ProgressTrack label={`Scanning ${scanName} for highlights`} percent={progress} className="flex-1 min-w-[3rem]" />
           <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           {/* Round 17 B3: single-slot cancel, no jobId needed. */}
           <RunningCancel title="Cancel scan" onClick={cancelScan} />

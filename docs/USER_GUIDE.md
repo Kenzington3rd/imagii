@@ -326,10 +326,14 @@ that names the file being converted.)
   stops, so a loud sign-off before a muted stretch is not stretched across the
   silence. A scan that finds nothing says **No standout moments found in this video**
   and leaves the line **No standout moments found in this video.** in the panel (the
-  toast fades; the line stays until you scan again or open another video). The bar names the video it is scanning
-  (**Scanning stream.mp4 for highlights**), so on another video it reads as that video's scan. A scan that ends after you
-  closed its video or opened another says so (**The scan of stream.mp4 finished after that video was closed or replaced, so
+  toast fades; the line stays until you scan again or open another video). A line before the bar names the video it is
+  scanning (**Scanning stream.mp4 for highlights**; a long name is cut and its tooltip holds the whole of it), so on another
+  video it reads as that video's scan. A scan that ends after you
+  closed its video or opened another says so for about 8 seconds (**The scan of stream.mp4 finished after that video was closed or replaced, so
   its highlights weren't added. Scan again when you're ready.**) and adds nothing to the video that is open.
+  **Add chat log (optional)** takes a pasted chat log to rank by as well; if no line of it starts like
+  `[12:34] username: message`, the panel says **No timestamped messages found. Each line should start like [12:34] username: message**
+  under the box (the same words as the Chat spike finder) and the ranking is by sound alone.
 - **Reframe to 9:16** — cuts a vertical 9:16 strip (1080×1920)
   for TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**. It
   doesn't track faces or action. It cuts the strip from the crop you drew for the clip
@@ -396,7 +400,11 @@ that names the file being converted.)
   reads "Exporting…", "Scanning…" or the like and is off, the progress bar is there, and so is **Cancel**
   — and a batch that finished while you were away shows its finished rows with **Show in folder**. The
   "Exported 2 files" message carries **Show in folder** too, for the first file written, wherever you are when
-  the batch ends (on Home, in another studio, or beside another video). Clip Kit
+  the batch ends (on Home, in another studio, or beside another video). With another video open, a
+  line above the queue's rows names the one the batch belongs to (**Export of stream.mp4, started on another video.**),
+  so the rows and **Cancel** are never anonymous. The **GIF**, **Compile** and **Picture-in-picture** cards do the
+  same beside their **Cancel** (**Exporting Clip 1…**, **Stitching stream.mp4…**, **Compositing stream.mp4…**: the clip,
+  the video, the base file). Clip Kit
   is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
   names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel** on a row under the button (the
   running label stays on one line), and no second kit starts until it ends. **Export** and Clip Kit take turns: while a kit runs, **Export** is off and its tooltip says "Clip Kit is running. Export when it is done.", and while an export runs the kit button is off with "An export is running. Start Clip Kit when it is done." (the kit does not start by itself; press it once the export ends). If you remove that clip the kit keeps running and stays cancelable; if you close the video,

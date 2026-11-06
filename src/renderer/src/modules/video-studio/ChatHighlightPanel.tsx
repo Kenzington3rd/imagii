@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { parseChatLog } from '@shared/chatLog'
+import { CHAT_LOG_FORMAT_MESSAGE, parseChatLog } from '@shared/chatLog'
 import { MAX_CHAT_PAD_SEC, NO_CHAT_SPIKES_MESSAGE, findChatPeaks, type ChatPeak } from '@shared/chatPeaks'
 import { countOf } from '@shared/plural'
 import { ALREADY_IN_CLIPS_MESSAGE, WHOLE_VIDEO_DROPPED_MESSAGE, useVideoStore } from './store/videoStore'
@@ -43,9 +43,7 @@ export function ChatHighlightPanel(): JSX.Element | null {
   function analyze(): void {
     const msgs = parseChatLog(chatText)
     if (msgs.length === 0) {
-      toast.error(
-        'No timestamped messages found. Each line should start like [12:34] username: message'
-      )
+      toast.error(CHAT_LOG_FORMAT_MESSAGE)
       return
     }
     const found: ChatPeak[] = findChatPeaks(msgs, bucketSec, padSec)

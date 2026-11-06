@@ -370,7 +370,7 @@ const WIRED: ReadonlyArray<readonly [string, string, RegExp]> = [
   ['modules/references/ReferencesStudio.tsx', 'studio tabs', /aria-current=\{active \? 'true' : undefined\}/],
   ['modules/video-studio/HighlightPanel.tsx', 'chat-log disclosure', /aria-expanded=\{showChatInput\}/],
   // T-136 (7): the track is the shared `ProgressTrack` (its role, bounds and value are pinned in ProgressTrack.test.tsx); the panel names it and gives it the number.
-  ['modules/video-studio/HighlightPanel.tsx', 'scan bar', /<ProgressTrack label=\{`Scanning \$\{scanRun\?\.name \?\? 'the video'\} for highlights`\} percent=\{progress\} \/>/],
+  ['modules/video-studio/HighlightPanel.tsx', 'scan bar', /<ProgressTrack label=\{`Scanning \$\{scanName\} for highlights`\} percent=\{progress\}[^>]*\/>/],
   ['modules/video-studio/HighlightPanel.tsx', 'signal bars', /role="meter"[\s\S]{0,80}aria-label=\{`\$\{label\} signal`\}[\s\S]{0,120}aria-valuenow=\{Math\.round\(value \* 100\)\}/],
   ['modules/video-studio/CaptionsPanel.tsx', 'model download bar', /<ProgressTrack label="Downloading the caption model" percent=\{installProgress\.percent \?\? 0\} \/>/],
   ['modules/video-studio/CaptionsPanel.tsx', 'transcript preview', /role="region"\s+tabIndex=\{0\}\s+aria-label="Transcript preview"/],

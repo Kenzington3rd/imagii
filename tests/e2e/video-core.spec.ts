@@ -3768,3 +3768,194 @@ test.describe('T-166 (3): an edit that changes nothing does not light Undo', () 
     }
   })
 })
+
+// T-168 (4) + fold: a running job says whose it is. The Export queue is a module store, so a batch started on A is still the panel's rows after A is closed
+// and B is opened - "Exporting…" over A's rows and a Cancel nobody could attribute. And the GIF, Compile and Picture-in-picture cards said a bare "Exporting…" /
+// "Stitching…" / "Compositing…". Main's handlers are replaced by ones that answer when the test says (the suite's pattern), so each job is still running when it is read.
+test.describe('T-168 (4): a running job says whose it is', () => {
+  /** Replace main's handler for `channel` with one that waits for `releaseHeld(channel)`, then answers with `answer`. */
+  async function holdInMain(app: ElectronApplication, channel: string, answer: unknown): Promise<void> {
+    await app.evaluate(
+      ({ ipcMain }, arg) => {
+        const g = globalThis as unknown as { __held?: Record<string, () => void> }
+        g.__held = g.__held ?? {}
+        const gate = new Promise<void>((resolve) => {
+          ;(g.__held as Record<string, () => void>)[arg.channel] = resolve
+        })
+        ipcMain.removeHandler(arg.channel)
+        ipcMain.handle(arg.channel, async () => {
+          await gate
+          return arg.answer
+        })
+      },
+      { channel, answer }
+    )
+  }
+  async function releaseHeld(app: ElectronApplication, channel: string): Promise<void> {
+    await app.evaluate((_electron, ch) => {
+      const g = globalThis as unknown as { __held: Record<string, () => void> }
+      g.__held[ch]?.()
+    }, channel)
+  }
+  /** Every FOLDER chooser answers `dir`; every FILE chooser answers `file`. */
+  async function stubChoosers(app: ElectronApplication, dir: string, file: string): Promise<void> {
+    await app.evaluate(({ dialog }, arg) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async (...args: unknown[]) => {
+        const options = (args.length > 1 ? args[1] : args[0]) as { properties?: string[] } | undefined
+        const folder = (options?.properties ?? []).includes('openDirectory')
+        return { canceled: false, filePaths: [folder ? arg.dir : arg.file] }
+      }
+    }, { dir, file })
+  }
+
+  test('an export started on A, A closed and B opened: the panel names A as the owner of the running batch, above its rows, and the line goes when the batch ends', async () => {
+    test.setTimeout(120_000)
+    const outDir = path.join(root, `out-t168-export-${Date.now().toString(36)}`)
+    mkdirSync(outDir, { recursive: true })
+    const fileA = path.join(root, 'source', 'stream-a.mp4')
+    const fileB = path.join(root, 'source', 'stream-b.mp4')
+    writeFileSync(fileA, readFileSync(fixture))
+    writeFileSync(fileB, readFileSync(fixture))
+    const { app, window } = await launchWithVideo('t168-other-video', fileA)
+    try {
+      window.on('dialog', (dialog) => void dialog.accept())
+      await stubChoosers(app, outDir, fileA)
+      await holdInMain(app, 'video:exportBatch', [])
+      const card = window.locator('[data-tutorial="video-export"]')
+      const OTHER = 'Export of stream-a.mp4, started on another video.'
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: /^Export 1/ }).click()
+      await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(card.getByRole('progressbar', { name: 'Clip 1 · YouTube' }), 'the rows are on screen on A').toBeVisible()
+      await expect(card.getByText(OTHER), 'control: on the video the batch was made from there is nothing to explain').toHaveCount(0)
+
+      // A is closed and B is opened while the batch is still held in main.
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, fileB, 'stream-b.mp4')
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(card.getByRole('button', { name: 'Exporting…' }), 'the batch still runs under B').toBeDisabled({ timeout: 30_000 })
+
+      const line = card.getByText(OTHER, { exact: true })
+      await expect(line, 'the running batch is named, with the file the person knows it by').toBeVisible()
+      await expect(line).toHaveAttribute('title', 'stream-a.mp4')
+      const queue = card.getByRole('heading', { name: 'Queue' })
+      await expect(queue).toBeVisible()
+      const lineBox = await line.boundingBox()
+      const queueBox = await queue.boundingBox()
+      expect(lineBox && queueBox && lineBox.y < queueBox.y, 'the line is above the Queue').toBe(true)
+
+      // The batch ends: the rows leave B's panel and so does the line.
+      await releaseHeld(app, 'video:exportBatch')
+      await expect(card.getByRole('button', { name: /^Export 1/ })).toBeEnabled({ timeout: 15_000 })
+      await expect(line, 'a finished batch is not "running"').toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the GIF, Compile and Picture-in-picture cards say what the running job is for: the clip, the video, the base file', async () => {
+    test.setTimeout(180_000)
+    const outDir = path.join(root, `out-t168-busy-${Date.now().toString(36)}`)
+    mkdirSync(outDir, { recursive: true })
+    const { app, window } = await launchWithVideo('t168-busy-labels')
+    try {
+      await stubChoosers(app, outDir, fixture)
+      const done = { outputPath: path.join(outDir, 'held.out') }
+      const gif = window.locator('.card').filter({ hasText: 'Export as GIF' })
+      const compile = window.locator('.card').filter({ hasText: 'Compile clips (' })
+      const pip = window.locator('.card').filter({ hasText: 'Picture-in-picture composite' })
+
+      // ── GIF: the clip ──
+      await holdInMain(app, 'video:exportGif', done)
+      await gif.getByRole('button', { name: 'Export GIF' }).click()
+      await expect(gif.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      const gifLine = gif.getByText('Exporting Clip 1…', { exact: true })
+      await expect(gifLine, 'the GIF card names its clip').toBeVisible()
+      await expect(gifLine).toHaveAttribute('title', 'Clip 1')
+      await expect(gif.getByRole('button', { name: 'Cancel', exact: true }), 'the Cancel is still there').toBeVisible()
+      await releaseHeld(app, 'video:exportGif')
+      await expect(gif.getByRole('button', { name: 'Export GIF' })).toBeEnabled({ timeout: 15_000 })
+      await expect(gifLine, 'the line goes with the job').toHaveCount(0)
+
+      // ── Compile: the video it stitches from ──
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await holdInMain(app, 'video:concat', done)
+      await compile.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expect(compile.getByRole('button', { name: 'Stitching…' })).toBeDisabled()
+      const compileLine = compile.getByText('Stitching video-core.mp4…', { exact: true })
+      await expect(compileLine, 'the Compile card names the video').toBeVisible()
+      await expect(compileLine).toHaveAttribute('title', 'video-core.mp4')
+      await expect(compile.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+      await releaseHeld(app, 'video:concat')
+      await expect(compile.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled({ timeout: 15_000 })
+      await expect(compileLine).toHaveCount(0)
+
+      // ── Picture-in-picture: the base file ──
+      await holdInMain(app, 'video:pipComposite', done)
+      await pip.getByRole('button', { name: 'Base: none' }).click()
+      await pip.getByRole('button', { name: 'Overlay: none' }).click()
+      await pip.getByRole('button', { name: 'Composite', exact: true }).click()
+      await expect(pip.getByRole('button', { name: 'Compositing…' })).toBeDisabled()
+      const pipLine = pip.getByText('Compositing video-core.mp4…', { exact: true })
+      await expect(pipLine, 'the Picture-in-picture card names its base').toBeVisible()
+      await expect(pipLine).toHaveAttribute('title', 'video-core.mp4')
+      await expect(pip.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+      await releaseHeld(app, 'video:pipComposite')
+      await expect(pip.getByRole('button', { name: 'Composite', exact: true })).toBeEnabled({ timeout: 15_000 })
+      await expect(pipLine).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // The busy line names the RUN's video, not the open one: Compile and Picture-in-picture started on A, A closed, B opened (a job outlives its video).
+  test('Compile and Picture-in-picture started on A, A closed and B opened: B\'s cards name A\'s files, not B\'s', async () => {
+    test.setTimeout(180_000)
+    const outDir = path.join(root, `out-t168-other-${Date.now().toString(36)}`)
+    mkdirSync(outDir, { recursive: true })
+    const fileA = path.join(root, 'source', 'busy-a.mp4')
+    const fileB = path.join(root, 'source', 'busy-b.mp4')
+    writeFileSync(fileA, readFileSync(fixture))
+    writeFileSync(fileB, readFileSync(fixture))
+    const { app, window } = await launchWithVideo('t168-busy-other', fileA)
+    try {
+      window.on('dialog', (dialog) => void dialog.accept())
+      await stubChoosers(app, outDir, fileA)
+      const done = { outputPath: path.join(outDir, 'held.out') }
+      const compile = window.locator('.card').filter({ hasText: 'Compile clips (' })
+      const pip = window.locator('.card').filter({ hasText: 'Picture-in-picture composite' })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await holdInMain(app, 'video:concat', done)
+      await holdInMain(app, 'video:pipComposite', done)
+      await compile.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expect(compile.getByRole('button', { name: 'Stitching…' })).toBeDisabled()
+      await pip.getByRole('button', { name: 'Base: none' }).click()
+      await pip.getByRole('button', { name: 'Overlay: none' }).click()
+      await pip.getByRole('button', { name: 'Composite', exact: true }).click()
+      await expect(pip.getByRole('button', { name: 'Compositing…' })).toBeDisabled()
+
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, fileB, 'busy-b.mp4')
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(window.locator('header').getByText('busy-b.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+
+      const compileLine = compile.getByText('Stitching busy-a.mp4…', { exact: true })
+      await expect(compileLine, 'Compile names the video the job was started on').toBeVisible()
+      await expect(compileLine).toHaveAttribute('title', 'busy-a.mp4')
+      await expect(compile.getByText(/busy-b\.mp4/), 'and not the open one').toHaveCount(0)
+      const pipLine = pip.getByText('Compositing busy-a.mp4…', { exact: true })
+      await expect(pipLine, 'Picture-in-picture names the base the job was started on').toBeVisible()
+      await expect(pipLine).toHaveAttribute('title', 'busy-a.mp4')
+      await expect(pip.getByText(/busy-b\.mp4/)).toHaveCount(0)
+
+      await releaseHeld(app, 'video:concat')
+      await releaseHeld(app, 'video:pipComposite')
+      await expect(compileLine).toHaveCount(0, { timeout: 15_000 })
+      await expect(pipLine).toHaveCount(0, { timeout: 15_000 })
+    } finally {
+      await app.close()
+    }
+  })
+})

@@ -118,7 +118,7 @@ export function AssetLibraryPanel(): JSX.Element {
       })}
 
       <p className="text-xs text-ink-dim">
-        {ASSET_CATALOG.length} assets · drops replace the current Stream Graphics canvas.
+        {countOf(ASSET_CATALOG.length, 'asset')} · drops replace the current Stream Graphics canvas.
       </p>
     </div>
   )

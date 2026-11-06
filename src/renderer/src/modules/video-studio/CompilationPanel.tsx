@@ -23,6 +23,8 @@ export function CompilationPanel(): JSX.Element | null {
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
   // T-135 (1): the run is a module store, not this panel's state: leaving the studio does not lose it (see GifPanel).
   const busy = useCompileRun((s) => s.run !== null)
+  // T-168 (fold): the video it is stitching from (the run's own `name`), beside the Cancel - see GifPanel.
+  const runName = useCompileRun((s) => s.run?.name ?? null)
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
   // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -170,7 +172,12 @@ export function CompilationPanel(): JSX.Element | null {
           (measured: the idle button spans 1093-1205, Cancel 1147-1205). Where the second press lands now is the disabled primary. */}
       {/* Round 17 B4 */}
       {busy ? (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          {runName ? (
+            <p className="text-xs text-ink-dim min-w-0 truncate" title={runName}>
+              Stitching {runName}…
+            </p>
+          ) : null}
           <RunningCancel title="Cancel compilation" onClick={() => void cancelCompile()} />
         </div>
       ) : null}

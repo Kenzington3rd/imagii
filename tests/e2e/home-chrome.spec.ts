@@ -4035,3 +4035,85 @@ test.describe('T-163 (5): Save project with nothing open', () => {
     }
   })
 })
+
+// T-168 (6): the second press of a double-click on a dialog's button reached the page by its mousedown and mouseup even though its click was swallowed (T-131 (8)).
+// The tour's Done closes the card on the first press; the repeat's mousedown then landed on the Video Studio's "Watermark position" <select> under it, focused it and
+// opened its native popup, and the popup took the next key (the T-131 case's `?`, which failed most standalone runs). The witness is the page's own state after the
+// double-click: no select focused, no press with a count above 1 seen by the page, and `?` opens the shortcuts.
+test.describe('T-168 (6): a double-click on the tour\'s Done leaves the control under it alone', () => {
+  test('the Watermark position select under Done is not focused or opened by the second press, and ? opens the shortcuts', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('tour-done-select')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const fixture = path.join(sourceDir, 'tour-source.mp4')
+    await makeFixtureMp4(fixture)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: { audio: true, image: true, ai: true } })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', fixture, 'tour-source.mp4')
+      const dialog = window.getByRole('dialog')
+      await expect(dialog).toBeVisible({ timeout: 30_000 })
+      for (let i = 0; i < 30; i++) {
+        if ((await dialog.locator('h3').innerText()) === "You're all set") break
+        await dialog.getByRole('button', { name: 'Next' }).click()
+        await window.waitForTimeout(60)
+      }
+      await expect(dialog.locator('h3')).toHaveText("You're all set")
+
+      // The precondition that makes this a test of the bug: the select really is under the middle of Done. The tour scrolls the studio to its own
+      // liking and how far it got varies from run to run (that is why the T-131 case failed only some of the time), so the studio is scrolled here to put
+      // the select's middle on Done's: the card is centred on the window and does not move with it.
+      const done = dialog.getByRole('button', { name: 'Done' })
+      const box = (await done.boundingBox()) as { x: number; y: number; width: number; height: number }
+      const point = { x: box.x + box.width / 2, y: box.y + box.height / 2 }
+      await window.evaluate((y) => {
+        const select = document.querySelector('select[aria-label="Watermark position"]') as HTMLElement
+        const r = select.getBoundingClientRect()
+        let scroller = select.parentElement
+        while (scroller && !(scroller.scrollHeight > scroller.clientHeight + 2 && getComputedStyle(scroller).overflowY !== 'visible')) scroller = scroller.parentElement
+        scroller?.scrollBy(0, r.y + r.height / 2 - y)
+      }, point.y)
+      await window.waitForTimeout(150)
+      const beneath = await window.evaluate(
+        ({ x, y }) => document.elementsFromPoint(x, y).filter((el) => el.tagName === 'SELECT').map((el) => el.getAttribute('aria-label')),
+        point
+      )
+      expect(beneath, 'the Watermark position select lies under the middle of Done').toContain('Watermark position')
+
+      await window.evaluate(() => {
+        const w = window as unknown as { __presses: Array<{ type: string; detail: number; what: string }> }
+        w.__presses = []
+        for (const type of ['mousedown', 'mouseup', 'click']) {
+          document.addEventListener(type, (e) => {
+            const el = e.target as HTMLElement
+            w.__presses.push({ type, detail: (e as MouseEvent).detail, what: `${el.tagName.toLowerCase()} ${el.getAttribute('aria-label') ?? ''}`.trim() })
+          })
+        }
+      })
+      await done.dblclick()
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+      await window.waitForTimeout(600)
+
+      const landed = await window.evaluate(() => (window as unknown as { __presses: Array<{ type: string; detail: number; what: string }> }).__presses)
+      expect.soft(landed.filter((p) => p.detail > 1), 'no part of the second press (down, up or click) reached the page under the card').toEqual([])
+      const focused = await window.evaluate(() => {
+        const a = document.activeElement
+        return { tag: a?.tagName ?? '', label: a?.getAttribute('aria-label') ?? '' }
+      })
+      expect.soft(focused.tag, `no select took the focus (${focused.label})`).not.toBe('SELECT')
+
+      // A select that opened would hold the next key. The ? key reaching the page is the proof none did.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toContainText('Keyboard shortcuts', { timeout: 5_000 })
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

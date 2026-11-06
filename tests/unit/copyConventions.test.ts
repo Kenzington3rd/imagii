@@ -723,3 +723,12 @@ describe('T-163 (3): a helper-built single-sentence result toast has no trailing
     expect(clearedTranscriptsMessage({ removed: 1, failed: 2 }).text).toMatch(/\. .*\.$/)
   })
 })
+
+// T-168 (fold): the Asset Library's footer wrote `${ASSET_CATALOG.length} assets` by hand. A pin of the call, as the sites above (the output is the helper's own test).
+describe('the Asset Library footer count goes through countOf (T-168 fold)', () => {
+  it('AssetLibraryPanel.tsx counts the catalog with countOf and does not hand-write the plural', () => {
+    const text = parseSource(path.join(RENDERER_ROOT, 'modules/references/AssetLibraryPanel.tsx')).text
+    expect(text).toMatch(/countOf\(ASSET_CATALOG\.length, 'asset'\)/)
+    expect(text).not.toMatch(/\{ASSET_CATALOG\.length\} assets/)
+  })
+})

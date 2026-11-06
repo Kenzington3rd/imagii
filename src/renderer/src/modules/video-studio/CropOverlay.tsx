@@ -166,6 +166,8 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
   const endGesture = useVideoStore((s) => s.endGesture)
   // T-167: where the box was when the press began, in the box's own pixels (see onDragStop).
   const dragStart = useRef<{ x: number; y: number } | null>(null)
+  // T-168 (3): the box's whole-pixel size when a handle press began (see onResizeStop).
+  const resizeStart = useRef<{ w: number; h: number } | null>(null)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? null
   if (!clip || !rect || rect.w <= 0 || rect.h <= 0) return null
@@ -215,7 +217,20 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
           })
           endGesture()
         }}
+        onResizeStart={(_e, _dir, ref) => {
+          resizeStart.current = { w: ref.offsetWidth, h: ref.offsetHeight }
+        }}
         onResizeStop={(_e, _dir, ref, _delta, position) => {
+          // T-168 (3): T-167's onDragStop guard, for the handles. re-resizable fires its stop on any press and release of a handle, and `ref.offsetWidth / picture.w` is whole pixels against a box
+          // drawn at the fractional `cropRect.w * picture.w` (0.9 of 640.37 px reads 576: 0.89946), so a click that moved nothing pushed an undo step. A press that changed no size has nothing to store.
+          // The size is compared with the size at the press, NOT read from `delta`: re-resizable sets `delta` only in its constructor and on a move and never resets it per press, so a plain click after a
+          // real resize is handed that resize's old delta. (A position cannot change without a size: the box is clamped to its parent, and a handle moves an edge by resizing.)
+          const start = resizeStart.current
+          resizeStart.current = null
+          if (start && ref.offsetWidth === start.w && ref.offsetHeight === start.h) {
+            endGesture()
+            return
+          }
           setClipCrop(activeClip.id, {
             x: Math.max(0, position.x / picture.w),
             y: Math.max(0, position.y / picture.h),

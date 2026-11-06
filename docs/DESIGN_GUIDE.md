@@ -137,6 +137,10 @@ held by this list alone, so a new one must be added below:
   `OutputPreview.tsx`: the preview canvas is a picture of the EXPORT's pixels,
   and an export's bars are black by definition; the E2E suite compares it
   against a canvas of its own black.
+- **Record's compositor letterbox** (T-168). `ctx.fillStyle = 'black'` in `record-studio/compositor.ts`: the bars around a
+  screen source that changed size mid-take are a video's letterbox, black the way an export's bars are, not a palette color.
+  It is a color NAME, not a hex, so `noRawHex.test.ts` does not scan it; it is listed here so the next reader does not take it for
+  drift. A retheme must not tint the matte of a recording.
 - **The overlay editor's typing example** (T-104). `placeholder="white or
   #ffcc00"` in `TextOverlayEditor.tsx` shows the user the form a color is typed
   in; it is copy, not a color drawn.

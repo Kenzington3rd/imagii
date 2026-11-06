@@ -181,6 +181,9 @@ export function ExportPanel(): JSX.Element | null {
   // after the fact and replaced the last batch's rows with Failed / Not run. Export waits for the kit, and says so.
   const kitRunning = useKitRun((s) => s.run) !== null
   const queueSource = useExportQueue((s) => s.sourcePath)
+  // T-168 (4): the name the person knows the batch's video by, for the line that says whose the running rows are when ANOTHER video is open (Audio's
+  // `otherSoundLabel`, T-147 (2)).
+  const queueSourceName = useExportQueue((s) => s.sourceName)
   const jobs = queueJobs.length > 0 && (running || queueSource === source?.filePath) ? queueJobs : []
   // T-125 (18): one start at a time, claimed the instant the function runs. `running` is state, set only after the awaits in
   // `startExport` (the chooser, then `runExportQueue`'s settings writes), so a fast double-click ran a second start in that gap: main's
@@ -591,6 +594,13 @@ export function ExportPanel(): JSX.Element | null {
 
       {jobs.length > 0 ? (
         <div className="flex flex-col gap-2 mt-2">
+          {/* T-168 (4): a batch keeps its rows while it runs, whatever video is open now - B's Export read "Exporting…" over A's rows and a Cancel nobody could
+              attribute. The line names the video the batch is for; it is only said when it is not the open one (there the rows speak for themselves). */}
+          {running && queueSource !== source.filePath && queueSourceName ? (
+            <p className="text-xs text-ink-dim min-w-0 truncate" title={queueSourceName}>
+              Export of {queueSourceName}, started on another video.
+            </p>
+          ) : null}
           <PanelHeader icon="package">Queue</PanelHeader>
           {jobs.map((j) => (
             <div key={j.jobId} className="flex flex-col gap-0.5">

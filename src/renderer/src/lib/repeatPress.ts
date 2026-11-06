@@ -108,10 +108,15 @@ let listening = false
  *
  * The first press of a double-click on a dialog's button closes the dialog, and the second lands where that button was, on whatever the
  * dialog covered (executed: "Keep running" double-clicked mid-batch flipped the Facebook checkbox beneath it). `Modal`'s scrim already
- * ignores a repeat on ITSELF (T-127 (8)); this covers everything else the card stood over. One listener, installed on the first close,
+ * ignores a repeat on ITSELF (T-127 (8)); this covers everything else the card stood over. One handler, installed on the first close,
  * in the capture phase of the window, so it runs before React's: the click is stopped before any handler or default action (a checkbox's
- * toggle) sees it. Only clicks with a count above 1 are touched, so nothing else is delayed, and the window is half a second.
+ * toggle) sees it. Only presses with a count above 1 are touched, so nothing else is delayed, and the window is half a second.
  * T-133 (7a): a HELD Enter or Space is the keyboard's double-click and gets the same protection, by key (see `createHeldKeyGuard`).
+ * T-168 (6): a press is three events, not one. This swallowed `click` alone, and the repeat's `mousedown` still landed: a double-click on the tour's
+ * Done (the card closes on the first press) focused the Video Studio's "Watermark position" <select> under it and opened its native popup, and the popup
+ * took the next key (the T-131 case's `?`, which failed most standalone runs; diagnosed with capture-phase logs: keydown never reached the page).
+ * `mousedown`, `mouseup` and `click` go through the one handler and the one rule; `preventDefault` on the repeat's mousedown is what keeps the select
+ * unfocused and closed (a focus change and a popup are the mousedown's default action).
  */
 export function swallowRepeatClicks(now: number = performance.now()): void {
   swallowUntil = now + REPEAT_SWALLOW_MS
@@ -119,13 +124,10 @@ export function swallowRepeatClicks(now: number = performance.now()): void {
   heldKeys.dialogClosed()
   if (listening) return
   listening = true
-  window.addEventListener(
-    'click',
-    (e) => {
-      if (!isSwallowedRepeat(e, swallowUntil)) return
-      e.stopImmediatePropagation()
-      e.preventDefault()
-    },
-    true
-  )
+  const swallow = (e: MouseEvent): void => {
+    if (!isSwallowedRepeat(e, swallowUntil)) return
+    e.stopImmediatePropagation()
+    e.preventDefault()
+  }
+  for (const type of ['mousedown', 'mouseup', 'click'] as const) window.addEventListener(type, swallow, true)
 }

@@ -20,6 +20,8 @@ export function GifPanel(): JSX.Element | null {
   // T-135 (1): the run is a module store, not this panel's state - the person can leave the studio while it works, and the panel that mounts again
   // draws it (Exporting…, and the Cancel).
   const busy = useGifRun((s) => s.run !== null)
+  // T-168 (fold): and what it is for - the clip (the run's own `name`), so the card does not say a bare "Exporting…" over a clip nobody can tell.
+  const runName = useGifRun((s) => s.run?.name ?? null)
   // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
@@ -163,7 +165,13 @@ export function GifPanel(): JSX.Element | null {
           (measured: the idle button spans 1093-1205, Cancel 1147-1205). Where the second press lands now is the disabled primary. */}
       {/* Round 17 B2 */}
       {busy ? (
-        <div className="flex justify-end">
+        <div className="flex items-center justify-end gap-2">
+          {/* T-168 (fold): the button's label is the progress line and stays its width (see above); the clip's name rides beside the Cancel. */}
+          {runName ? (
+            <p className="text-xs text-ink-dim min-w-0 truncate" title={runName}>
+              Exporting {runName}…
+            </p>
+          ) : null}
           <RunningCancel title="Cancel GIF export" onClick={() => void cancelGif()} />
         </div>
       ) : null}

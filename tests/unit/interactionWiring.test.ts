@@ -2258,9 +2258,11 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
       /useEffect\(\(\) => \{\s*if \(!open\) return\s*openModals\+\+\s*return \(\) => \{\s*openModals--\s*swallowRepeatClicks\(\)\s*\}\s*\}, \[open\]\)/
     )
     expect(strip(read('components/Tutorial.tsx'))).toMatch(/useEffect\(\(\) => swallowRepeatClicks, \[\]\)/)
-    // One capture-phase listener on the window, ahead of React's, stopping the click before any handler or default action.
+    // One capture-phase handler on the window, ahead of React's, stopping the press before any handler or default action - all three events of it (T-168 (6): a select
+    // opens on the mousedown, so the click alone left the page under the card to the second press).
     const lib = strip(read('lib/repeatPress.ts'))
-    expect(lib).toMatch(/window\.addEventListener\(\s*'click',[\s\S]*?e\.stopImmediatePropagation\(\)\s*e\.preventDefault\(\)[\s\S]*?true\s*\)/)
+    expect(lib).toMatch(/const swallow = \(e: MouseEvent\): void => \{\s*if \(!isSwallowedRepeat\(e, swallowUntil\)\) return\s*e\.stopImmediatePropagation\(\)\s*e\.preventDefault\(\)\s*\}/)
+    expect(lib).toMatch(/for \(const type of \['mousedown', 'mouseup', 'click'\] as const\) window\.addEventListener\(type, swallow, true\)/)
   })
 
   it('(9) the Cancel question goes with its batch: Export closes it the moment `running` is false, and Clip Kit\'s lives in a component that exists only while a kit runs (T-136 (1))', () => {
