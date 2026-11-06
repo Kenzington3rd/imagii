@@ -8443,6 +8443,77 @@ IMG-PREC.
 
 ---
 
+## T-170 — sweep-56 fixes (round 119)
+
+- **Spec:** the fifty-sixth sweep's four verified findings (candidate clean pass #1 on d2fe7a3), each confirmed by the
+  expediter against source. QA main and renderer b, ffmpeg (executed on 7.0.2 and 6.1.1), Electron, audio, privacy,
+  a11y, both design readers (the T-169 scan block measured in a built app at 1024/1920/3840) and all three streamer
+  readers clean on their lens. Three are siblings or consequences of recent fixes (items 1, 2 and 4). Not counted: a
+  slider dragged away and back in one gesture leaves one step (the coalescing design); the hover hint is mouse-worded
+  (keyboard focus reveals Save); the Video and Audio importers' busy labels differ and two Export labels carry colons
+  (no guide rule); a one-off tutorial overlay that did not reproduce. Two tracks, disjoint source files.
+
+  **Track A — a running caption or Reframe job says whose it is, and Transcribe always asks (items 2 and 3).**
+  2. **[LOW-MED] A running transcription, burn-in or Reframe is drawn in ANOTHER video's panel with nothing naming its
+     video** (video-studio/CaptionsPanel.tsx:56-59, :318-325, :492-509; ReframePanel.tsx:39-41, :162-173). Transcribe
+     on A, Close (the question says it keeps going), open B: B's Captions header reads "Transcribing…", its phase row
+     and Cancel are A's, Burn into video / Re-transcribe are off, and B cannot start its own with no word why; Reframe
+     the same. Both runs carry `name` (store/runs.ts:17-19) and neither panel draws it, while Scan, Export, GIF, Compile
+     and PiP do since T-167 (3) / T-168 (2), (4). Fix (T-168 (4)'s Export rule): the captions and reframe runs also
+     carry the video they are for — `videoPath` (and, for Reframe, `fileName`) set at `begin` from the open source —
+     and while `run.videoPath !== source.filePath` the panel draws one line above its progress row (text-xs
+     text-ink-dim, `min-w-0 truncate`, the whole sentence as its `title`): "Transcription of <name>, started on another
+     video." / "Caption burn-in on <name>, started on another video." / "Reframe of <clip> from <fileName>, started on
+     another video." The job card's labels (VideoJobsRunning) are unchanged.
+  3. **[LOW] A cached READY over a deleted engine or model ends in a bare "Transcription failed."**
+     (CaptionsPanel.tsx:147; main/sidecars/whisperManager.ts:186; shared/userFacingError.ts:171-194). T-169 (1)
+     re-reads the status only when the cached answer says not ready; the panel itself tells a person to delete the model
+     file to replace it (:405), and a press before "Refresh status" reaches main, which throws "Whisper not installed
+     (see Captions setup)" — no closing period, so `isFinishedSentence` drops it and no known cause matches. Fix: (a)
+     `transcribe()` re-reads `captions.status()` on EVERY press (the same fresh-read, store, same-video and not-ready
+     branch T-169 (1) added, without the `if (!status?.ready)` around it); (b) main's refusal is a finished sentence:
+     "The captions engine or the English model is missing. Captions setup in the Captions panel says what to add."
+
+  **Track B — a meter that reads the sound that is there, and a Save that says where it goes (items 1 and 4).**
+  1. **[LOW] The Audio Studio level meter keeps the OLD sound's bars and dB readout while a replacing sound's waveform
+     draws** (audio-studio/VolumeMeter.tsx:53-55, :155-170; WaveformView.tsx:45-50). The meter is mounted across sources
+     and holds `levels` / `peakDb` in state; its effect cleanup only cancels the rAF and closes the graph, so when
+     WaveformView sets `mediaEl` null for a new source (resetting time and Play, T-157 (2)) the meter freezes at the last
+     reading — a red "0 dB" is possible — under "Drawing the waveform… N%" for real seconds on a long file. The app's own
+     path: Clean audio from Video Studio while a sound plays in Audio Studio (VideoStudio.tsx:126-132 loads the
+     extraction over it). Fix: the effect's cleanup also resets the readout (`levels` to NUM_BARS zeros, `peakDb` to
+     -60), so a meter with no element reads silent.
+  4. **[LOW] The Reference Search hint says "a mood board" while USER_GUIDE promises it says which**
+     (references/ReferencePanel.tsx:166, the T-169 (i) line; the target chosen at :66-73; USER_GUIDE.md:753-754, whose
+     parenthetical T-169 added). Save goes to the board selected on the Mood Boards tab, named only afterwards in a 2 s
+     toast. Fix: the line names it — `Hover a picture and click Save to add it to "<board>".` (the name truncated with
+     its `title`) when a selected board exists, and "Hover a picture and click Save to start a new mood board." when none
+     is (the first save asks for its name); USER_GUIDE's sentence says the line names the board and that another is
+     picked on the Mood Boards tab.
+
+  Covering tests: unit where a pure piece moves (NEW describes at the end of the files they touch); e2e (NEW describes at
+  the end of video-pipelines.spec.ts, audio.spec.ts and references.spec.ts), each red on d2fe7a3 except the stated
+  controls: Transcribe on A held in main, A closed, B opened — B's Captions panel shows "Transcription of A.mp4, started
+  on another video." above the row and its title holds it (control: on A itself no such line); the same for a held
+  Reframe; with `captions:status` answering READY at mount and NOT ready at the press, one press opens the setup card
+  and starts no job (red on d2fe7a3: main's refusal); main's refusal text is the finished sentence (unit, the IPC
+  path); the meter reads "-60 dB" with every bar at zero while a replacing sound's waveform is held drawing after the
+  old one played (the Clean audio path, its extraction and the new peaks held in main); with two boards and "Colors"
+  selected, the hint names "Colors" and a Save lands there (control: no board — the new-board sentence).
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or new (A: the other-video lines; Transcribe always checks; B: the Save line names the
+  board; the meter on a replaced sound if the guide describes the meter).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; one main
+  sentence; `test:media` is run by the expediter on the merge) — a hand-back with an unrun gate is
+  not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit
+  PID only.
+- **Status:** in progress (round 119)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
