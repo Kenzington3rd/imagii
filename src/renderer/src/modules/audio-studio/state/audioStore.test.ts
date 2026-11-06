@@ -471,3 +471,135 @@ describe('chain history coalesces a drag into one step (T-147, T-78)', () => {
     expect(store().history.past).toHaveLength(1)
   })
 })
+
+describe('an edit that changes nothing is not an edit (T-169 (2), the class of T-166 (3) and T-167 (2))', () => {
+  const store = () => useAudioStore.getState()
+  /** One real change and one undo first, so `future` holds a step Redo would play: a no-op that records a step wipes it. */
+  function withRedoHeld(): void {
+    store().patchChain({ deEss: true })
+    store().patchChain({ rumbleHighpass: true })
+    store().undo()
+    expect(store().history.future).toHaveLength(1)
+  }
+  /** Nothing moved: the same `history` object (so `future` still holds what it held), the same key, the same chain object. */
+  function expectUntouched(run: () => void): void {
+    const { history, historyKey, chain } = store()
+    run()
+    expect(store().history, 'history is the same object: past and future as they were').toBe(history)
+    expect(store().history.future).toHaveLength(1)
+    expect(store().historyKey).toBe(historyKey)
+    expect(store().chain).toBe(chain)
+  }
+
+  it('a primitive field patched to the value it already has pushes no step and keeps Redo', () => {
+    withRedoHeld()
+    expectUntouched(() => store().patchChain({ denoise: 'off' }))
+    expectUntouched(() => store().patchChain({ compressor: 'off', gainDb: 0 }))
+    expectUntouched(() => store().patchChain({ deEss: true }))
+  })
+
+  it('cutRegions equal by value but a new array is no change (a list of the same cuts in the same order)', () => {
+    store().addCutRegion({ startSec: 1, endSec: 2 })
+    store().addCutRegion({ startSec: 3, endSec: 4 })
+    store().undo()
+    store().redo()
+    store().undo()
+    expect(store().history.future).toHaveLength(1)
+    expectUntouched(() => store().patchChain({ cutRegions: [{ startSec: 1, endSec: 2 }] }))
+  })
+
+  it('a list with one more or one fewer cut, or a cut with other times, is a change', () => {
+    store().addCutRegion({ startSec: 1, endSec: 2 })
+    store().addCutRegion({ startSec: 3, endSec: 4 })
+    const steps = (): number => store().history.past.length
+    let before = steps()
+    store().patchChain({ cutRegions: [{ startSec: 1, endSec: 2 }] })
+    expect(steps(), 'one fewer').toBe(before + 1)
+    before = steps()
+    store().patchChain({ cutRegions: [{ startSec: 1, endSec: 2 }, { startSec: 3, endSec: 4 }] })
+    expect(steps(), 'one more').toBe(before + 1)
+    before = steps()
+    store().patchChain({ cutRegions: [{ startSec: 1, endSec: 2 }, { startSec: 3, endSec: 4.5 }] })
+    expect(steps(), 'other times').toBe(before + 1)
+    before = steps()
+    store().patchChain({ cutRegions: [{ startSec: 3, endSec: 4.5 }, { startSec: 1, endSec: 2 }] })
+    expect(steps(), 'the same cuts in another order is another list').toBe(before + 1)
+  })
+
+  it('denoiseParams with a key the chain\'s does not have, or the other way round, is a change', () => {
+    store().patchChain({ denoiseParams: { noiseFloorDb: -25, reductionDb: 12 } })
+    const before = store().history.past.length
+    store().patchChain({ denoiseParams: { noiseFloorDb: -25, reductionDb: 12, sensitivity: 3 } })
+    expect(store().history.past).toHaveLength(before + 1)
+    store().patchChain({ denoiseParams: { noiseFloorDb: -25, reductionDb: 12 } })
+    expect(store().history.past).toHaveLength(before + 2)
+  })
+
+  it('denoiseParams equal by value (a new object) is no change; one number different is a step', () => {
+    store().patchChain({ denoise: 'parametric', denoiseParams: { noiseFloorDb: -25, reductionDb: 12, sensitivity: 0 } })
+    store().patchChain({ deEss: true })
+    store().undo()
+    expect(store().history.future).toHaveLength(1)
+    expectUntouched(() => store().patchChain({ denoiseParams: { noiseFloorDb: -25, reductionDb: 12, sensitivity: 0 } }))
+    const before = store().history.past.length
+    store().patchChain({ denoiseParams: { noiseFloorDb: -25, reductionDb: 13, sensitivity: 0 } })
+    expect(store().history.past).toHaveLength(before + 1)
+    expect(store().history.future, 'a real change ends the redo branch').toHaveLength(0)
+  })
+
+  it('secondaryTrack: an equal track is no change, and absent and null are the same (every reader tests `!= null`)', () => {
+    const track = { filePath: '/m/bed.mp3', fileName: 'bed.mp3', role: 'music' as const, gainDb: -10, duckUnderPrimary: true }
+    store().patchChain({ secondaryTrack: track })
+    store().patchChain({ deEss: true })
+    store().undo()
+    expectUntouched(() => store().patchChain({ secondaryTrack: { ...track } }))
+    store().undo()
+    store().patchChain({ secondaryTrack: undefined })
+    store().patchChain({ deEss: true })
+    store().undo()
+    expectUntouched(() => store().patchChain({ secondaryTrack: null }))
+  })
+
+  it('humHz: absent is 60 (a chain saved before 50 Hz existed), so patching 60 onto it changes nothing and 50 does', () => {
+    store().patchChain({ deEss: true })
+    store().undo()
+    expectUntouched(() => store().patchChain({ humHz: 60 }))
+    store().patchChain({ humHz: 50 })
+    expect(store().chain.humHz).toBe(50)
+    expect(store().history.past).toHaveLength(1)
+  })
+
+  it('a patch with one real field and one equal field still pushes ONE step and applies both', () => {
+    withRedoHeld()
+    store().patchChain({ denoise: 'off', gainDb: 2 })
+    expect(store().chain.gainDb).toBe(2)
+    expect(store().history.past).toHaveLength(2)
+    expect(store().history.future).toHaveLength(0)
+    store().undo()
+    expect(store().chain.gainDb).toBe(0)
+  })
+
+  it('a real change still pushes a step, and undo and redo carry it', () => {
+    store().patchChain({ compressor: 'voice' })
+    expect(store().history.past).toHaveLength(1)
+    expect(store().chain.compressor).toBe('voice')
+    store().undo()
+    expect(store().chain.compressor).toBe('off')
+    store().redo()
+    expect(store().chain.compressor).toBe('voice')
+  })
+
+  it('a keyed (coalesced) patch still coalesces, and an equal keyed patch neither pushes nor opens a window', () => {
+    store().patchChain({ gainDb: 0 }, 'gain')
+    expect(store().history.past, 'an equal patch is nothing').toHaveLength(0)
+    expect(store().historyKey, 'and it opens no gesture window').toBeNull()
+    for (const g of [1, 2, 3]) store().patchChain({ gainDb: g }, 'gain')
+    expect(store().history.past).toHaveLength(1)
+    expect(store().historyKey).toBe('gain')
+    store().patchChain({ gainDb: 3 }, 'gain')
+    expect(store().history.past, 'the repeat of the drag\'s last value changes nothing').toHaveLength(1)
+    expect(store().historyKey, 'and does not close the window the drag holds').toBe('gain')
+    store().undo()
+    expect(store().chain.gainDb).toBe(0)
+  })
+})

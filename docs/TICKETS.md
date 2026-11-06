@@ -8439,7 +8439,7 @@ IMG-PREC.
   Layer 5 edit is one expected sentence, and `test:media` is run by the expediter on the merge) —
   a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile
   edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 118)
+- **Status:** done (round 118 — see the Done entry)
 
 ---
 
@@ -9017,6 +9017,43 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 118 — T-169, all three counted items and the four folds, landed in
+the commit that carries this entry. Two Sonnet workers in fresh clones
+of 6b48c62, disjoint source files, merged by the expediter. Track A:
+Transcribe re-reads the captions status when the remembered answer says
+not ready, so a person who copied the engine after the model downloaded
+presses Transcribe once and it runs; a press whose video was closed or
+replaced while main answered is dropped (the worker's deviation,
+accepted; the replaced case was unpinned until the expediter's mutation
+survived and the worker added it); the Smart highlight finder's
+"Scanning <file> for highlights" line has a row of its own above the
+bar, so the guide's own "stream.mp4" reads whole at the default window.
+Track B: Audio Studio's patchChain and References' renameCollection
+record nothing for an edit that changes nothing, so Redo survives a
+click on the already-pressed option or a same-name rename (a no-op
+compare by value, with a missing second track and a missing humHz read
+as their meaning); the cut copy names the chip under the waveform in the
+hint, the tour, the shortcut overlay and both refusals (BRANDING's
+"mark" row says so); the Reference Search grid says Save appears on
+hover; a held Enter in the search box sends one search; a stale preset
+comment says X Premium 4 h. Deviations, accepted: B takes the rename's
+snapshot before its guard (the T-150 wiring pin) and keeps the compare
+local to audioStore. Ledgers: A 11 mutation rows (9 of its own and the
+two on the expediter's guard mutant), B 31 (one equivalent at e2e — the
+untrimmed compare, killed by a unit mutation), all others killed. Found
+not fixed: setSecondaryTrack and the cut writers have no no-op guard (no
+control reaches them without a change). Expedited personally: one
+independent mutation per track at a seam no ledger row names — A: the
+press guard checking only that a video is open (not that it is the same
+one) → survived, sent back, the worker added the replaced-video case,
+killed; B: the rename guard reading the board's name at the press
+instead of when its queued turn starts → referencesStore.test.ts red —
+each restored byte-identical, sha256 verified; on the MERGED tree:
+verify x2 (209 files / 6429 tests), test:media 495 passed | 17 skipped
+of 512 on 7.0.2, FULL Playwright 739 of 739 (52.1 min). Applied to
+6b48c62 by `git apply` with every file byte-identical to the expedited
+merge.
 
 Round 117 — T-168, all five counted items, the expediter item and the
 folds, landed in the commit that carries this entry. Two Sonnet workers

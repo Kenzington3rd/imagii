@@ -58,10 +58,11 @@ export const SECOND_TRACK_PICK_NO_SOUND_MESSAGE = 'That file has no sound in it.
 
 /**
  * The refusal for an export whose cuts remove everything (T-135 (12)), T-84 voice. ffmpeg exits 0 for such a chain having written a header-only
- * file (a 78-byte WAV, a few hundred bytes of AAC / MP3 framing) and "Cleaned audio exported" was said over nothing. "A mark" is what the cuts are
- * called on the waveform (`BAD_CUT`: "Click its mark to put it back").
+ * file (a 78-byte WAV, a few hundred bytes of AAC / MP3 framing) and "Cleaned audio exported" was said over nothing. "A mark" is what a cut looks like on the
+ * waveform, and its CHIP under it is what puts it back (T-169; the shading is pointer-transparent, T-61), so the sentence names the chip, as does
+ * `BAD_CUT`: "Click its chip under the waveform to put it back".
  */
-export const EVERYTHING_CUT_MESSAGE = 'Everything is cut out. Click a mark to put a part back.'
+export const EVERYTHING_CUT_MESSAGE = 'Everything is cut out. Click a chip under the waveform to put a part back.'
 
 /**
  * What the audio probe throws when it READ the streams but the container gave no usable length (T-127 (10)): a MediaRecorder WebM and a

@@ -146,6 +146,31 @@ function snapshot({ history, historyKey, chain }: AudioStudioState, key: string 
   return { history: pushHistory(history, chain), historyKey: key }
 }
 
+/**
+ * The same value for the record (T-169 (2); the model is canvasStore's T-167 `sameValue`, which handles lists only): identical, or two lists / two plain
+ * objects (`denoiseParams`, a `secondaryTrack`, a `cutRegions` entry) holding the same values under the same keys. A local twin, not a shared helper:
+ * the canvas store would need to import it too for it to earn a place in `shared/`.
+ */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (Object.is(a, b)) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => sameValue(v, b[i]))
+  }
+  if (typeof a !== 'object' || typeof b !== 'object' || a === null || b === null) return false
+  const x = a as Record<string, unknown>
+  const y = b as Record<string, unknown>
+  const keys = new Set([...Object.keys(x), ...Object.keys(y)])
+  return [...keys].every((k) => sameValue(x[k], y[k]))
+}
+
+/** What the chain MEANS by a field, so two spellings of one meaning compare equal: no second track is `null` or absent (every reader tests `!= null`), and a chain saved
+ *  before 50 Hz existed has no `humHz` and was always 60. */
+function meant(field: string, value: unknown): unknown {
+  if (field === 'secondaryTrack') return value ?? null
+  if (field === 'humHz') return value ?? 60
+  return value
+}
+
 export const useAudioStore = create<AudioStudioState>((set, get) => ({
   source: null,
   waveform: null,
@@ -213,6 +238,11 @@ export const useAudioStore = create<AudioStudioState>((set, get) => ({
 
   patchChain: (patch, key) => {
     const prev = get().chain
+    // T-169 (2): an edit that changes nothing is nothing to undo, and a step that changes nothing would also empty Redo (the class of `videoStore` T-166 (3) and
+    // `canvasStore.updateLayer` T-167 (2)). A click on the already-pressed "Off", or a preset / Fix wizard Apply that sets what is already set, patches the chain's own
+    // values back: nothing moves, not the chain, not the history, not the coalescing key (a drag's repeat of its last value must not close its window either).
+    const record = prev as unknown as Record<string, unknown>
+    if (Object.entries(patch).every(([field, value]) => sameValue(meant(field, value), meant(field, record[field])))) return
     set({ chain: { ...prev, ...patch }, ...snapshot(get(), key ?? null) })
   },
   addCutRegion: (region) => {

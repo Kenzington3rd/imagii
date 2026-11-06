@@ -250,6 +250,11 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     renameCollection: (id: string, name: string) =>
       mutate(async () => {
         const before = snapshot()
+        // T-169 (2): an empty name, or the board's own (the dialog is pre-filled: Enter without typing), changes nothing - main keeps the name for an empty one
+        // and trims the rest - so there is nothing to ask main and nothing to undo; a step that changes nothing would also empty Redo (T-166 (3), T-167 (2)).
+        // Read when this turn STARTS, like the snapshot: a rename queued behind another sees the name that one set. A board the store does not hold goes on to main.
+        const trimmed = name.trim()
+        if (!trimmed || get().collections.find((c) => c.id === id)?.name === trimmed) return
         await window.api.moodboard.rename(id, name)
         const collections = await window.api.moodboard.list()
         set({ collections, history: pushHistory(get().history, before) })

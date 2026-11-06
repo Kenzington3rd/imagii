@@ -50,7 +50,7 @@ const BAD_SECOND_TRACK =
 // `between(t,start,end)` through `toFixed`, and the custom noise reduction's two numbers into
 // `afftdn=nf=...:nr=...`; a missing or non-numeric one is `nf=NaN`, which ffmpeg refuses mid-export.
 const BAD_CUT =
-  "One of the cuts has a start or end imagii can't use. Click its mark to put it back, then cut that part again."
+  "One of the cuts has a start or end imagii can't use. Click its chip under the waveform to put it back, then cut that part again."
 const BAD_DENOISE =
   "The custom noise reduction has a setting imagii can't use — move its Noise floor and Reduction sliders, then try again."
 

@@ -619,9 +619,9 @@ describe('T-139 Track B - the guides say what the code does', () => {
   })
 
   it('(7) the decision order classifies each panel the guide lists the way the code draws it', () => {
-    // 1. A progress row of the job's own: shown only while it runs, with its bar and its Cancel together, and no primary on it.
+    // 1. A progress row of the job's own: shown only while it runs, with its bar and its Cancel together, and no primary on it. (T-169 (3): the scan's name has a row above the bar's, so its bar row is the inner div.)
     expect(src('video-studio/ReframePanel.tsx')).toMatch(/\{running \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,600}?<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel reframe"/)
-    expect(src('video-studio/HighlightPanel.tsx')).toMatch(/\{scanning \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,900}?<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel scan"/)
+    expect(src('video-studio/HighlightPanel.tsx')).toMatch(/\{scanning \? \(\s*<div className="flex flex-col gap-1 text-xs text-ink-muted">[\s\S]{0,1200}?<div className="flex items-center gap-2">\s*<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel scan"/)
     const captions = src('video-studio/CaptionsPanel.tsx')
     expect(captions).toMatch(/\{progress \? \(\s*<div className="flex items-center gap-2 text-xs text-ink-muted">[\s\S]{0,600}?<ProgressTrack[\s\S]{0,1200}?<RunningCancel title="Cancel burn-in"/)
     expect(captions).toMatch(/\{installing && installProgress \? \(\s*<div className="flex items-center gap-2 text-xs">\s*<ProgressTrack[\s\S]{0,400}?<RunningCancel title="Cancel download"/)

@@ -116,7 +116,10 @@ export function ReferencePanel(): JSX.Element {
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && submit()}
+          // T-169 (ii): a HELD Enter is the keyboard's double-click: each auto-repeat re-sent the query that had just settled (the single-flight rule only covers one in flight).
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && !e.repeat) submit()
+          }}
           className="flex-1 min-w-0 bg-bg-base rounded px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-accent"
           placeholder="Search for inspiration… (e.g. minimalist mountain photography)"
         />
@@ -158,6 +161,9 @@ export function ReferencePanel(): JSX.Element {
           <span className="sr-only">{foundCount === 1 ? '1 result.' : `${foundCount} results.`}</span>
         ) : null}
       </div>
+
+      {/* T-169 (i): Save appears on hover and focus (the conventional reveal), which nothing on the page said. */}
+      {foundCount > 0 ? <p className="text-xs text-ink-dim">Hover a picture and click Save to add it to a mood board.</p> : null}
 
       {response && response.results.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

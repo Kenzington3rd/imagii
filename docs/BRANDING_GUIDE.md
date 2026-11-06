@@ -110,7 +110,7 @@ shared and preload for the two rules about words alone (US spelling, never "tick
 | **chat spike** | hype moment, chat peak | A burst of messages the Chat spike finder found. |
 | **clip** | segment, excerpt | A Video Studio unit: a trimmed range with its own export targets. |
 | **cut** | | An Audio Studio unit: a part removed when you export. |
-| **mark** | cut tag | What a cut looks like on the waveform and in its chip. "Click a mark to put it back": the hint, the tutorial, the shortcut overlay and the refusal for a damaged cut all say so (T-121). |
+| **mark** | cut tag | What a cut looks like on the waveform and in its chip. The shading is the mark and is pointer-transparent (T-61); its **chip** under the waveform is the control that puts it back, so the hint ("Click its chip below to put it back"), the tutorial, the shortcut overlay ("Click a cut's chip") and both refusals (a damaged cut, and everything cut) name the chip, never "Click a mark" (T-169; T-121 said "Click a mark"). |
 | **Mood board** | Moodboard, collection | A saved set of references (two words). |
 | **Reference Search**, **Mood Boards**, **Asset Library** | Reference search, Mood boards, Asset library | The three tabs of References. Feature names used as proper names keep their capitals, as **Reference Search** does in the local-first promise above; a saved set in a sentence is still a "mood board" (T-160). |
 | **Posting log** | posting diary, diary | The list of where a clip was posted. The feature is "Posting log"; its list is headed "Logged posts (N)" (the copy sweep's deliberate choice, a header that counts what it holds), so the two names are not drifting. |

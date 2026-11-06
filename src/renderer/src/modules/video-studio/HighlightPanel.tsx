@@ -217,16 +217,19 @@ export function HighlightPanel(): JSX.Element | null {
       </div>
 
       {scanning ? (
-        <div className="flex items-center gap-2 text-xs text-ink-muted">
+        <div className="flex flex-col gap-1 text-xs text-ink-muted">
           {/* T-167 (3) fold: the label names the file the RUN is for, so on another open video this reads as that video's scan.
-              T-168 (2): and the words are on screen, not only in the bar's name (a sighted person on another video saw an anonymous bar). The bar and the percent keep their widths; the name is what gives. */}
-          <span className="min-w-0 truncate" title={scanName}>
+              T-168 (2): and the words are on screen, not only in the bar's name (a sighted person on another video saw an anonymous bar).
+              T-169 (3): on its own row: at one row the name took all the shrink ("Scanning strea…" at the default window). Only a name longer than the card is cut. */}
+          <span className="block min-w-0 truncate" title={scanName}>
             Scanning {scanName} for highlights
           </span>
-          <ProgressTrack label={`Scanning ${scanName} for highlights`} percent={progress} className="flex-1 min-w-[3rem]" />
-          <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
-          {/* Round 17 B3: single-slot cancel, no jobId needed. */}
-          <RunningCancel title="Cancel scan" onClick={cancelScan} />
+          <div className="flex items-center gap-2">
+            <ProgressTrack label={`Scanning ${scanName} for highlights`} percent={progress} />
+            <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
+            {/* Round 17 B3: single-slot cancel, no jobId needed. */}
+            <RunningCancel title="Cancel scan" onClick={cancelScan} />
+          </div>
         </div>
       ) : null}
 

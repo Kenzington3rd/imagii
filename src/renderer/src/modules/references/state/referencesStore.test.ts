@@ -780,3 +780,81 @@ describe('overlapping board edits are separate Undo steps (T-150 (2))', () => {
     expect(names()).toEqual(['Renamed'])
   })
 })
+
+describe('a rename that changes nothing is not an edit (T-169 (2), the class of T-166 (3) and T-167 (2))', () => {
+  let renameCalls: Array<[string, string]> = []
+
+  beforeEach(() => {
+    renameCalls = []
+    vi.stubGlobal('window', {
+      api: {
+        moodboard: {
+          ...moodboardApi,
+          rename: (id: string, name: string) => {
+            renameCalls.push([id, name])
+            return moodboardApi.rename(id, name)
+          }
+        }
+      }
+    })
+  })
+
+  /** One real board and one undo first, so Redo holds a step: a no-op that records one wipes it. */
+  async function boardWithRedoHeld(): Promise<void> {
+    await store().createCollection('Alpha')
+    await store().createCollection('Beta')
+    store().undo()
+    await settle()
+    expect(store().history.future).toHaveLength(1)
+    store().selectCollection('board-1')
+  }
+
+  it.each([
+    ['the current name', 'Alpha'],
+    ['the current name padded with spaces', '   Alpha  '],
+    ['an empty name', ''],
+    ['a name of only spaces', '   ']
+  ])('%s calls no IPC and pushes no step, and Redo is kept', async (_what, name) => {
+    await boardWithRedoHeld()
+    const history = store().history
+    renameCalls.length = 0
+    await store().renameCollection('board-1', name)
+    expect(renameCalls, 'main was not asked').toEqual([])
+    expect(store().history, 'the same history object').toBe(history)
+    expect(store().history.future).toHaveLength(1)
+    expect(names()).toEqual(['Alpha'])
+  })
+
+  it('a real rename still calls the IPC once, pushes one step and ends the redo branch', async () => {
+    await boardWithRedoHeld()
+    const past = store().history.past.length
+    await store().renameCollection('board-1', 'Alpha renamed')
+    expect(renameCalls).toEqual([['board-1', 'Alpha renamed']])
+    expect(names()).toEqual(['Alpha renamed'])
+    expect(store().history.past).toHaveLength(past + 1)
+    expect(store().history.future).toHaveLength(0)
+  })
+
+  it('a name that differs only in case is a real rename (the person asked for it)', async () => {
+    await store().createCollection('Alpha')
+    renameCalls.length = 0
+    await store().renameCollection('board-1', 'alpha')
+    expect(renameCalls).toEqual([['board-1', 'alpha']])
+    expect(names()).toEqual(['alpha'])
+  })
+
+  it('a rename queued behind another reads the board name when ITS turn starts', async () => {
+    await store().createCollection('Alpha')
+    renameCalls.length = 0
+    const first = store().renameCollection('board-1', 'Beta')
+    const second = store().renameCollection('board-1', 'Beta')
+    await Promise.all([first, second])
+    expect(renameCalls, 'the second press names what the first already set').toEqual([['board-1', 'Beta']])
+    expect(store().history.past).toHaveLength(2)
+  })
+
+  it('a rename of a board the store does not hold still goes to main (it decides)', async () => {
+    await store().renameCollection('ghost', 'Anything')
+    expect(renameCalls).toEqual([['ghost', 'Anything']])
+  })
+})

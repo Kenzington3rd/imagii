@@ -306,7 +306,7 @@ describe('WAVEFORM_READ_FAILED: the refusal that remains, for a file main cannot
 describe('the two export refusals that need no encoder (T-135 (11), (12))', () => {
   it('say which file / what happened, in a sentence main can throw as written', () => {
     expect(SECOND_TRACK_NO_SOUND_MESSAGE).toBe('The second track has no sound in it. Remove it or pick another file.')
-    expect(EVERYTHING_CUT_MESSAGE).toBe('Everything is cut out. Click a mark to put a part back.')
+    expect(EVERYTHING_CUT_MESSAGE).toBe('Everything is cut out. Click a chip under the waveform to put a part back.')
   })
 
   it.each([

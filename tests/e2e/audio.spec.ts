@@ -656,7 +656,7 @@ async function expectNotSelected(locator: ReturnType<Page['locator']>): Promise<
 
 /** T-90: says WHEN a marked part goes (at export) and how to undo the mark. */
 const WAVEFORM_HINT =
-  'Drag across the waveform to mark a part to remove — it comes out when you export. Click a mark to put it back.'
+  'Drag across the waveform to mark a part to remove — it comes out when you export. Click its chip below to put it back.'
 
 function cutChips(window: Page) {
   return window.locator('button[title="Click to put this part back"]')
@@ -2881,7 +2881,7 @@ test.describe('imagii Audio Studio', () => {
       const exportPanel = window.locator(EXPORT)
       const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
       await exportButton.click()
-      const SENTENCE = 'Everything is cut out. Click a mark to put a part back.'
+      const SENTENCE = 'Everything is cut out. Click a chip under the waveform to put a part back.'
       await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(SENTENCE)
       expect((await readToastLog(window)).some((t) => t.includes('Cleaned audio exported')), 'no success was claimed').toBe(false)
       await expect(exportPanel.getByText('Failed', { exact: true })).toBeVisible()
@@ -5661,6 +5661,97 @@ test.describe('T-166 (2): the tour\'s Export step names Re-attach for a video\'s
       await expect(format).toHaveCount(0)
       await reattach.uncheck()
       await expect(format).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-169 (2): an edit that changes nothing is not an edit ────────────────────────────────────────────────────────────────────────────────
+//
+// A click on the button that is already pressed used to light Undo with a step that changed nothing, and emptied Redo (the class of T-166 (3) and T-167 (2)).
+test.describe('T-169 (2): a click on the already-pressed option records nothing', () => {
+  test('Quieter background "Off" on a fresh file leaves Undo disabled; the Compressor\'s "Off" too', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t169-noop')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const redo = window.getByRole('button', { name: 'Redo' })
+      const off = window.locator(CLEANUP).getByRole('button', { name: 'Off', exact: true })
+      const compressorOff = window.locator(LEVELS).getByRole('button', { name: 'Off', exact: true })
+      await expect(undo).toBeDisabled()
+
+      await expectSelected(off)
+      await off.click()
+      await expectSelected(off)
+      await expect(undo, 'a click on the pressed Off changed nothing, so there is nothing to undo').toBeDisabled()
+      await expect(redo).toBeDisabled()
+
+      await expectSelected(compressorOff)
+      await compressorOff.click()
+      await expect(undo, 'and the compressor\'s pressed Off is the same').toBeDisabled()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('after one real change and an Undo, a click on the already-pressed option keeps Redo; a click on a different one ends it', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t169-redo')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const redo = window.getByRole('button', { name: 'Redo' })
+      const cleanup = window.locator(CLEANUP)
+      const medium = cleanup.getByRole('button', { name: 'Medium', exact: true })
+      const off = cleanup.getByRole('button', { name: 'Off', exact: true })
+
+      await medium.click()
+      await undo.click()
+      await expectSelected(off)
+      await expect(redo).toBeEnabled()
+      await expect(undo).toBeDisabled()
+
+      await off.click()
+      await expectSelected(off)
+      await expect(redo, 'the click changed nothing: the step Redo would play is still there').toBeEnabled()
+      await expect(undo).toBeDisabled()
+      await redo.click()
+      await expectSelected(medium)
+
+      // The control: a click that DOES change something is a step, and it ends the redo branch as it always did.
+      await undo.click()
+      await expect(redo).toBeEnabled()
+      await cleanup.getByRole('button', { name: 'Light', exact: true }).click()
+      await expect(undo).toBeEnabled()
+      await expect(redo).toBeDisabled()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-169 (iii): the cut copy names the chip ───────────────────────────────────────────────────────────────────────────────────────────────
+test.describe('T-169 (iii): the waveform hint names the chip that puts a cut back', () => {
+  test('the hint says "Click its chip below", never "Click a mark", and the chip it names does put the part back', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t169-hint')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await expect(window.getByText(WAVEFORM_HINT)).toBeVisible()
+      await expect(window.locator(WAVEFORM)).not.toContainText('Click a mark')
+      await expect(cutChips(window)).toHaveCount(0)
+
+      // The control the sentence names is the one that works: the chip puts the part back, and the hint comes back with it.
+      await dragCut(window, 0.2, 0.4)
+      await expect(cutChips(window)).toHaveCount(1)
+      await cutChips(window).first().click()
+      await expect(cutChips(window)).toHaveCount(0)
+      await expect(window.getByText(WAVEFORM_HINT)).toBeVisible()
     } finally {
       await closeStudio(studio)
     }

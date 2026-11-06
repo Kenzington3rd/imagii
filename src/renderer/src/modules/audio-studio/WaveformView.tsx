@@ -258,7 +258,7 @@ export function WaveformView(): JSX.Element | null {
       ) : (
         <p className="text-xs text-ink-dim">
           Drag across the waveform to mark a part to remove — it comes out when you export.
-          Click a mark to put it back.
+          Click its chip below to put it back.
         </p>
       )}
     </div>

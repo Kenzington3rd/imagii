@@ -44,7 +44,7 @@ const KEYBOARD_EVIDENCE: Record<string, RegExp> = {
 const MOUSE_HINTS = new Set([
   'Click timeline',
   'Drag on waveform',
-  'Click a mark',
+  "Click a cut's chip",
   'Click thumbnail',
   'Click any card',
   'Save button',

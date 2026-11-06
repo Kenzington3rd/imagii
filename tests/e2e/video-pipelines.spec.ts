@@ -14018,7 +14018,7 @@ test.describe('T-168 Track A: the late scan\'s toast, the scan\'s visible name, 
     }
   })
 
-  test('(2) a very long file name is cut with an ellipsis (whole name as the title) and the bar, the percent and Cancel stay on its row', async () => {
+  test('(2) a very long file name is cut with an ellipsis (whole name as the title) on its own line, and the bar, the percent and Cancel share one row below it', async () => {
     test.setTimeout(240_000)
     const longName = `a-very-long-stream-recording-name-that-cannot-fit-in-the-column-${Date.now().toString(36)}.mp4`
     const long = path.join(root, 'source', longName)
@@ -14035,14 +14035,16 @@ test.describe('T-168 Track A: the late scan\'s toast, the scan\'s visible name, 
       const cancel = highlightCard(window).getByRole('button', { name: 'Cancel', exact: true })
       await expect(percent).toBeVisible()
       await expect(cancel).toBeVisible()
-      const centre = async (l: Locator): Promise<{ y: number; w: number }> =>
+      // T-169 (3): the line is on its OWN row above the bar's row (at one row the name took all the shrink); the bar, the percent and Cancel share the row below it.
+      const box = async (l: Locator): Promise<{ y: number; top: number; bottom: number; w: number }> =>
         l.evaluate((el) => {
           const r = el.getBoundingClientRect()
-          return { y: r.top + r.height / 2, w: r.width }
+          return { y: r.top + r.height / 2, top: r.top, bottom: r.bottom, w: r.width }
         })
-      const [a, b, c, d] = [await centre(line), await centre(bar), await centre(percent), await centre(cancel)]
-      for (const other of [b, c, d]) expect(Math.abs(other.y - a.y), 'the row stays one line').toBeLessThanOrEqual(3)
-      expect(b.w, 'the bar keeps a usable width: the name is what gives').toBeGreaterThanOrEqual(40)
+      const [a, b, c, d] = [await box(line), await box(bar), await box(percent), await box(cancel)]
+      for (const other of [c, d]) expect(Math.abs(other.y - b.y), 'the bar, the percent and Cancel are one row').toBeLessThanOrEqual(3)
+      expect(a.bottom, 'the name is on a row above the bar').toBeLessThanOrEqual(b.top)
+      expect(b.w, 'the bar keeps a usable width: the name no longer shares its row').toBeGreaterThanOrEqual(120)
       await expectNoHorizontalOverflow(highlightCard(window), 'the Smart highlight finder')
       await release(app)
       await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' }).or(highlightCard(window).getByRole('button', { name: 'Re-scan' }))).toBeEnabled({ timeout: 30_000 })
@@ -14270,6 +14272,195 @@ test.describe('T-168 Track A: the late scan\'s toast, the scan\'s visible name, 
       await expect(line, 'a log with one readable line is read').toHaveCount(0)
     } finally {
       await app.close()
+    }
+  })
+})
+
+// ── T-169 Track A: Transcribe re-reads whether the captions files are there, and the scan's name has a row of its own ─────────────────────────────────────────────────────────────────────────
+//
+// (1) `transcribe()` tested the CACHED status: the model download ends (its refresh still says engine missing), the person copies whisper-cli.exe and its .dlls, presses Transcribe, and the
+// open setup card was all that happened. Main's `captions:status` is a stub that answers from a flag the test flips AFTER the panel mounted (the engine "placed in the bin folder"); the
+// transcribe is held in main so the start is the call count and the button's "Transcribing…". The control: still missing, the press opens the setup instructions and starts no job.
+// (3) The scan line took the whole shrink of a one-row card ("Scanning strea…" at the default window): the line has a row above the bar's, and the bar is a usable width.
+test.describe('T-169 Track A: Transcribe re-checks the captions files; the scan line has its own row', () => {
+  /** `captions:status` answers from `__t169.ready`; `captions:transcribe` counts its calls and holds until released. */
+  async function stubCaptions(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      const g = globalThis as unknown as { __t169: { ready: boolean; statusCalls: number; transcribeCalls: number; release: () => void } }
+      let release: () => void = () => undefined
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      g.__t169 = { ready: false, statusCalls: 0, transcribeCalls: 0, release }
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => {
+        g.__t169.statusCalls += 1
+        const ready = g.__t169.ready
+        return { exeInstalled: ready, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready }
+      })
+      ipcMain.removeHandler('captions:transcribe')
+      ipcMain.handle('captions:transcribe', async (_e, req: { jobId: string }) => {
+        g.__t169.transcribeCalls += 1
+        await gate
+        return { jobId: req.jobId, srtPath: null, segments: [], durationMs: 5 }
+      })
+    })
+  }
+  const counters = (app: ElectronApplication): Promise<{ statusCalls: number; transcribeCalls: number }> =>
+    app.evaluate(() => (globalThis as unknown as { __t169: { statusCalls: number; transcribeCalls: number } }).__t169)
+
+  test('(1) the engine placed after the panel mounted: one press of Transcribe starts the transcribe, one job, and the setup card goes', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t169transcribe', clipSrc)
+    try {
+      await stubCaptions(app)
+      const card = captionsCard(window)
+      // The panel mounted before the stub, on the real (empty) install: its cached status is "not ready", which is what the model download's refresh leaves.
+      await expect(card.getByText('Captions need setup')).toBeVisible({ timeout: 15_000 })
+      // The engine is copied into the bin folder (nothing in the panel is told) and ONE press starts the transcribe.
+      await app.evaluate(() => {
+        ;(globalThis as unknown as { __t169: { ready: boolean } }).__t169.ready = true
+      })
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(card.getByRole('button', { name: 'Transcribing…' }), 'one press started the job').toBeVisible({ timeout: 15_000 })
+      await expect.poll(async () => (await counters(app)).transcribeCalls).toBe(1)
+      await expect(card.getByText('Captions need setup'), 'and the fresh answer cleared the setup card').toHaveCount(0)
+      await app.evaluate(() => (globalThis as unknown as { __t169: { release: () => void } }).__t169.release())
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }).or(card.getByRole('button', { name: 'Re-transcribe', exact: true }))).toBeEnabled({ timeout: 15_000 })
+      expect((await counters(app)).transcribeCalls, 'one press, one job').toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(1) control: the files still missing at the press, Transcribe shows the setup instructions and starts no job', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t169missing', clipSrc)
+    try {
+      await stubCaptions(app)
+      const card = captionsCard(window)
+      await expect(card.getByText('Captions need setup')).toBeVisible({ timeout: 15_000 })
+      await expect(card.getByRole('button', { name: 'Show setup instructions' })).toBeVisible()
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(card.getByRole('button', { name: 'Hide setup instructions' }), 'the setup instructions are open').toBeVisible()
+      await window.waitForTimeout(500)
+      expect((await counters(app)).transcribeCalls, 'no job started').toBe(0)
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }), 'the button did not go to Transcribing').toBeEnabled()
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(1) the video closed while main is still answering the status: the press is dropped, no job starts for the video that is gone', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t169closed', clipSrc)
+    try {
+      await stubCaptions(app)
+      const card = captionsCard(window)
+      await expect(card.getByText('Captions need setup')).toBeVisible({ timeout: 15_000 })
+      // Hold the status: the next answer is "ready", but only when the test says.
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as { __t169: { ready: boolean }; __t169status: () => void }
+        g.__t169.ready = true
+        let release: () => void = () => undefined
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        g.__t169status = release
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', async () => {
+          await gate
+          return { exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }
+        })
+      })
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await app.evaluate(() => (globalThis as unknown as { __t169status: () => void }).__t169status())
+      await window.waitForTimeout(1_000)
+      expect((await counters(app)).transcribeCalls, 'the press was for a video that is gone').toBe(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(1) a DIFFERENT video opened while main is still answering the status: the press is dropped, no job starts for the first video or the second', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t169replaced', clipSrc)
+    try {
+      await stubCaptions(app)
+      const card = captionsCard(window)
+      await expect(card.getByText('Captions need setup')).toBeVisible({ timeout: 15_000 })
+      // Hold the status: the next answer is "ready", but only when the test says.
+      await app.evaluate(({ ipcMain }) => {
+        const g = globalThis as unknown as { __t169status: () => void }
+        let release: () => void = () => undefined
+        const gate = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        g.__t169status = release
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', async () => {
+          await gate
+          return { exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }
+        })
+      })
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      // Video A is replaced by video B (close, then drop: a video is open the whole time the answer is out, and it is not the one the press was for).
+      window.once('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, burstSrc, path.basename(burstSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      await app.evaluate(() => (globalThis as unknown as { __t169status: () => void }).__t169status())
+      await window.waitForTimeout(1_000)
+      expect((await counters(app)).transcribeCalls, 'the press was for the first video, which is gone').toBe(0)
+      await expect(captionsCard(window).getByRole('button', { name: 'Transcribing…' }), 'no job on the second video either').toHaveCount(0)
+      await expect(window.locator('header').getByText(path.basename(clipSrc), { exact: true }), 'and the first video is not named anywhere in the header').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(3) a scan of stream.mp4 at the default window: the line is whole, on a row above the bar, and the bar is at least 120 px', async () => {
+    test.setTimeout(240_000)
+    const named = path.join(root, 'source', 'stream.mp4')
+    copyFileSync(clipSrc, named)
+    const { app, window } = await launchWithVideo('t169line', named)
+    try {
+      const g = (): Promise<void> =>
+        app.evaluate(({ ipcMain }) => {
+          const gl = globalThis as unknown as { __scanRelease169: () => void }
+          let release: () => void = () => undefined
+          const gate = new Promise<void>((resolve) => {
+            release = resolve
+          })
+          gl.__scanRelease169 = release
+          ipcMain.removeHandler('video:findHighlights')
+          ipcMain.handle('video:findHighlights', async () => {
+            await gate
+            return []
+          })
+        })
+      await g()
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      const line = highlightCard(window).getByText('Scanning stream.mp4 for highlights', { exact: true })
+      await expect(line).toBeVisible()
+      const bar = highlightCard(window).getByRole('progressbar')
+      await expect(bar).toBeVisible()
+      const m = await line.evaluate((el) => ({ scrollWidth: el.scrollWidth, clientWidth: el.clientWidth, bottom: el.getBoundingClientRect().bottom }))
+      const barBox = await bar.evaluate((el) => {
+        const r = el.getBoundingClientRect()
+        return { top: r.top, w: r.width }
+      })
+      expect(m.scrollWidth, 'the whole name is on screen, not "Scanning strea…"').toBeLessThanOrEqual(m.clientWidth)
+      expect(m.bottom, 'the line is above the bar').toBeLessThanOrEqual(barBox.top)
+      expect(barBox.w, 'the bar is a usable width').toBeGreaterThanOrEqual(120)
+      await app.evaluate(() => (globalThis as unknown as { __scanRelease169: () => void }).__scanRelease169())
+      await expect(line).toHaveCount(0, { timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
     }
   })
 })

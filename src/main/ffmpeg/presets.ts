@@ -64,7 +64,7 @@ export const PLATFORM_PRESETS: Record<PlatformId, PlatformPreset> = {
     audioCodec: 'aac',
     pixFmt: 'yuv420p',
     // Round 18: synced with the renderer's PLATFORM_INFO — the round-15
-    // duration updates (Reels 3 min, TikTok 60 min, X Premium 3 h) only
+    // duration updates (Reels 3 min, TikTok 60 min, X Premium 4 h) only
     // landed in the renderer copy of this table. A cross-table test now
     // pins the two against each other (presetTablesInSync.test.ts).
     // T-112: 20 minutes is what Reels takes; 3 is where Instagram stops

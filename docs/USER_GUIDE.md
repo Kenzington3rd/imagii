@@ -326,8 +326,8 @@ that names the file being converted.)
   stops, so a loud sign-off before a muted stretch is not stretched across the
   silence. A scan that finds nothing says **No standout moments found in this video**
   and leaves the line **No standout moments found in this video.** in the panel (the
-  toast fades; the line stays until you scan again or open another video). A line before the bar names the video it is
-  scanning (**Scanning stream.mp4 for highlights**; a long name is cut and its tooltip holds the whole of it), so on another
+  toast fades; the line stays until you scan again or open another video). A line above the bar names the video it is
+  scanning (**Scanning stream.mp4 for highlights**; a name longer than the panel is cut and its tooltip holds the whole of it), so on another
   video it reads as that video's scan. A scan that ends after you
   closed its video or opened another says so for about 8 seconds (**The scan of stream.mp4 finished after that video was closed or replaced, so
   its highlights weren't added. Scan again when you're ready.**) and adds nothing to the video that is open.
@@ -479,6 +479,9 @@ steps are one-time:
    path the panel shows. The **Show models folder** button opens that folder, and
    imagii makes the folder first if it is not there yet.
 
+If you copy the engine in while the card is open, **Transcribe** checks for the files again when you press it and starts, so you
+do not need **Refresh status** first (only a check that still finds a file missing leaves you on the card).
+
 Once both are in place the setup card goes away, and **Captions setup** stays under
 the panel, closed until you open it: it shows the same two folders and the same
 **Open folder** and **Show models folder** buttons. It says what is true of the files
@@ -577,7 +580,7 @@ never called loaded.
     as MP3 is folded the way a player does, at the same level. Whatever you switch on or cut out, peaks above −1 dBFS
     are limited when you export, so a boost cannot clip; an export with nothing
     switched on and nothing cut keeps the file's levels as they are. If your cuts take out
-    everything, **Export** says "Everything is cut out. Click a mark to put a part back." and
+    everything, **Export** says "Everything is cut out. Click a chip under the waveform to put a part back." and
     writes nothing.
   - **Cleanup presets** — **Save current** keeps your cleanup settings (noise,
     levels and voice treatments) under a name, so you can apply or remove them
@@ -609,8 +612,9 @@ never called loaded.
   open, imagii asks again ("Replace the audio you're editing?") before it replaces your
   work, and **Cancel** keeps it.
 - Drag across the waveform to mark a part to remove. It comes out when you
-  export; click a mark to put it back. `Ctrl+Z` / `Ctrl+Y` step back and
-  forward through the cleanup chain. One drag of a slider is one step, and so is a
+  export; the part's chip under the waveform puts it back (click it). `Ctrl+Z` / `Ctrl+Y` step back and
+  forward through the cleanup chain. A click on a setting that is already chosen (**Off** under **Quieter background**, say)
+  changes nothing, so it adds no step and **Redo** stays. One drag of a slider is one step, and so is a
   run of arrow keys on one slider, so one `Ctrl+Z` puts the slider back where it
   was before you took hold of it.
 - **Export** to MP3, WAV, FLAC, or AAC. AAC is saved as an `.m4a` file. From a
@@ -742,16 +746,17 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
 - **Reference Search** — search images. SafeSearch is always on (strict):
   DuckDuckGo does the filtering, and imagii doesn't scan images itself. Reference
   Search is one of the two features that go online; the other is the one-time
-  caption model download. Press **Enter** or click **Search**; pressing it again with the same
+  caption model download. Press **Enter** or click **Search**; holding **Enter** sends one search, not one per repeat; pressing it again with the same
   words while that search is running does nothing, so a second press never sends a second request.
   Change the words and press Enter or click **Search** and the new search goes out at once; its results are the ones you
   see, even if the first search answers later. The box always says which search the results on screen
   are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
-  mood board you have selected; the notice names the board. A picture that is already on that board is not
+  mood board you have selected (a line above the results says so); the notice names the board. A picture that is already on that board is not
   added twice: the notice says **Already on "the board"** and there is nothing new to undo. A double-click on **Save**
   saves once, with one notice, and one **Undo** takes it back. If a picture's thumbnail will not download (the site is not answering, within 10 seconds, or the file is over 8 MB), it is still saved, and its tile draws the picture from where it came from. If you have no board yet, imagii asks you to
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
-- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Delete** asks first, and the question says **Ctrl+Z**
+- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Rename** with the name the board already has
+  (or with nothing new) changes nothing and adds no **Undo** step. **Delete** asks first, and the question says **Ctrl+Z**
   brings the board back; so does the notice that follows, which stays on screen for 8 seconds. Hover an item and click **→ Canvas**
   to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer
   carries its own copy of the picture, so it stays on the canvas after **Clear thumbnail

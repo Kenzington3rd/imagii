@@ -9774,7 +9774,7 @@ describe('a chain that cuts everything is refused before ffmpeg runs, not export
   // hundred bytes of AAC / MP3 framing around silence. `exportAudio` computed `writtenSeconds` and never checked it, so "Cleaned audio exported" was
   // said over nothing (the video exports got their empty-output guard in T-131 / T-132). The guard asks the kept length BEFORE the first child: a
   // chain that leaves under 0.05 s refuses in a sentence, writes nothing, and spawns nothing. Run on both majors (bundled 7.0.2; 6.1.1 through the alias config).
-  const EVERYTHING_CUT = 'Everything is cut out. Click a mark to put a part back.'
+  const EVERYTHING_CUT = 'Everything is cut out. Click a chip under the waveform to put a part back.'
   const ALL_CUT: ChainSpec['cutRegions'] = [{ startSec: 0, endSec: 8 }]
   const chainOf = (cutRegions: ChainSpec['cutRegions'], extra: Partial<ChainSpec> = {}): ChainSpec => ({ ...DEFAULT_CHAIN_SPEC, ...extra, cutRegions })
   const specFor = (out: string, jobId: string, chain: ChainSpec, format: AudioExportSpec['format'] = 'wav'): AudioExportSpec => ({

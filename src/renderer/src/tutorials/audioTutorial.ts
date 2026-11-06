@@ -22,7 +22,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'waveform',
       title: 'The waveform',
-      body: 'Drag across the waveform to mark a part to remove. It comes out when you export; click a mark to put it back.',
+      body: 'Drag across the waveform to mark a part to remove. It comes out when you export; click its chip under the waveform to put it back.',
       targetSelector: '[data-tutorial="audio-waveform"]',
       placement: 'bottom'
     },

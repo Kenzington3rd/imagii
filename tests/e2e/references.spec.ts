@@ -3641,3 +3641,162 @@ test.describe('T-167 (5): the keyboard opens the context menu at the field', () 
     }
   })
 })
+
+// ── T-169: an edit that changes nothing is not an edit; a held Enter is one search; the grid says how to Save ────────────────────────────────
+test.describe('T-169: References', () => {
+  const HOVER_HINT = 'Hover a picture and click Save to add it to a mood board.'
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  /** `search:images` answered in MAIN: counts every call, answers `nothing` with no results and anything else with one data: picture. */
+  async function stubCountingSearch(app: ElectronApplication): Promise<() => Promise<string[]>> {
+    await app.evaluate(async ({ ipcMain }, pixel) => {
+      const g = globalThis as unknown as { __t169Calls: string[] }
+      g.__t169Calls = []
+      ipcMain.removeHandler('search:images')
+      ipcMain.handle('search:images', (_e, query: unknown) => {
+        g.__t169Calls.push(String(query))
+        return {
+          query: String(query),
+          provider: 'duckduckgo',
+          results: query === 'nothing' ? [] : [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'local', title: `answer to ${String(query)}` }]
+        }
+      })
+    }, PIXEL)
+    return () => app.evaluate(() => (globalThis as unknown as { __t169Calls: string[] }).__t169Calls)
+  }
+
+  test('Mood Boards: renaming a board to the name it has records nothing, closes the dialog, and keeps Redo (the same name, padded, too)', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t169-rename')
+    writeFileSync(
+      path.join(fx.boardsDir, 'renameboard.json'),
+      JSON.stringify({ id: 'renameboard', name: 'Original name', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const detailTitle = window.locator('h3.text-lg')
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      const redo = window.getByRole('button', { name: 'Redo', exact: true })
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(undo).toBeDisabled()
+
+      // The dialog is pre-filled: Enter without typing is the same name.
+      await openRename.click()
+      await expect(field).toHaveValue('Original name')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(undo, 'the same name is not an edit: nothing to undo').toBeDisabled()
+
+      // One real rename and an Undo, so Redo is held ...
+      await openRename.click()
+      await field.fill('Renamed board')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Renamed board')
+      await undo.click()
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(redo).toBeEnabled()
+      await expect(undo).toBeDisabled()
+
+      // ... and the board's own name, with spaces round it, closes the dialog and leaves both as they were.
+      await openRename.click()
+      await field.fill('  Original name  ')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(redo, 'a rename that changed nothing must not empty Redo').toBeEnabled()
+      await expect(undo).toBeDisabled()
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
+
+      // The control: a different name is still a step, and it ends the redo branch.
+      await openRename.click()
+      await field.fill('Another name')
+      await field.press('Enter')
+      await expect(detailTitle).toHaveText('Another name')
+      await expect(undo).toBeEnabled()
+      await expect(redo).toBeDisabled()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('Reference Search: a held Enter after the answer is in sends no second search; two separate presses send two', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t169-held')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      const calls = await stubCountingSearch(app)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+
+      await input.fill('held key')
+      await input.focus()
+      await window.keyboard.down('Enter')
+      await expect(window.locator('img[alt="answer to held key"]')).toBeVisible({ timeout: 10_000 })
+      await expect(window.getByRole('button', { name: 'Search', exact: true })).toBeEnabled()
+      // The key is STILL down: the second keydown is its auto-repeat (`repeat` is set), arriving after the first search has settled.
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(600)
+      expect(await calls(), 'the held key sent one search').toEqual(['held key'])
+
+      // The control, so the case discriminates: separate presses, each after the last settled, are separate searches.
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['held key', 'held key'])
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['held key', 'held key', 'held key'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('Reference Search: the hover hint shows with results and not before a search or after one that found nothing', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t169-hint')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await stubCountingSearch(app)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      const hint = window.getByText(HOVER_HINT, { exact: true })
+
+      await expect(hint, 'before any search').toHaveCount(0)
+      await input.fill('nothing')
+      await input.press('Enter')
+      await expect(window.getByText('No results.')).toBeVisible({ timeout: 10_000 })
+      await expect(hint, 'a search that found nothing has no picture to hover').toHaveCount(0)
+
+      await input.fill('mountains')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="answer to mountains"]')).toBeVisible({ timeout: 10_000 })
+      await expect(hint).toBeVisible()
+      await expect(hint).toHaveClass(/text-ink-dim/)
+
+      // The sentence is true: the picture's Save is revealed by hovering it.
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      const tile = window.locator('div.group', { has: window.locator('img[alt="answer to mountains"]') })
+      const scrim = tile.locator('div.absolute.inset-0')
+      await expect(scrim, 'Save is drawn at opacity 0 until the pointer is over the picture').toHaveCSS('opacity', '0')
+      await tile.hover()
+      await expect(scrim).toHaveCSS('opacity', '1')
+      await expect(save).toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

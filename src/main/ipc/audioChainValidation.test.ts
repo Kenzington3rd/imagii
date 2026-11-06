@@ -321,7 +321,7 @@ describe('the chain gate refuses under NODE_ENV=production too (T-113)', () => {
 // ffmpeg refuses mid-export, after the person had waited through the first pass.
 describe('the chain gate refuses the numbers a cut and the custom noise reduction print (T-120)', () => {
   const CUT_SENTENCE =
-    "One of the cuts has a start or end imagii can't use. Click its mark to put it back, then cut that part again."
+    "One of the cuts has a start or end imagii can't use. Click its chip under the waveform to put it back, then cut that part again."
   const DENOISE_SENTENCE =
     "The custom noise reduction has a setting imagii can't use — move its Noise floor and Reduction sliders, then try again."
 

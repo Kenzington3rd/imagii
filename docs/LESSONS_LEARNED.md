@@ -14,6 +14,48 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-06 - T-169 (round 118), Track A: Transcribe re-reads whether the captions files are there, and the scan's name has a row of its own
+
+The fifty-fifth sweep, Track A (items 1 and 3; item 2 is Track B's).
+
+### (1) [LOW] - Transcribe tested the status it had cached, and a stale "not ready" did nothing visible
+
+- **Bug.** The model download ends (its refresh still says the engine is missing), the person copies `whisper-cli.exe` and its `.dll` files into the folder the card shows, presses Transcribe - and nothing visible happens: the setup card was already open.
+- **Root cause.** `transcribe()` read the cached `status?.ready`. The status is re-read on mount, after a download and by "Refresh status", and nothing says to press that after copying the engine; the button that was pressed trusted an answer that was only as new as the last read.
+- **Fix.** When the cached status is not ready (or has not answered), `transcribe()` asks `captions.status()`, stores it as `refreshStatus` does, and goes on when it is ready; only a fresh not-ready opens the setup. A video closed or replaced while main answered drops the press. The `begin()` claim after it still makes a double press one job.
+- **Test.** video-pipelines.spec.ts "T-169 Track A" (1): the status stub flipped to ready after mount, one press, "Transcribing…", one call to main's transcribe, the setup card gone; the control (still missing) shows the instructions and starts nothing. Red on 6b48c62 (no transcribe call).
+- **Lesson.** **A button that gates on a cached fact should ask again before it refuses.** The refusal is the expensive answer (it tells the person to go and do something); a refresh costs a call. Cache for the display, re-read for the decision.
+
+### (3) [LOW-MED] - The scan line was cut to "Scanning strea..." for the guide's own example
+
+- **Bug.** T-168 (2)'s line, the `w-10` percent, Cancel and a `flex-1 min-w-[3rem]` bar shared one row of a ~276 px card, so the name took all the shrink: 105 px at the default window, "Scanning strea..." for the name USER_GUIDE quotes.
+- **Root cause.** T-168 (2) tested a name that does not fit and a bar that stays 40 px, and called that done; it never measured the guide's short example name, which also did not fit once three other items shared its row.
+- **Fix.** Two rows: the `block min-w-0 truncate` line with its title, then the row of the bar (default `flex-1`, the `min-w-[3rem]` dropped), the percent and Cancel.
+- **Test.** "T-169 Track A" (3): `stream.mp4` at the default window, the line whole (`scrollWidth <= clientWidth`), above the bar, the bar 120 px or wider; the T-168 long-name case updated in place. Red on 6b48c62 (the line 202 px against a 105 px box).
+- **Lesson.** **Measure the example the guide gives, not only the stress case.** A truncation test with a 70-character name proves the ellipsis works; it says nothing about whether the sentence a person is promised fits.
+
+## 2026-11-06 - T-169 (round 118), Track B: an edit that changes nothing is not an edit in Audio and References, and the Audio and References words match the screen
+
+The fifty-fifth sweep, Track B (item 2 and four folds; Track A has items 1 and 3).
+
+### (2) [LOW] - Audio Studio and References recorded an undo step for an edit that changed nothing, and wiped Redo
+
+- **Bug.** A click on the already-pressed "Off" under Quieter background or in the Compressor presets, or a preset or Fix wizard Apply that set what was already set, lit Undo with a step that changed nothing and emptied Redo. In References, Rename confirmed with the pre-filled name (Enter without typing) did the same, after an IPC to main.
+- **Root cause.** The class T-166 (3) fixed in `videoStore` and T-167 (2) in `canvasStore`: a writer that pushes history without asking whether anything changed. `audioStore.patchChain` snapshotted for any key, and `referencesStore.renameCollection` pushed after the write whatever the name was.
+- **Fix.** `patchChain` returns, before the history and the coalescing key, when every field the patch names has the same value as the chain's: `Object.is` for flags and numbers, a structural compare (a local twin of canvasStore's `sameValue`, which handles lists only, with plain objects added) for `denoiseParams`, `cutRegions` and `secondaryTrack`, and the chain's own meanings for the two optional fields (`secondaryTrack` absent is `null`, as every reader tests `!= null`; `humHz` absent is 60). `renameCollection` returns, inside its turn on the chain, when the trimmed name is empty or equals the board's name as it is when that turn starts; the panel's dialog closes as before (`onRename` awaits the store and then closes). The other writers: `addCutRegion` and `removeCutRegion` always change the list; `setSecondaryTrack` is left as it is: the panel reaches it from the role buttons (drawn only with no track), Remove (only with one) and a checkbox or range whose `onChange` fires on a change, so each call is a real change today (found, not changed; the guard belongs there if a control that can repeat a value is ever added).
+- **Test.** audioStore.test.ts and referencesStore.test.ts "T-169 (2)"; audio.spec.ts "T-169 (2)"; references.spec.ts "T-169: References". Red on 6b48c62.
+- **Lesson.** **Grep a class, not a symptom, and do it for every store.** T-166 and T-167 each fixed the store they were in and named the hole; the two stores they did not reach had it. A writer that records history takes the guard, and a rename-shaped writer takes it before it spends an IPC.
+
+### Folds (not counted)
+
+- **Reference Search never said how to Save.** Save appears on hover and focus; nothing on the page said so. A line above the results: "Hover a picture and click Save to add it to a mood board." (only with results).
+- **A held Enter in the search box re-sent the query that had just settled.** T-133 (8) stopped a second request while one was out; once the answer was in, each auto-repeat started another. The input takes the held-key rule (`!e.repeat`) the buttons already have.
+- **"Click a mark to put it back" told the person to click a pointer-transparent shading.** T-121 took the chip to be a mark; T-61 made the shading pointer-transparent. The hint, the tour, the shortcut overlay and both refusals now name the chip, and BRANDING's "mark" row says the shading is what a cut looks like and the chip is the control. Every pin moved in place, the Layer 5 sentence included.
+- **presets.ts said X Premium 3 h** in a round-18 comment beside a value that is 4 h.
+- **Lesson.** **Copy names the control, not the picture of it.** A word that means two things (the shading and its chip) is fine until one of them stops taking clicks; the next change to what a control is should grep the words that name it.
+
+---
+
 ## 2026-11-06 - T-168 (round 117), Track A: the late scan's toast stays, the scan names its file on screen, a click on a crop handle stores nothing, and an unreadable chat log says so
 
 The fifty-fourth sweep, Track A (items 1-3 and 5; item 4 and the tour double-click are Track B's).

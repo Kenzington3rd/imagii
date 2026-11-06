@@ -1643,15 +1643,19 @@ describe('T-121 — the round-71 fixes are wired where the person reaches them',
     expect(handler).not.toMatch(/\bcurrentTime\b/)
   })
 
-  it('a cut is a "mark" in the overlay row, the refusal, the waveform hint and the tutorial: one name per concept (8)', () => {
+  it('a cut is a "mark" and its CHIP is the control that puts it back: the overlay row, both refusals, the waveform hint and the tutorial all name the chip (8; T-169)', () => {
     const overlay = read('components/HotkeyOverlay.tsx')
-    expect(overlay).toMatch(/keys: 'Click a mark', description: 'Put a cut back'/)
+    expect(overlay).toMatch(/keys: "Click a cut's chip", description: 'Put a cut back'/)
     expect(overlay).not.toMatch(/cut tag/i)
+    expect(overlay).not.toMatch(/Click a mark/)
     const refusal = readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/audio.ts'), 'utf8')
-    expect(refusal).toMatch(/Click its mark to put it back, then cut that part again\./)
-    expect(refusal).not.toMatch(/Click its tag/)
-    expect(read('modules/audio-studio/WaveformView.tsx')).toMatch(/Click a mark to put it back\./)
-    expect(read('tutorials/audioTutorial.ts')).toMatch(/click a mark to put it back/)
+    expect(refusal).toMatch(/Click its chip under the waveform to put it back, then cut that part again\./)
+    expect(refusal).not.toMatch(/Click its (tag|mark)/)
+    expect(read('modules/audio-studio/WaveformView.tsx')).toMatch(/Click its chip below to put it back\./)
+    expect(read('tutorials/audioTutorial.ts')).toMatch(/click its chip under the waveform to put it back/)
+    // The shading is pointer-transparent (T-61): nothing may tell the person to click it.
+    expect(read('modules/audio-studio/WaveformView.tsx')).not.toMatch(/Click a mark/)
+    expect(read('tutorials/audioTutorial.ts')).not.toMatch(/click a mark/)
   })
 })
 

@@ -30,7 +30,7 @@ export const SHORTCUTS_BY_ROUTE: Record<string, Shortcut[]> = {
   ],
   '/audio': [
     { keys: 'Drag on waveform', description: 'Mark region to cut' },
-    { keys: 'Click a mark', description: 'Put a cut back' },
+    { keys: "Click a cut's chip", description: 'Put a cut back' },
     { keys: 'Ctrl+Z / Ctrl+Y', description: 'Undo / redo cleanup chain' },
     { keys: '?', description: 'Toggle this overlay' }
   ],

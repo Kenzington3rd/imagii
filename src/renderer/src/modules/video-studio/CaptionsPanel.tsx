@@ -145,8 +145,17 @@ export function CaptionsPanel(): JSX.Element | null {
   async function transcribe(): Promise<void> {
     if (!source || noSound) return
     if (!status?.ready) {
-      setShowSetup(true)
-      return
+      // T-169 (1): the cached answer is only as new as the last read (mount, a model download's end, "Refresh status"). The path the card itself invites: the model downloads while the
+      // person fetches the engine, the download ends with "engine missing", the engine and its .dll files are copied in, Transcribe is pressed - and the stale answer showed an already-open
+      // card. Ask main again; only a fresh "not ready" opens the setup. The begin() claim below still makes a double press one job.
+      const pressedFor = source.filePath
+      const fresh = await window.api.captions.status()
+      useCaptionsStatus.setState({ status: fresh })
+      if (useVideoStore.getState().source?.filePath !== pressedFor) return // closed or replaced while main answered: the press was for that video
+      if (!fresh.ready) {
+        setShowSetup(true)
+        return
+      }
     }
     // T-112: the video this job is FOR. It takes minutes and nothing locks the app: close
     // it, drop another, and the result arrived to attach itself to whatever was open.

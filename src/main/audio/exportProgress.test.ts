@@ -140,7 +140,7 @@ describe('the audio export\'s progress is over the length of the file it writes 
         },
         (p) => seen.push({ pass: p.pass, percent: p.percent })
       )
-    ).rejects.toThrow('Everything is cut out. Click a mark to put a part back.')
+    ).rejects.toThrow('Everything is cut out. Click a chip under the waveform to put a part back.')
     expect(spawned, 'nothing was spawned').toEqual([])
     expect(seen).toEqual([])
   })
