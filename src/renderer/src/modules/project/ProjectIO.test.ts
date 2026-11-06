@@ -208,6 +208,8 @@ async function seedAllStudios(): Promise<void> {
 
 function wipeAllStudios(): void {
   useVideoStore.getState().clearSource()
+  // T-173 (4): a transcript's path is held for the session so it comes back with its video; a test is a new session.
+  useVideoStore.getState().forgetHeldTranscripts()
   useAudioStore.getState().clearSource()
   useCanvasStore.getState().resetDocument()
 }

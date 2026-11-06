@@ -4583,3 +4583,209 @@ test.describe('T-172 Track B - a source that sends no picture', () => {
     }
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// round 122 Track A (T-173 items 1 and 3): Record lets go of the microphone a failed start opened, and says "No microphone found" only after it looked.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('round 122 Track A - the microphone a failed start opened, and the no-device hints before the first scan', () => {
+  /**
+   * Stubs `getUserMedia`: the MICROPHONE of a take (`audio` is an object: the start's `{ audio: {} }`; the device probe asks `audio: true` and
+   * goes to the real API, which finds none here) is an oscillator's stream; the source named in `frameless` is `canvas.captureStream(0)` (opens,
+   * live track, never a frame) and the other repaints. Every stream handed out is kept in `__held`, so a test can ask which tracks are still live.
+   */
+  async function stubHeldSources(window: Page, frameless: 'camera' | 'screen'): Promise<void> {
+    await window.evaluate((which) => {
+      const w = window as unknown as { __held: MediaStream[] }
+      w.__held = []
+      const md = navigator.mediaDevices
+      const previous = md.getUserMedia.bind(md)
+      const make = (frames: boolean): MediaStream => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 320
+        canvas.height = 240
+        const ctx = canvas.getContext('2d')
+        if (frames) {
+          let n = 0
+          window.setInterval(() => {
+            if (!ctx) return
+            ctx.fillStyle = `hsl(${(n++ * 9) % 360}, 80%, 50%)`
+            ctx.fillRect(0, 0, 320, 240)
+          }, 33)
+        }
+        const s = canvas.captureStream(frames ? 30 : 0)
+        w.__held.push(s)
+        return s
+      }
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        const v = c?.video
+        if (v && typeof v === 'object' && 'mandatory' in v) return make(which !== 'screen') // the screen
+        if (v && typeof v === 'object' && 'deviceId' in v) return make(which !== 'camera') // the camera
+        if (c && typeof c.audio === 'object' && !c.video) {
+          const ctx = new AudioContext()
+          const dest = ctx.createMediaStreamDestination()
+          const osc = ctx.createOscillator()
+          osc.connect(dest)
+          osc.start()
+          w.__held.push(dest.stream)
+          return dest.stream // the microphone of the take, which the stub holds
+        }
+        return previous(c)
+      }
+    }, frameless)
+  }
+
+  const liveTracks = (window: Page, kind: 'audio' | 'video'): Promise<number> =>
+    window.evaluate(
+      (k) =>
+        (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getTracks()).filter((t) => t.kind === k && t.readyState === 'live')
+          .length,
+      kind
+    )
+  const heldTracks = (window: Page, kind: 'audio' | 'video'): Promise<number> =>
+    window.evaluate(
+      (k) => (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getTracks()).filter((t) => t.kind === k).length,
+      kind
+    )
+
+  /** Record with the microphone CHECKED (the default) and the webcam ticked, one frameless source. */
+  async function openRecord(app: ElectronApplication, frameless: 'camera' | 'screen'): Promise<Page> {
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, null)
+    await waitForHome(window)
+    await stubCameras(window)
+    await stubHeldSources(window, frameless)
+    await window.getByRole('link', { name: /Record/ }).first().click()
+    await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+    await installToastLog(window)
+    await expect(window.getByRole('checkbox').nth(0), 'the microphone is checked by default').toBeChecked()
+    await window.getByRole('checkbox').nth(1).check() // include the webcam
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    return window
+  }
+
+  test('a silent screen ends the start with the microphone checked: the microphone the start had opened is ended, not left live (item 1)', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r122a-micscreen')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecord(app, 'screen')
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      const SENTENCE = 'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+      await expect
+        .poll(async () => (await readToastLog(window)).includes(SENTENCE), {
+          timeout: 40_000,
+          intervals: [250],
+          message: 'the start is pending for good: no toast after the limit'
+        })
+        .toBe(true)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled({ timeout: 15_000 })
+      expect(await heldTracks(window, 'audio'), 'the start did open the microphone before the screen ended it').toBe(1)
+      await expect
+        .poll(() => liveTracks(window, 'audio'), { timeout: 10_000, intervals: [200], message: 'the microphone stayed live after the failed start' })
+        .toBe(0)
+      expect(await liveTracks(window, 'video'), 'and the screen and camera are let go too').toBe(0)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: a silent camera records the screen alone with the microphone live while it records, and ended after Stop', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r122a-miscam')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecord(app, 'camera')
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      await expect
+        .poll(async () => (await readToastLog(window)).includes('The camera sent no picture for 10 seconds. Recording screen only.'), {
+          timeout: 40_000,
+          intervals: [250],
+          message: 'the start is pending for good: no toast after the limit'
+        })
+        .toBe(true)
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 15_000 })
+      expect(await liveTracks(window, 'audio'), 'the take is screen-only and keeps its microphone').toBe(1)
+      expect(await liveTracks(window, 'video'), 'only the screen is live').toBe(1)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      await expect.poll(() => liveTracks(window, 'audio'), { timeout: 10_000, intervals: [200], message: 'the microphone stayed live after Stop' }).toBe(0)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('with the device scan still out, neither "No microphone found" nor "No camera found" is drawn; settled with nothing, both are; a later Refresh keeps them (item 3)', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('r122a-heldscan')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      // `enumerateDevices` (the last await of a scan) waits on a gate the test opens; it answers with no devices.
+      await window.evaluate(() => {
+        const w = window as unknown as { __scanGate: { hold: boolean; asked: number; pending: Array<() => void> } }
+        w.__scanGate = { hold: true, asked: 0, pending: [] }
+        navigator.mediaDevices.enumerateDevices = () => {
+          w.__scanGate.asked += 1
+          if (!w.__scanGate.hold) return Promise.resolve([])
+          return new Promise((resolve) => w.__scanGate.pending.push(() => resolve([])))
+        }
+      })
+      const asked = (): Promise<number> => window.evaluate(() => (window as unknown as { __scanGate: { asked: number } }).__scanGate.asked)
+      const release = (): Promise<void> =>
+        window.evaluate(() => {
+          const g = (window as unknown as { __scanGate: { hold: boolean; pending: Array<() => void> } }).__scanGate
+          g.hold = false
+          g.pending.splice(0).forEach((f) => f())
+        })
+      const hold = (): Promise<void> => window.evaluate(() => void ((window as unknown as { __scanGate: { hold: boolean } }).__scanGate.hold = true))
+      const MIC = window.getByText(/^No microphone found\./)
+      const CAM = window.getByText(/^No camera found\./)
+
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await expect.poll(asked, { timeout: 20_000, intervals: [100], message: 'the mount scan never reached enumerateDevices' }).toBe(1)
+      await expect(window.getByRole('checkbox').nth(0)).toBeChecked()
+      await window.getByRole('checkbox').nth(1).check() // the webcam, ticked early
+      await expect(window.getByRole('checkbox').nth(1)).toBeChecked()
+      await window.waitForTimeout(600)
+      await expect(MIC, 'nothing was looked for yet: no microphone claim while the scan is out').toHaveCount(0)
+      await expect(CAM, 'and no camera claim').toHaveCount(0)
+
+      await release()
+      await expect(MIC, 'the scan settled with no microphone: now it is said').toBeVisible({ timeout: 15_000 })
+      await expect(CAM, 'and with no camera').toBeVisible()
+
+      // A later Refresh does not take the answer back: the lists stand until the new ones arrive.
+      await hold()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect.poll(asked, { timeout: 20_000, intervals: [100], message: 'Refresh sources did not rescan' }).toBe(2)
+      await window.waitForTimeout(600)
+      await expect(MIC, 'a rescan out: the answer already given stands').toBeVisible()
+      await expect(CAM).toBeVisible()
+      await release()
+      await expect(MIC).toBeVisible()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

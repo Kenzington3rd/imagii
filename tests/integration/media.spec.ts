@@ -12817,3 +12817,159 @@ describe('a hot master with +12 dB of Manual gain and Even volume (T-167 (z))', 
     expect(Math.abs(lufs - -16), `exported at ${lufs} LUFS`).toBeLessThan(1)
   }, 180_000)
 })
+
+describe('a surround voice keeps its level in a mix (real runAudioExport + ffmpeg, T-173 (2))', () => {
+  // What the ticket measured as "7.6 dB under" is the mix's `aresample=48000,aformat=channel_layouts=stereo` run ALONE into an integer (s16) output, where swresample NORMALISES the matrix (executed on 7.0.2
+  // and on 6.1.1: a 5.1 front-left + right tone at -34.7 dB against -27.1 through the player's matrix). Inside the mix graph that conversion is negotiated to float, because `amix` takes nothing else, and a float
+  // matrix is not normalised: a front, centre or 5.1 tone comes out at the player's level with or without the new fold (executed with every chain stage tried; the gain-mode cases below are green on the
+  // unfixed tree and are the pin that keeps them so). What IS wrong on the unfixed tree is the measuring: Even volume and Match measured the voice on its six channels, where BS.1770 weights a surround
+  // channel +1.5 dB and the fold drops it into the left side at 0.7071, so a voice on a surround channel sat ~4.5 dB off the balance the stereo twin gets (the back-left cases are red on the unfixed tree).
+  // The export now folds a primary of more than two channels by the player's matrix as the first stage of every pass. A 5.1 BED needs no fold of its own: the mix's float conversion is the same matrix, so the bed cases
+  // below are green pins of that (they stay green with any bed fold removed or added).
+  //
+  // The voice and the bed are told apart by frequency, not by level: the voice is a 1 kHz sine (peak -24.08 dBFS before a slight tremolo) on ONE channel set of a 5.1 WAV (front left + right, the centre alone, or the back left alone), the bed
+  // is a 3 kHz sine at -30 dBFS in a stereo WAV, and each is read back through a band filter over 2-8 s of the 10 s output, so loudnorm has settled. The stereo CONTROL is the same voice as the player's matrix makes
+  // it, written as a stereo file (front left + right: the tone on both sides; centre: -3.01 dB on both; back left: -3.01 dB on the left). Mono and stereo primaries are held against the graph they always had, run
+  // straight through ffmpeg here (`LEGACY`), so "unchanged" is measured, not remembered.
+  const HZ_VOICE = 1000
+  const HZ_BED = 3000
+  // A 0.5 Hz tremolo on the voice: loudnorm takes its measured (linear) mode only for a measured LRA above 0, so a steady tone is always rendered dynamic and would never read pass 1 (a mutation that unfolded
+  // pass 1 survived it). The depth is small (LRA 0.2) and the same signal is the twin's, so the band reading is unchanged.
+  const VOICE = `sine=frequency=${HZ_VOICE}:sample_rate=48000:duration=10,tremolo=f=0.5:d=0.5,volume=-6dB`
+  const BED = `sine=frequency=${HZ_BED}:sample_rate=48000:duration=10,volume=-12dB`
+  const MINUS_3 = -3.0103
+  let dir = ''
+  const f: Record<string, string> = {}
+
+  const make = async (name: string, filter: string, src = VOICE): Promise<string> => {
+    const file = path.join(dir, `${name}.wav`)
+    await ff(['-y', '-f', 'lavfi', '-i', src, '-af', filter, '-c:a', 'pcm_s16le', file])
+    return file
+  }
+  // Read as raw 48 kHz stereo s16 (the header is 39 samples, long before the window), not through the WAV demuxer: a WAV whose first sample is -1 (a mix that starts at silence rounds to it) begins with
+  // FF FF FF FF, which the WAV demuxer in 7.0.2 mistakes for an MPEG frame header and decodes as MP1 (executed: -0.8 dB for a file whose samples are at -28 dB). Every file read here is stereo.
+  const level = async (file: string, hz: number): Promise<number> => {
+    const { stderr } = await ff([
+      '-hide_banner', '-f', 's16le', '-ar', '48000', '-ac', '2', '-ss', '2', '-t', '6', '-i', file,
+      '-af', `bandpass=f=${hz}:width_type=q:w=5,volumedetect`, '-f', 'null', '-'
+    ])
+    const m = stderr.match(/mean_volume:\s*(-?[\d.]+)\s*dB/)
+    if (!m) throw new Error('no volumedetect output')
+    return Number(m[1])
+  }
+  let jobSeq = 0
+  const mix = async (voice: string, bed: string, chain: Partial<ChainSpec> = {}, track: Record<string, unknown> = {}): Promise<string> => {
+    const spec: AudioExportSpec = {
+      jobId: `t173-2-${jobSeq++}`,
+      sourcePath: voice,
+      outputPath: path.join(dir, `mix-${jobSeq}.wav`),
+      chain: {
+        ...DEFAULT_CHAIN_SPEC,
+        ...chain,
+        secondaryTrack: { filePath: bed, fileName: path.basename(bed), role: 'music', gainDb: 0, duckUnderPrimary: false, ...track } as ChainSpec['secondaryTrack']
+      },
+      format: 'wav'
+    }
+    return (await runAudioExport(spec, () => {})).outputPath
+  }
+  /** The mix graph as it stood before this change, run directly: a mono or stereo primary over a stereo or mono bed. */
+  const LEGACY =
+    '[0:a]anull,aresample=48000,aformat=channel_layouts=stereo[primary];[1:a]aresample=48000,aformat=channel_layouts=stereo,volume=0dB[secondary];' +
+    "[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1':normalize=0[premix];[premix]alimiter=limit=0.891:level=disabled[mix]"
+  const legacy = async (voice: string, bed: string, name: string): Promise<string> => {
+    const out = path.join(dir, `legacy-${name}.wav`)
+    await ff(['-y', '-i', voice, '-i', bed, '-vn', '-filter_complex', LEGACY, '-map', '[mix]', '-c:a', 'pcm_s16le', '-ar', '48000', out])
+    return out
+  }
+
+  /** The voices: the 5.1 file, and the stereo file the player's matrix would make of it. */
+  const CASES = [
+    { name: 'front left + right', key: 'fl', surround: 'pan=5.1|c0=c0|c1=c0', control: 'pan=stereo|c0=c0|c1=c0' },
+    { name: 'centre', key: 'fc', surround: 'pan=5.1|c2=c0', control: `pan=stereo|c0=c0|c1=c0,volume=${MINUS_3}dB` },
+    // A surround channel is what tells a six-channel measure from the stereo one: BS.1770 weights it +1.5 dB, the fold drops it into the left side at 0.7071.
+    { name: 'back left', key: 'bl', surround: 'pan=5.1|c4=c0', control: `pan=stereo|c0=c0|c1=0*c0,volume=${MINUS_3}dB` }
+  ] as const
+
+  beforeAll(async () => {
+    dir = path.join(workDir, 't173-2')
+    await mkdir(dir, { recursive: true })
+    for (const c of CASES) {
+      f[`${c.key}51`] = await make(`${c.key}-51`, c.surround)
+      f[`${c.key}st`] = await make(`${c.key}-st`, c.control)
+    }
+    f.mono = await make('mono', 'pan=mono|c0=c0')
+    f.stereo = await make('stereo', 'pan=stereo|c0=c0|c1=c0')
+    f.bedSt = await make('bed-st', 'pan=stereo|c0=c0|c1=c0', BED)
+    f.bedMono = await make('bed-mono', 'pan=mono|c0=c0', BED)
+    f.bedFl51 = await make('bed-fl-51', 'pan=5.1|c0=c0|c1=c0', BED)
+    f.bedFc51 = await make('bed-fc-51', 'pan=5.1|c2=c0', BED)
+    f.bedFcSt = await make('bed-fc-st', `pan=stereo|c0=c0|c1=c0,volume=${MINUS_3}dB`, BED)
+  }, 120_000)
+
+  it('the fixtures are what they say: six channels for the 5.1 files, and the stereo controls sit where the player\'s matrix puts them', async () => {
+    for (const k of ['fl51', 'fc51', 'bedFl51', 'bedFc51']) expect(await probeAudioChannels(f[k] as string), k).toBe(6)
+    for (const k of ['flst', 'fcst', 'stereo', 'bedSt']) expect(await probeAudioChannels(f[k] as string), k).toBe(2)
+    // The control for the centre voice is 3.01 dB under the front-left one.
+    near((await level(f.flst as string, HZ_VOICE)) - (await level(f.fcst as string, HZ_VOICE)), 3.01, 0.15, 'the centre control against the front one (dB)')
+  }, 120_000)
+
+  describe.each(CASES)('$name voice', ({ key }) => {
+    const MODES: Array<[string, Partial<ChainSpec>, Record<string, unknown>]> = [
+      ['Even volume on, Match on', { loudnorm: true, loudnormTargetLufs: -16 }, { matchLoudness: true }],
+      ['Even volume off, Match on (the voice is the reference)', {}, { matchLoudness: true }],
+      ['Even volume on, Match off', { loudnorm: true, loudnormTargetLufs: -16 }, {}]
+    ]
+
+    it('gain mode (no Even volume, no Match): the voice\'s level is the stereo voice\'s, within 0.5 dB; the bed is where it was', async () => {
+      const got = await mix(f[`${key}51`] as string, f.bedSt as string)
+      const want = await mix(f[`${key}st`] as string, f.bedSt as string)
+      const v = await level(got, HZ_VOICE)
+      const w = await level(want, HZ_VOICE)
+      expect(Math.abs(v - w), `the 5.1 voice reads ${v} dB in the mix, the stereo one ${w} `).toBeLessThanOrEqual(0.5)
+      near(await level(got, HZ_BED), await level(want, HZ_BED), 0.3, 'the bed beside it (dB)')
+    }, 180_000)
+
+    it.each(MODES)('%s: the voice-to-bed balance matches the stereo voice\'s, within 1 dB', async (_label, chain, track) => {
+      const balance = async (voice: string): Promise<number> => {
+        const out = await mix(voice, f.bedSt as string, chain, track)
+        return (await level(out, HZ_VOICE)) - (await level(out, HZ_BED))
+      }
+      const got = await balance(f[`${key}51`] as string)
+      const want = await balance(f[`${key}st`] as string)
+      expect(Math.abs(got - want), `voice minus bed: ${got} dB for the 5.1 voice, ${want} for the stereo one`).toBeLessThanOrEqual(1)
+    }, 300_000)
+  })
+
+  describe.each([
+    { name: 'front left + right', bed51: 'bedFl51', bedSt: 'bedSt' },
+    { name: 'centre', bed51: 'bedFc51', bedSt: 'bedFcSt' }
+  ])('a 5.1 bed ($name) under a stereo voice', ({ bed51, bedSt }) => {
+    it('the bed is folded by the mix\'s own float conversion and needs no fold of its own: its level is the stereo bed\'s, within 0.5 dB; the voice is where it was (green on the unfixed tree)', async () => {
+      const got = await mix(f.stereo as string, f[bed51] as string)
+      const want = await mix(f.stereo as string, f[bedSt] as string)
+      const b = await level(got, HZ_BED)
+      const w = await level(want, HZ_BED)
+      expect(Math.abs(b - w), `the 5.1 bed reads ${b} dB in the mix, the stereo one ${w} `).toBeLessThanOrEqual(0.5)
+      near(await level(got, HZ_VOICE), await level(want, HZ_VOICE), 0.3, 'the voice above it (dB)')
+    }, 180_000)
+  })
+
+  it('a 5.1 voice over a 5.1 bed: the voice is folded first, the bed by the mix\'s own float conversion; each is at its stereo twin\'s level, within 0.5 dB (the bed half is green on the unfixed tree)', async () => {
+    const got = await mix(f.fl51 as string, f.bedFl51 as string)
+    const want = await mix(f.flst as string, f.bedSt as string)
+    near(await level(got, HZ_VOICE), await level(want, HZ_VOICE), 0.5, 'the voice (dB)')
+    near(await level(got, HZ_BED), await level(want, HZ_BED), 0.5, 'the bed (dB)')
+  }, 180_000)
+
+  it.each([
+    ['a mono primary over a stereo bed', 'mono', 'bedSt'],
+    ['a stereo primary over a stereo bed', 'stereo', 'bedSt'],
+    ['a mono primary over a mono bed', 'mono', 'bedMono'],
+    ['a stereo primary over a mono bed', 'stereo', 'bedMono']
+  ])('control: %s is the mix it always was (the graph it had, run directly, reads the same within 0.05 dB)', async (name, voice, bed) => {
+    const got = await mix(f[voice] as string, f[bed] as string)
+    const was = await legacy(f[voice] as string, f[bed] as string, name.replace(/\W+/g, '-'))
+    near(await level(got, HZ_VOICE), await level(was, HZ_VOICE), 0.05, `${name}: the voice (dB)`)
+    near(await level(got, HZ_BED), await level(was, HZ_BED), 0.05, `${name}: the bed (dB)`)
+  }, 180_000)
+})

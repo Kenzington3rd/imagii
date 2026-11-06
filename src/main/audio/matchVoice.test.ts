@@ -55,7 +55,9 @@ vi.mock('node:child_process', () => ({
   }
 }))
 vi.mock('./probe', () => ({
-  probeAudio: async () => ({ duration: 4, sampleRate: 44100, channels: 1, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 })
+  probeAudio: async () => ({ duration: 4, sampleRate: 44100, channels: 1, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 }),
+  // T-173 (2): a mix asks for both files' channel counts.
+  probeAudioChannels: async () => 2
 }))
 
 const { runAudioExport, cancelAudioJob } = await import('./process')

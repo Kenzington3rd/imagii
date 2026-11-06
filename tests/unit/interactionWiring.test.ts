@@ -4608,7 +4608,7 @@ describe('T-171 Track B - Record and Audio say and show what is so', () => {
     const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
     const start = studio.slice(studio.indexOf('async function startRecording'), studio.indexOf('function watchScreenEnd'))
     expect(start).toMatch(
-      /micStream = await navigator\.mediaDevices\.getUserMedia\(\{ audio: audioConstraint \}\)\.catch\(\(err: unknown\) => \{\s*throw new MicStartFailure\(err\)\s*\}\)\s*if \(leftWhileStarting\(micStream\)\) return/
+      /micStream = await navigator\.mediaDevices\.getUserMedia\(\{ audio: audioConstraint \}\)\.catch\(\(err: unknown\) => \{\s*throw new MicStartFailure\(err\)\s*\}\)\s*micStreamRef\.current = micStream\s*if \(leftWhileStarting\(micStream\)\) return/
     )
     expect(start.match(/new MicStartFailure/g)).toHaveLength(1)
     expect(start).toMatch(/camStream = await navigator\.mediaDevices\.getUserMedia\(\{\s*video:/)
@@ -4707,5 +4707,44 @@ describe('T-172 Track C - the same sound is the same sound (Audio Studio)', () =
     expect(exp).toContain('sourceKey: string | null')
     expect(exp).toContain('set({ job, running: true, sourceKey, sourceName })')
     expect(exp).not.toContain('sourcePath')
+  })
+})
+
+// ═════════ round 122 Track A (T-173 items 1 and 3): Record lets go of its microphone, and claims "no device" only after a scan ═════════
+// E2E: record.spec.ts "round 122 Track A" (a silent screen with the microphone checked ends the microphone's track; the scan held draws neither hint).
+describe('round 122 Track A - Record\'s microphone is owned from the moment it opens, and the no-device hints wait for a scan', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+  const flatStudio = studio.replace(/\s+/g, ' ')
+
+  it('(1) micStreamRef holds the microphone the instant getUserMedia answers, ahead of the "left while starting" check and the camera branch', () => {
+    expect(flatStudio).toContain('const micStreamRef = useRef<MediaStream | null>(null)')
+    expect(flatStudio).toMatch(
+      /micStream = await navigator\.mediaDevices\.getUserMedia\(\{ audio: audioConstraint \}\)\.catch\(\(err: unknown\) => \{ throw new MicStartFailure\(err\) \}\) micStreamRef\.current = micStream if \(leftWhileStarting\(micStream\)\) return/
+    )
+    expect(studio.indexOf('micStreamRef.current = micStream'), 'assigned before the camera branch opens anything').toBeLessThan(studio.indexOf('if (showCam) {'))
+  })
+
+  it('(1) stopAllStreams stops the microphone\'s tracks and clears the ref, beside the camera', () => {
+    const body = /function stopAllStreams\(\): void \{([\s\S]*?)\n  \}\n/.exec(studio)?.[1].replace(/\s+/g, ' ') ?? ''
+    expect(body).toContain('micStreamRef.current?.getTracks().forEach((t) => t.stop()) micStreamRef.current = null')
+    // The unmount cleanup and abandonStart (the one catch) both end in stopAllStreams: one place releases the microphone for every exit path.
+    expect(flatStudio).toMatch(/function abandonStart\(\): void \{ stopAllStreams\(\)/)
+    expect(flatStudio).toMatch(/return \(\) => \{ cancelled = true unmountedRef\.current = true stopAllStreams\(\)/)
+  })
+
+  it('(3) devicesScanned starts false, is set by the NEWEST scan after its lists are written, and is never reset by a later Refresh', () => {
+    expect(flatStudio).toContain('const [devicesScanned, setDevicesScanned] = useState(false)')
+    expect(flatStudio).toMatch(
+      /const next = await scanDevices\(navigator\.mediaDevices\) if \(mine !== deviceScanRef\.current\) return setMics\(next\.mics\) setCams\(next\.cams\) setSelectedMicId\(\(current\) => reconcileDeviceId\(current, next\.mics\)\) setSelectedCamId\(\(current\) => reconcileDeviceId\(current, next\.cams\)\) setDevicesScanned\(true\)/
+    )
+    expect(studio.match(/setDevicesScanned\(/g), 'one writer: true, after the scan').toHaveLength(1)
+    expect(studio).not.toContain('setDevicesScanned(false)')
+  })
+
+  it('(3) both no-device hints carry devicesScanned, with their own condition', () => {
+    expect(flatStudio).toContain('{devicesScanned && includeMic && mics.length === 0 ? (')
+    expect(flatStudio).toContain('{devicesScanned && showCam && cams.length === 0 ? (')
+    expect(flatStudio.match(/noDeviceHint\(/g), 'only the two hints draw it').toHaveLength(2)
   })
 })

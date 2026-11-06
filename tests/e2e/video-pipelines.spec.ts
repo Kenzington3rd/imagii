@@ -15232,3 +15232,125 @@ test.describe('T-172 Track A: a converted import re-opened is the same video; th
     }
   })
 })
+
+// ── T-173 Track C: a transcript comes back with its video ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// Close asks nothing about a transcript because it is not a loss - the guide says "imagii keeps it on disk and reads it back at once" - and nothing read it back: the video opened again was at first-run Transcribe. The video store
+// now keeps each video's transcript by `videoKey` for the session, `loadSource` gives it back to the same video, and Clear transcripts (which deletes the files) empties it. The engine is stubbed as everywhere in this suite; the
+// .srt is a real file in the real captions folder, so the real Clear has something to delete. The .flv case converts for real (a NEW working copy on every open).
+test.describe('T-173 Track C: a transcript comes back with its video', () => {
+  const READY = { exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }
+  const LINE = 'a line the stub heard'
+  const FIRST_RUN = 'Transcribe the source video, then save the text as .srt or burn it into a new MP4.'
+  const preview = (window: Page): Locator => captionsCard(window).getByLabel('Transcript preview')
+
+  /** Home, the stubbed engine (ready; Transcribe answers with a real .srt in the captions folder and counts its calls), Video Studio, `file` opened. */
+  async function launchStubbed(name: string, file: string): Promise<Studio & { calls: () => Promise<number> }> {
+    const studio = await launchHome(name)
+    const captionsDir = path.join(studio.userDataDir, 'captions')
+    mkdirSync(captionsDir, { recursive: true })
+    const srt = path.join(captionsDir, `${name}-1700000000000.srt`)
+    writeFileSync(srt, `1\n00:00:00,000 --> 00:00:01,000\n${LINE}\n`, 'utf8')
+    await studio.app.evaluate(({ ipcMain }, arg) => {
+      const g = globalThis as unknown as { __t173calls: number }
+      g.__t173calls = 0
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => arg.ready)
+      ipcMain.removeHandler('captions:transcribe')
+      ipcMain.handle('captions:transcribe', (_e, req: { jobId: string }) => {
+        g.__t173calls += 1
+        return { jobId: req.jobId, srtPath: arg.srt, segments: [{ startSec: 0, endSec: 1, text: arg.line }], durationMs: 5 }
+      })
+    }, { ready: READY, srt, line: LINE })
+    await gotoVideoStudio(studio.window)
+    await installToastLog(studio.window)
+    await openIt(studio.window, file)
+    return { ...studio, calls: () => studio.app.evaluate(() => (globalThis as unknown as { __t173calls: number }).__t173calls) }
+  }
+  async function openIt(window: Page, file: string): Promise<void> {
+    await dropOnVideoImporter(window, file, path.basename(file))
+    await expect(window.locator('header').getByText(path.basename(file), { exact: true })).toBeVisible({ timeout: 120_000 })
+    await expect(window.locator('video')).toHaveCount(1)
+    await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+  }
+  /** Close an untouched video: no question is asked (a native confirm would be recorded here and fail the case). */
+  async function closeAsksNothing(window: Page): Promise<void> {
+    const asked: string[] = []
+    const onDialog = (d: { message: () => string; accept: () => Promise<void> }): void => {
+      asked.push(d.message())
+      void d.accept()
+    }
+    window.on('dialog', onDialog)
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+    window.off('dialog', onDialog)
+    expect(asked, 'a transcript is not a loss: Close asks nothing').toEqual([])
+  }
+  async function expectFirstRun(window: Page, why: string): Promise<void> {
+    await expect(captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }), `${why}: the header offers Transcribe`).toBeVisible()
+    await expect(captionsCard(window).getByText(FIRST_RUN), `${why}: the first-run hint`).toBeVisible()
+    await expect(captionsCard(window).getByRole('button', { name: 'Save .srt' }), `${why}: no Save .srt`).toHaveCount(0)
+    await expect(preview(window), `${why}: no preview`).toHaveCount(0)
+  }
+  async function expectTranscribed(window: Page, why: string): Promise<void> {
+    await expect(preview(window), `${why}: the preview`).toContainText(LINE, { timeout: 15_000 })
+    await expect(captionsCard(window).getByRole('button', { name: 'Save .srt' }), `${why}: Save .srt`).toBeVisible()
+    await expect(captionsCard(window).getByRole('button', { name: 'Burn into video' }), `${why}: Burn into video`).toBeEnabled()
+    await expect(captionsCard(window).getByRole('button', { name: 'Re-transcribe' }), `${why}: the header says Re-transcribe`).toBeVisible()
+    await expect(captionsCard(window).getByText(FIRST_RUN), `${why}: not the first-run hint`).toHaveCount(0)
+  }
+
+  test('Transcribe, Close, the SAME video opened again: the preview, Save .srt and Burn into video are back without pressing Transcribe; a DIFFERENT video is at first-run; Clear transcripts, then the same video: first-run', async () => {
+    test.setTimeout(300_000)
+    const other = path.join(root, 'source', 't173-other.mp4')
+    copyFileSync(clipSrc, other)
+    const { app, window, calls } = await launchStubbed('t173same', clipSrc)
+    try {
+      await expectFirstRun(window, 'before any run')
+      await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectTranscribed(window, 'after Transcribe')
+      expect(await calls()).toBe(1)
+
+      await closeAsksNothing(window)
+      await openIt(window, clipSrc)
+      await expectTranscribed(window, 'the same video opened again')
+      expect(await calls(), 'and Transcribe was not pressed again').toBe(1)
+
+      // Control: a different video has no transcript of its own; the first one's is still held for when it comes back.
+      await closeAsksNothing(window)
+      await openIt(window, other)
+      await expectFirstRun(window, 'a different video')
+      await closeAsksNothing(window)
+      await openIt(window, clipSrc)
+      await expectTranscribed(window, 'the first video again, after a different one')
+
+      // Clear transcripts, pressed on ANOTHER video (so the cleared one is only in the session's memory): it deletes the file, and the first video is at first-run when it comes back.
+      await closeAsksNothing(window)
+      await openIt(window, other)
+      await expectFirstRun(window, 'the other video, before the clear')
+      await captionsCard(window).getByRole('button', { name: 'Clear saved transcripts' }).click()
+      await window.getByRole('dialog', { name: 'Clear saved transcripts?' }).getByRole('button', { name: 'Clear transcripts' }).click()
+      await expectToast(window, 'Cleared 1 saved transcript')
+      await closeAsksNothing(window)
+      await openIt(window, clipSrc)
+      await expectFirstRun(window, 'the first video after Clear transcripts')
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('an .flv (a converted import: a NEW working copy on every open): Transcribe, Close, the same .flv opened again - the transcript is back', async () => {
+    test.setTimeout(420_000)
+    const { app, window, calls } = await launchStubbed('t173flv', flvSrc)
+    try {
+      await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expectTranscribed(window, 'after Transcribe')
+      await closeAsksNothing(window)
+      await openIt(window, flvSrc)
+      await expectTranscribed(window, 'the same .flv opened again')
+      expect(await calls(), 'and Transcribe was not pressed again').toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})

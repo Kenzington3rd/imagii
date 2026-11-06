@@ -215,11 +215,17 @@ async function exportAudio(
   const chain = buildChain(spec.chain, undefined, dualMono)
   // T-164 (1): an MP3 holds two channels at most, so ffmpeg folds a surround source in the s16 output conversion, where swresample NORMALISES the matrix (a
   // front-left tone 7.8 dB down, a centre one 11 dB). The fold is made here instead, in float, as the player's own matrix (extract.ts's `SURROUND_TO_STEREO_FILTER`),
-  // and is the FIRST stage of both passes, so Even volume measures and targets the stereo file that is written. WAV, FLAC and AAC keep the file's channels. With a
-  // second track the mix folds both sides itself. The channel count is read the way the extract reads it (the most of any stream); a source it cannot read is left
-  // as it was. Whether the chain gets the limiter is decided on the chain below, not on this fold: nothing switched on stays a pass-through.
+  // and is the FIRST stage of both passes, so Even volume measures and targets the stereo file that is written. WAV, FLAC and AAC keep the file's channels.
+  // T-173 (2): a primary needs the same fold with a second track, for any format, and the comment that stood here ("with a second track the mix folds both sides itself") was half right. The mix
+  // forces both inputs to stereo (`aresample=48000,aformat=channel_layouts=stereo`); inside the graph that conversion is negotiated to float (`amix` takes nothing else), where swresample's
+  // matrix is not normalised, so the LEVEL is the player's already (executed on 7.0.2 and 6.1.1: the 7.6 dB loss is that same pair run alone into an s16 output). What the mix did not
+  // do was the MEASURING: Even volume and Match loudness measured the voice on its six channels, where BS.1770 weights a surround channel +1.5 dB and the fold drops it at 0.7071, so a
+  // voice on a surround channel landed ~4.5 dB off the balance its stereo twin gets. So a primary of more than two channels is folded by `SURROUND_TO_STEREO_FILTER` as the first
+  // stage of every pass (the measure pass, Match's voice measure and the render). The second track needs no fold of its own: its conversion is the mix's float one (the same matrix) and
+  // its Match loudnorm measures after that stereo conversion. Mono and stereo inputs get no new stage. The channel count is read the way the extract reads it (the most of any stream);
+  // a file it cannot read is left as it was. Whether the chain gets the limiter is decided on the chain below, not on this fold: nothing switched on stays a pass-through.
   const foldToStereo =
-    spec.format === 'mp3' && !spec.chain.secondaryTrack && ((await run.guard(probeAudioChannels(spec.sourcePath))) ?? 0) > 2
+    (spec.format === 'mp3' || Boolean(spec.chain.secondaryTrack)) && ((await run.guard(probeAudioChannels(spec.sourcePath))) ?? 0) > 2
   const folded = (filter: string): string => (foldToStereo ? `${SURROUND_TO_STEREO_FILTER},${filter}` : filter)
   // T-125 (6): ffmpeg's `out_time` is a position in the file this job WRITES, which is the source less its cuts, so that is the
   // length both bars are measured against (the measure pass is cut-first, like the render).
@@ -255,7 +261,7 @@ async function exportAudio(
   let matchedLufs: number | null = null
   if (spec.chain.secondaryTrack?.matchLoudness === true && !spec.chain.loudnorm) {
     const voiceChain = buildChain({ ...spec.chain, loudnorm: true, loudnormTargetLufs: -16 })
-    const parsed = voiceChain.filterPass1 ? await measure(voiceChain.filterPass1) : null
+    const parsed = voiceChain.filterPass1 ? await measure(folded(voiceChain.filterPass1)) : null
     const lufs = parsed ? Number(parsed.input_i) : Number.NaN
     // loudnorm's `I` is -70..-5; a measurement outside it is clamped. parseLoudnormJson answers null for a non-finite one (a silent voice, "-inf"), which leaves
     // nothing to follow: the music then takes its plain gain, the way it does with Match off, rather than a target made up for it.
@@ -366,7 +372,7 @@ async function exportAudio(
     const postMix = `;[premix]${postMixStages.join(',')}[mix]`
     const amix = `amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1':normalize=0`
     const filterGraph = ducking
-      ? `[0:a]${finalChain.filterPass2},${primaryNormalize},asplit=2[primary][primary_sc];` +
+      ? `[0:a]${folded(finalChain.filterPass2)},${primaryNormalize},asplit=2[primary][primary_sc];` +
         `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
         `[secondary_pre][primary_sc]sidechaincompress=` +
         `threshold=${thresholdLinear.toFixed(4)}:` +
@@ -375,7 +381,7 @@ async function exportAudio(
         `release=${dp.releaseMs}[secondary_ducked];` +
         `[primary][secondary_ducked]${amix}[premix]` +
         postMix
-      : `[0:a]${finalChain.filterPass2},${primaryNormalize}[primary];` +
+      : `[0:a]${folded(finalChain.filterPass2)},${primaryNormalize}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary];` +
         `[primary][secondary]${amix}[premix]` +
         postMix

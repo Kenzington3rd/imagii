@@ -76,7 +76,9 @@ vi.mock('../audio/probe', () => ({
     bitrate: 0,
     format: 'wav',
     sizeBytes: 0
-  })
+  }),
+  // T-173 (2): a mix asks for both files' channel counts.
+  probeAudioChannels: async () => 2
 }))
 
 const { registerAudioIpc } = await import('./audio')

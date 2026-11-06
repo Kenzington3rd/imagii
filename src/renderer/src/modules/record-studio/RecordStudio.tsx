@@ -67,6 +67,9 @@ export function RecordStudio(): JSX.Element {
   const [mics, setMics] = useState<DeviceOption[]>([])
   const [selectedMicId, setSelectedMicId] = useState<string | null>(null)
   const [cams, setCams] = useState<DeviceOption[]>([])
+  // T-173 (3): false until the first device scan has written its lists. `mics` and `cams` start empty, and "No microphone found" read as an answer
+  // from the first paint, before anything was looked for. A later Refresh leaves it true: the previous lists stand until the new ones arrive.
+  const [devicesScanned, setDevicesScanned] = useState(false)
   const [selectedCamId, setSelectedCamId] = useState<string | null>(null)
   const [showCam, setShowCam] = useState(false)
   const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>('bottom-right')
@@ -120,6 +123,9 @@ export function RecordStudio(): JSX.Element {
   const streamErrorRef = useRef<Error | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const camStreamRef = useRef<MediaStream | null>(null)
+  // T-173 (1): the microphone's own stream, held from the moment `getUserMedia` answers. It is a local of the start until `streamRef` holds
+  // `combined`, and a start that ended in between (a silent screen, a camera that threw) used to leave it open: nothing stopped it.
+  const micStreamRef = useRef<MediaStream | null>(null)
   // Raw screen capture stream from desktopCapturer. Tracked separately
   // from `streamRef` because in the webcam-composited path, `streamRef`
   // holds the compositor's canvas-captureStream output — NOT the original
@@ -234,6 +240,8 @@ export function RecordStudio(): JSX.Element {
     setCams(next.cams)
     setSelectedMicId((current) => reconcileDeviceId(current, next.mics))
     setSelectedCamId((current) => reconcileDeviceId(current, next.cams))
+    // `scanDevices` never rejects (a scan that finds nothing is an answer), so this is reached for every scan that is still the newest.
+    setDevicesScanned(true)
   }
 
   /** Everything "Refresh sources" re-checks: the screens and windows, and the devices. */
@@ -289,6 +297,9 @@ export function RecordStudio(): JSX.Element {
     streamRef.current = null
     camStreamRef.current?.getTracks().forEach((t) => t.stop())
     camStreamRef.current = null
+    // T-173 (1): the microphone too. Once `combined` holds the same tracks a second stop is a no-op.
+    micStreamRef.current?.getTracks().forEach((t) => t.stop())
+    micStreamRef.current = null
     // Stop the RAW screen tracks. When the compositor path was used,
     // streamRef holds the canvas-captureStream output (not the screen
     // tracks themselves), so without this the desktop capture stays
@@ -370,6 +381,7 @@ export function RecordStudio(): JSX.Element {
         micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint }).catch((err: unknown) => {
           throw new MicStartFailure(err)
         })
+        micStreamRef.current = micStream
         if (leftWhileStarting(micStream)) return
       }
 
@@ -416,7 +428,7 @@ export function RecordStudio(): JSX.Element {
           // here and open a take for it).
           if (leftWhileStarting(micStream)) return
           // T-172 (1): a stalled SCREEN cannot be recorded, and the fallback below records the screen: it would open a take of nothing.
-          // The outer catch releases everything and says the sentence.
+          // The outer catch releases everything (the microphone too, T-173 (1)) and says the sentence.
           if (err instanceof NoPictureError && err.source === 'screen') throw err
           // T-121: the take continues WITHOUT the camera, so the camera is let go now. getUserMedia had
           // succeeded (only the compositor failed): its tracks stayed live for the whole take, the camera's
@@ -838,7 +850,7 @@ export function RecordStudio(): JSX.Element {
                   ))}
                 </select>
               ) : null}
-              {includeMic && mics.length === 0 ? (
+              {devicesScanned && includeMic && mics.length === 0 ? (
                 <p className="text-xs text-warn">{noDeviceHint('microphone')}</p>
               ) : null}
             </div>
@@ -871,7 +883,7 @@ export function RecordStudio(): JSX.Element {
                   have been. Without it a user with no camera ticked the box,
                   watched a Corner picker appear, and got a screen-only
                   recording that never mentioned the webcam. */}
-              {showCam && cams.length === 0 ? (
+              {devicesScanned && showCam && cams.length === 0 ? (
                 <p className="text-xs text-warn">{noDeviceHint('camera')}</p>
               ) : null}
               {/* The corner only means something once there is a camera to

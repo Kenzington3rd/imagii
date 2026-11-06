@@ -133,6 +133,8 @@ export function CaptionsPanel(): JSX.Element | null {
       if (result.removed > 0) {
         setDerived({ transcript: null })
         if (startedKey) setSrtPathFor(startedKey, null)
+        // T-173 (4): the files are gone, so no video gets its transcript back from the session's memory either (the open one's was just emptied above).
+        useVideoStore.getState().forgetHeldTranscripts()
       }
     } catch (err) {
       reportFailure(err, { failed: "Couldn't clear the saved transcripts." })

@@ -71,7 +71,9 @@ vi.mock('../audio/extract', () => ({
   cancelAllExtractions: () => undefined
 }))
 vi.mock('../audio/probe', () => ({
-  probeAudio: async () => ({ duration: 8, sampleRate: 48000, channels: 2, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 })
+  probeAudio: async () => ({ duration: 8, sampleRate: 48000, channels: 2, codec: 'pcm_s16le', bitrate: 0, format: 'wav', sizeBytes: 0 }),
+  // T-173 (2): a mix asks for both files' channel counts.
+  probeAudioChannels: async () => 2
 }))
 vi.mock('./probe', () => ({
   probeVideo: async () => ({ duration: 8, width: 640, height: 480, fps: 30, videoCodec: 'h264', audioCodec: 'aac', bitrate: 0, sizeBytes: 0 })

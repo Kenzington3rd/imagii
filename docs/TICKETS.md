@@ -8772,7 +8772,7 @@ IMG-PREC.
   `npm run test:media` is part of its gates (IMG-PREC) and the expediter re-runs it on the merge — a
   hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile edits;
   processes stopped by explicit PID only.
-- **Status:** in progress (round 122)
+- **Status:** done (round 122 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9348,6 +9348,47 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 122 — T-173, all four counted items, landed in the commit that
+carries this entry. Three Sonnet workers in fresh clones of dbb5bd6,
+disjoint source files, merged by the expediter. Track A: Record holds
+the microphone in a ref from the moment it opens, and `stopAllStreams`
+stops it, so a start that a silent screen ends (T-172 (1)'s rethrow)
+no longer leaves the microphone live; the no-device hints wait for the
+first device scan (`devicesScanned`), so "No microphone found" is no
+longer said before anything was looked for. Track B: with a second
+track, a surround voice is folded by the player's matrix as the first
+stage of every pass (the measure pass, Match's voice measure and the
+render), so Even volume and Match measure the stereo it is mixed into
+— a voice in the surround channels was 4.1-4.5 dB off its stereo
+twin's balance; the ticket's first "7.6 dB in any mix" was the
+expediter's measurement error (`volumedetect` forces s16; the mix runs
+float), corrected in 5a80708 on the worker's real-graph evidence, and
+the bed fold first asked for was removed as audio-equivalent. Track C:
+videoStore keeps each video's transcript for the session by `videoKey`
+(path, preview and duration) and `loadSource` gives it back to the
+same video, so a transcribed VOD closed and re-opened is not back at
+first-run Transcribe and the Clip Kit ships its .srt; Clear
+transcripts empties it; USER_GUIDE says what is so. Deviations,
+accepted: A updated a T-171 wiring pin and one IC docClaims cite
+(RecordStudio.tsx:722→:734); B kept its surround-bed Layer 5 cases as
+green pins of the float mix; C reset the held map in
+ProjectIO.test.ts's wipe and kept the pinned `derived: EMPTY_DERIVED`
+literal in `loadSource`. Ledgers: A 14 mutations, B 6 (M3/M4 dropped
+with the code they cut; M1/M2/M5/M6 killed), C 12 in its final pass
+(one equivalent, the empty-entry removal, disclosed), all others
+killed. Expedited personally: one independent mutation per track at a
+seam no ledger row names — A: `setDevicesScanned(true)` above the
+stale-scan guard → the order pin red (the e2e does not reach
+overlapping first scans; disclosed); B: the fold decision probing the
+second track's file → the back-left Layer 5 cases red; C:
+`clearSource` forgetting the held transcripts → six unit cases and the
+close-and-reopen e2e red — each restored byte-identical, sha256
+verified; on the MERGED tree: verify x2 (210 files, 6640 tests each),
+test:media 515 passed and 17 skipped of 532 on 7.0.2 (re-run whole
+after a container restart cut the first run), FULL Playwright 784 of
+784 (52.9 min; no failures). Applied to 5a80708 by `git apply` with
+every file byte-identical to the expedited merge.
 
 Round 121 — T-172, all seven counted items, landed in the commit that
 carries this entry. Three Sonnet workers in fresh clones, disjoint

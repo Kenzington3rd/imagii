@@ -441,7 +441,7 @@ that names the file being converted.)
   **Close** asks only when it would throw something away that took you time: more than one clip, a changed
   clip, anything you can still undo, a scan's moments, a chat log you pasted or the spikes found in it. A video
   you have only opened closes with no question (and with nothing running, nothing is asked at all); a
-  transcript is not on that list, because imagii keeps it on disk and reads it back at once.
+  transcript is not on that list: open the same video again and it is back (a saved project, or the autosave, keeps it across a restart).
   Canceling from the card is the same as canceling from the panel: an export of two or more files asks first, and nothing
   half-written is left in your folder.
 - **When something fails,** the message says what happened and what to try, in

@@ -53,6 +53,33 @@ export interface DerivedResults {
 
 const EMPTY_DERIVED: DerivedResults = { scanCandidates: null, highlightChat: '', spikeChat: '', spikes: null, transcript: null }
 
+/**
+ * T-173 (4): each video's transcript - the `.srt` path, the segments the Captions panel previews, and the probe duration they were made at - kept by `videoKey`
+ * for the session (module-level: it outlives `clearSource`, which is the point, and is gone with the renderer). Close does not ask about a transcript because it
+ * is not a loss, and it is not a loss because `loadSource` gives it back to the same video (same key, duration within `SAME_FILE_SEC`); a saved project, or the
+ * autosave, keeps the path across a restart. Written by whatever stores either value for the OPEN video; emptied by Clear transcripts, which deletes the files.
+ * simplification: unbounded for the session (a transcript is a few hundred KB at three hours); a cap with eviction is the upgrade if that ever shows.
+ */
+const heldTranscripts = new Map<string, { srtPath: string | null; transcript: DerivedResults['transcript']; duration: number }>()
+
+/** The probe of one file can differ by a few frames between reads; a replaced file differs by far more. */
+const SAME_FILE_SEC = 0.5
+
+function heldFor(source: Pick<VideoSource, 'filePath' | 'convertedFrom'>, duration: number): { srtPath: string | null; transcript: DerivedResults['transcript'] } | null {
+  const held = heldTranscripts.get(videoKey(source))
+  return held && Math.abs(held.duration - duration) <= SAME_FILE_SEC ? held : null
+}
+
+/** Write-through for the open video: merge a changed `srtPath` and/or `transcript` into what is held for it. Nothing left (no path, no segments) removes the entry. */
+function holdTranscript(source: VideoSource | null, patch: { srtPath?: string | null; transcript?: DerivedResults['transcript'] }): void {
+  if (source === null || (patch.srtPath === undefined && patch.transcript === undefined)) return
+  const held = heldFor(source, source.probe.duration)
+  const srtPath = patch.srtPath !== undefined ? patch.srtPath : (held?.srtPath ?? null)
+  const transcript = patch.transcript !== undefined ? patch.transcript : (held?.transcript ?? null)
+  if (srtPath === null && transcript === null) heldTranscripts.delete(videoKey(source))
+  else heldTranscripts.set(videoKey(source), { srtPath, transcript, duration: source.probe.duration })
+}
+
 /** One undo step: the clip-editing state as it was before a mutation.
  *  selectedClipId travels with the clips so undoing a removal also
  *  restores which clip was active — the pair is always captured
@@ -152,6 +179,8 @@ interface VideoStudioState {
   setMediaDuration: (seconds: number) => void
   requestSeek: (seconds: number) => void
   setSrtPath: (p: string | null) => void
+  /** T-173 (4): Clear transcripts deleted every transcript file, so none comes back with its video any more. Leaves the open video's own state to `setSrtPathFor` / `setDerived`. */
+  forgetHeldTranscripts: () => void
   /** T-112 — apply a transcription's SRT to the video it was made from, and only
    *  to it. `videoKey` is the `videoKey(source)` the job started on (T-172 (2): the original the person opened, so a converted import re-opened
    *  meanwhile is still that video); if the studio holds anything else by the time the job finishes (another video opened, or none)
@@ -280,7 +309,8 @@ type VideoSessionView = Pick<VideoStudioState, 'source' | 'clips' | 'history' | 
  *  - an undo history with a step in it (`history.past`): edits made and undone back to the start are still a session, and the steps go too;
  *  - a highlight scan's candidates (`derived.scanCandidates`, minutes of work), a chat log pasted into either finder (`highlightChat`, `spikeChat`) and the
  *    spikes found in one (`derived.spikes`).
- * What does NOT count: the transcript (`derived.transcript`, `srtPath`) - the file is cached on disk and opens again at once - the output preview (`previewUrl`,
+ * What does NOT count: the transcript (`derived.transcript`, `srtPath`) - `loadSource` gives it back to the same video (`heldTranscripts`; a saved project or the
+ * autosave keeps it across a restart) - the output preview (`previewUrl`,
  * a render a button makes again) and the playhead. A video nobody touched has none of the above, so closing it is no loss and asks nothing (T-119 (3)'s own
  * "asking nothing when there is nothing to lose": it was implemented as "zero clips", a state a loaded video never has).
  */
@@ -505,6 +535,7 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       const probe = await window.api.video.probe(filePath)
       const url = window.api.video.fileUrl(filePath)
       const initial = makeDefaultClip(probe.duration, 1)
+      const held = heldFor({ filePath, convertedFrom }, probe.duration)
       // Loading a new source invalidates any prior SRT — captions belong
       // to the previous video, not this one. It also resets undo history:
       // steps recorded against the old source's duration make no sense here.
@@ -532,7 +563,9 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
         previewResumeAt: null,
         derived: EMPTY_DERIVED,
         history: EMPTY_HISTORY,
-        historyKey: null
+        historyKey: null,
+        // T-173 (4): ...except the same video's own transcript, which comes back (`heldTranscripts`): nothing else of `derived`.
+        ...(held ? { srtPath: held.srtPath, derived: { ...EMPTY_DERIVED, transcript: held.transcript } } : {})
       })
     },
     clearSource: () =>
@@ -574,17 +607,26 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       // timeupdate reconciles it with where the element actually landed.
       set({ currentTime: target, seekRequest: { seconds: target } })
     },
-    setSrtPath: (p: string | null) => set({ srtPath: p }),
+    setSrtPath: (p: string | null) => {
+      holdTranscript(get().source, { srtPath: p })
+      set({ srtPath: p })
+    },
+    forgetHeldTranscripts: () => heldTranscripts.clear(),
     setSrtPathFor: (key, srtPath) => {
       const open = get().source
       if (open === null || videoKey(open) !== key) return false
+      holdTranscript(open, { srtPath })
       set({ srtPath })
       return true
     },
-    setDerived: (patch) => set({ derived: { ...get().derived, ...patch } }),
+    setDerived: (patch) => {
+      holdTranscript(get().source, { transcript: patch.transcript })
+      set({ derived: { ...get().derived, ...patch } })
+    },
     setDerivedFor: (key, patch) => {
       const open = get().source
       if (open === null || videoKey(open) !== key) return false
+      holdTranscript(open, { transcript: patch.transcript })
       set({ derived: { ...get().derived, ...patch } })
       return true
     },

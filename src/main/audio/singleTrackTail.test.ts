@@ -263,18 +263,142 @@ describe('an MP3 export of a surround source folds it first, in float (T-164 (1)
     expect(probeAudioChannelsCalls).toBe(0)
   })
 
-  it('a second track keeps its own fold (the mix normalises both sides to stereo): the primary is not folded twice, and nothing is probed', async () => {
+  it('a second track, MP3: the primary is folded by the player\'s matrix, ahead of the mix\'s own normalise (T-173 (2))', async () => {
     sourceChannels = 6
     const { render } = await exportWith({ secondaryTrack: BED }, 'mp3')
     const graph = render[render.indexOf('-filter_complex') + 1] ?? ''
-    expect(graph).not.toContain(FOLD)
-    expect(graph).toContain('aformat=channel_layouts=stereo')
-    expect(probeAudioChannelsCalls).toBe(0)
+    expect(graph.startsWith(`[0:a]${FOLD},anull,aresample=48000,aformat=channel_layouts=stereo[primary];`)).toBe(true)
+    expect(graph.match(/aformat=sample_fmts=fltp/g), 'the bed is stereo: one fold only').toHaveLength(1)
   })
 
   it('the channel count is read once per export', async () => {
     sourceChannels = 6
     await exportWith(EVEN, 'mp3')
     expect(probeAudioChannelsCalls).toBe(1)
+  })
+})
+
+describe('a mix folds a surround voice by the player\'s matrix, first; the bed needs no fold of its own (T-173 (2))', () => {
+  // Even volume and Match measured the voice on its six channels (BS.1770 weights a surround channel +1.5 dB, the fold drops it at 0.7071), so a voice on a surround channel landed ~4.5 dB off the balance
+  // its stereo twin gets. A primary of more than two channels is folded by `SURROUND_TO_STEREO_FILTER` as the first stage of every pass. The bed has no fold of its own: its conversion is the mix's float one
+  // (the same matrix), and its Match loudnorm measures after it.
+  // Mono and stereo inputs get no new stage (the strings below are today's, to the character). What ffmpeg does with the graph is Layer 5's ("a surround voice keeps its level in a mix").
+  const FOLD = 'aformat=sample_fmts=fltp:channel_layouts=stereo'
+  const NORM = 'aresample=48000,aformat=channel_layouts=stereo'
+  const EVEN = { loudnorm: true, loudnormTargetLufs: -16 } as const
+  const BED = { filePath: path.join(tmpdir(), 'bed.wav'), fileName: 'bed.wav', role: 'music' as const, gainDb: -6, duckUnderPrimary: false }
+
+  /** The mix: every spawned command, the filters of the passes that measure (null muxer), and the render's graph. */
+  async function mixWith(
+    chain: Partial<ChainSpec>,
+    bed: Partial<typeof BED & { matchLoudness: boolean }> = {},
+    format: AudioExportSpec['format'] = 'wav'
+  ): Promise<{ measures: string[]; graph: string }> {
+    const { passes, render } = await exportWith({ ...chain, secondaryTrack: { ...BED, ...bed } }, format)
+    const flag = (args: string[]): string => args[args.indexOf('-af') + 1] ?? ''
+    return {
+      measures: passes.filter((a) => a.includes('null')).map(flag),
+      graph: render[render.indexOf('-filter_complex') + 1] ?? ''
+    }
+  }
+  const voiceBranch = (graph: string): string => /^\[0:a\](.*?)\[primary\]/.exec(graph)?.[1] ?? ''
+  const bedBranch = (graph: string): string => /\[1:a\](.*?)\[secondary(?:_pre)?\]/.exec(graph)?.[1] ?? ''
+
+  it.each([6, 8, 3])('a %d-channel voice over a stereo bed: the fold is the FIRST stage of the voice\'s branch, and the bed is untouched', async (n) => {
+    sourceChannels = n
+    const { graph } = await mixWith({})
+    expect(voiceBranch(graph)).toBe(`${FOLD},anull,${NORM}`)
+    expect(bedBranch(graph)).toBe(`${NORM},volume=-6dB`)
+    expect(graph.match(/sample_fmts=fltp/g)).toHaveLength(1)
+  })
+
+  it('it is the first stage whatever the chain holds: a stage, a cut, and the limiter stays on the bus', async () => {
+    sourceChannels = 6
+    const { graph } = await mixWith({ gainDb: 3, cutRegions: [{ startSec: 1, endSec: 2 }] })
+    expect(voiceBranch(graph)).toBe(`${FOLD},volume=3dB,${NORM}`)
+    expect(graph).toContain(`[premix]asetnsamples=n=256:p=0,aselect=`)
+    expect(graph.endsWith(`,${LIMITER}[mix]`)).toBe(true)
+  })
+
+  it('Even volume: the measure pass and the render both start with the fold (loudnorm measures the stereo voice that is mixed)', async () => {
+    sourceChannels = 6
+    const { measures, graph } = await mixWith(EVEN)
+    expect(measures).toHaveLength(1)
+    expect(measures[0]?.startsWith(`${FOLD},`), measures[0]).toBe(true)
+    expect(measures[0]).toContain('print_format=json')
+    expect(voiceBranch(graph).startsWith(`${FOLD},`)).toBe(true)
+    expect(voiceBranch(graph)).toContain('measured_I=-23.50')
+  })
+
+  it('Match loudness with Even volume off: the voice\'s own measure (the one Match follows) is folded too', async () => {
+    sourceChannels = 6
+    const { measures, graph } = await mixWith({}, { matchLoudness: true })
+    expect(measures).toHaveLength(1)
+    expect(measures[0]?.startsWith(`${FOLD},`), measures[0]).toBe(true)
+    expect(bedBranch(graph)).toBe(`${NORM},loudnorm=I=-23.5:TP=-1.5:LRA=11`)
+    expect(voiceBranch(graph)).toBe(`${FOLD},anull,${NORM}`)
+  })
+
+  it('Even volume and Match together: one folded measure pass, the bed brought to the target', async () => {
+    sourceChannels = 6
+    const { measures, graph } = await mixWith(EVEN, { matchLoudness: true })
+    expect(measures).toHaveLength(1)
+    expect(measures[0]?.startsWith(`${FOLD},`)).toBe(true)
+    expect(bedBranch(graph)).toBe(`${NORM},loudnorm=I=-16:TP=-1.5:LRA=11`)
+  })
+
+  it('ducking: the voice is folded before it is split, so the sidechain keys on the same stereo voice that is mixed', async () => {
+    sourceChannels = 6
+    const { graph } = await mixWith({}, { duckUnderPrimary: true })
+    expect(graph.startsWith(`[0:a]${FOLD},anull,${NORM},asplit=2[primary][primary_sc];`)).toBe(true)
+    expect(graph.match(/sample_fmts=fltp/g)).toHaveLength(1)
+  })
+
+  it('a surround bed keeps the plain normalise: no fold in its branch (gain, Match and ducking), and the measure pass is of the voice alone', async () => {
+    for (const bed of [{}, { matchLoudness: true }, { duckUnderPrimary: true }]) {
+      const { graph, measures } = await mixWith(EVEN, bed)
+      expect(graph.match(/sample_fmts=fltp/g), JSON.stringify(bed)).toBeNull()
+      expect(bedBranch(graph).startsWith(NORM), JSON.stringify(bed)).toBe(true)
+      for (const m of measures) expect(m).not.toContain(FOLD)
+    }
+  })
+
+  it('a surround voice over a bed: only the voice is folded, and only the voice is probed', async () => {
+    sourceChannels = 6
+    const { graph } = await mixWith({})
+    expect(voiceBranch(graph)).toBe(`${FOLD},anull,${NORM}`)
+    expect(bedBranch(graph)).toBe(`${NORM},volume=-6dB`)
+    expect(probeAudioChannelsCalls).toBe(1)
+  })
+
+  it.each([
+    [1, 1],
+    [1, 2],
+    [2, 1],
+    [2, 2]
+  ])('a %d-channel voice and a %d-channel bed: no fold, the graph is exactly the one it always was', async (v) => {
+    sourceChannels = v
+    const { graph, measures } = await mixWith({})
+    expect(graph).toBe(
+      `[0:a]anull,${NORM}[primary];[1:a]${NORM},volume=-6dB[secondary];` +
+        `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1':normalize=0[premix];[premix]${LIMITER}[mix]`
+    )
+    expect(measures).toHaveLength(0)
+    expect((await mixWith(EVEN)).graph).not.toContain('sample_fmts')
+  })
+
+  it('a count it cannot read (null) leaves the graph as it was', async () => {
+    sourceChannels = null
+    const { graph } = await mixWith(EVEN, { matchLoudness: true })
+    expect(graph).not.toContain('sample_fmts')
+  })
+
+  it('the voice is asked for its channels once, only when there is a mix or an MP3', async () => {
+    sourceChannels = 6
+    await mixWith({})
+    expect(probeAudioChannelsCalls).toBe(1)
+    probeAudioChannelsCalls = 0
+    await exportWith({}, 'wav')
+    expect(probeAudioChannelsCalls).toBe(0)
   })
 })
