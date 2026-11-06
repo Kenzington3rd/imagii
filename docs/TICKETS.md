@@ -8514,6 +8514,84 @@ IMG-PREC.
 
 ---
 
+## T-171 — sweep-57 fixes (round 120)
+
+- **Spec:** the fifty-seventh sweep's six verified findings (candidate clean pass #1 on ee25cda), each confirmed by the
+  expediter against source (item 6 measured in a built app by the reviewer). QA main and renderer b, ffmpeg (~600
+  real-binary runs on 7.0.2 and 6.1.1), Electron (partial, not re-dispatched), audio, privacy, a11y, design reader 2 and
+  streamer renderer b and main clean on their lens. Two are consequences or siblings of T-170 (items 4 and 6). Not
+  counted: Transcribe's setup card mounting with no live region on a not-ready press (T-110 (l), the long-standing
+  first-run behaviour); "+ Create board" with an empty name returning silently; Stream Graphics colours as text boxes (an
+  initiative beside (bo)). Two tracks, disjoint source files.
+
+  **Track A — a job from another video says so in words that fit, and a rename replaces the name (items 2, 4, 6).**
+  6. **[LOW] T-170's other-video lines truncate away the words that matter** (video-studio/CaptionsPanel.tsx,
+     ReframePanel.tsx; the same shape in ExportPanel.tsx's T-168 (4) line). One `truncate` line in a 274-434 px column:
+     "Reframe of Clip 1 from LONG_Season_Finale_S…" never shows "started on another video" (title only), and an ordinary
+     OBS name ("2026-11-05 21-14-08.mp4") is cut inside its date-time at 1024 and 1920, so two recordings read alike.
+  4. **[LOW] A running GIF, Clip Kit or (on the job card) Reframe names only its CLIP**, so A's "Clip 1" reads as B's
+     "Clip 1" and its Cancel stops A's job (GifPanel.tsx:51, :167-175; ClipKitButton.tsx:369-373 with clipKit.ts
+     `kitRunCaption`; VideoJobsRunning.tsx:146 and :281-284, the Reframe row drawn with a video open when that video's
+     Reframe panel is hidden, T-164 (4)). T-170 (2)'s class in the three places it did not reach.
+  Fix for 4 and 6 — ONE rule for every job running for a video that is not the open one: one line above the job's own
+  row or button, the clause FIRST so it is always seen, wrapping to at most two lines
+  (`text-xs text-ink-dim min-w-0 line-clamp-2 break-words`, the whole sentence as its `title`):
+  "Started on another video: export of <file>." (ExportPanel, replacing T-168 (4)'s sentence) / "…: transcription of
+  <file>." / "…: caption burn-in on <file>." (CaptionsPanel) / "…: reframe of <clip> from <file>." (ReframePanel) /
+  "…: GIF of <clip> from <file>." (GifPanel) / "…: Clip Kit for "<clip>" from <file>." (ClipKitButton, in place of
+  its caption while the kit's video is not the open one). `useGifRun` and `useKitRun` gain `videoPath` and `fileName`
+  (set at begin from the open source), as T-170 gave the captions and reframe runs. The job card's Reframe row, when
+  drawn with a video open, is labelled "Reframe — <clip> from <file>" and its sentence reads "Started on another video;
+  the reframe keeps going until it finishes or you cancel it." Compile and PiP (whose lines already name a file) are
+  unchanged.
+  2. **[LOW] The rename dialog loses its pre-selection, so typing APPENDS to the old name** (components/NameDialog.tsx
+     :44-56). `value` persists across opens; the open-effect calls `setValue(initialValue)` then `select()` on the
+     stale DOM text, and React's re-render assigns `input.value` — an IDL value change, which moves the cursor to the end
+     and unselects (HTML spec). Reached by Rename → type → Cancel → Rename, and by renaming a second board after a first.
+     The T-28 comment promises "Pre-filled and pre-selected, so typing replaces it (rename)". Fix: in the open-effect,
+     write the field's DOM value before selecting (`el.value = initialValue; el.select()` after `setValue`), so React's
+     re-render finds the value already equal and leaves the selection.
+
+  **Track B — Record and Audio say and show what is so (items 1, 3, 5).**
+  1. **[LOW] Record's recording view draws the webcam TWICE** (record-studio/RecordStudio.tsx:200-216, :946-952). The
+     main preview is the compositor's output (the webcam already in the chosen corner, as in the file); the
+     pre-compositor `camPreviewRef` thumbnail is also drawn at a fixed `bottom-8 right-8` whatever the corner — the face
+     twice for Top left, and over the real composited webcam for the default bottom-right. Fix: remove the thumbnail
+     (the element, its ref and its branch in the attach effect); the main preview is the take.
+  3. **[LOW] The Levels "Platform" select's "Custom" choice does nothing** (audio-studio/LevelsPanel.tsx:162-180):
+     choosing it patches nothing and the controlled select snaps back to the preset. Fix: render the "Custom" option
+     only while the target matches no preset (it is then the select's read-out); a custom value is typed in the
+     Loudness target box above, as now.
+  5. **[LOW] With no microphone found, nothing names the remedy that exists** (record-studio/devices.ts:131-136,
+     RecordStudio.tsx:368-374, :833-835). The hint lists plug in / close other apps / allow access / Refresh, and Start
+     fails in `getUserMedia({audio})` with "…That device wasn't found. Check it's plugged in, then try again." Fix: the
+     microphone hint ends "To record without one, untick Record microphone." (the camera's hint unchanged — a missing
+     camera already records screen-only), and a microphone that fails at Start says so with the same remedy: the toast is
+     the cause sentence followed by "To record without it, untick Record microphone." (the start's teardown unchanged).
+
+  Covering tests: unit (NEW describes at the end of the files they touch) and e2e (NEW describes at the end of
+  video-pipelines.spec.ts, video-core.spec.ts, references.spec.ts, record.spec.ts and audio.spec.ts), each red on
+  ee25cda except the stated controls: a GIF and a Clip Kit held on A's "Clip 1", A closed, B (with its own "Clip 1")
+  opened — the "Started on another video: … from A.mp4." line above the row, its title whole, and on A itself no line;
+  the job card's Reframe row with a vertical B open names A; the Captions/Reframe/Export lines at the default window
+  with an OBS-style name show the whole sentence (no ellipsis) on at most two lines, and with a 120-character name the
+  clause is on screen; Rename → type → Cancel → Rename has the whole name selected (typing replaces it), and renaming a
+  second board likewise; with a camera in the take the recording view holds ONE video element (the composite); the
+  Platform select has no "Custom" option at a preset target and shows it for −18; the microphone hint's remedy sentence
+  (unit) and a microphone that fails at Start toasts the remedy (e2e, getUserMedia for audio stubbed to reject).
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or new (A: the other-video sentences, including Export's; B: the webcam preview, the
+  microphone remedy, the Platform list).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 120)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
