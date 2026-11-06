@@ -3894,3 +3894,90 @@ test.describe('T-170 (4): the Reference Search hint names the board Save goes to
     }
   })
 })
+
+// ── T-171 Track A (2): the rename dialog selects the whole name every time it opens ───────────────────────────────────────────────────────────────────────
+//
+// `NameDialog` keeps `value` across opens. Its open-effect ran `setValue(initialValue)` and then `select()` on the stale DOM text, and React's re-render assigned `input.value` after it - an IDL value
+// change moves the cursor to the end and unselects (HTML spec), so Rename -> type -> Cancel -> Rename, and renaming a second board after a first, opened with NOTHING selected and typing appended to the old
+// name. The first open (the case above) was fine, which is why the pin that existed never saw it.
+test.describe('T-171 Track A (2): Rename opens with the whole name selected, every time', () => {
+  const selection = (window: Page): Promise<{ tag: string; start: number; end: number; length: number }> =>
+    window.evaluate(() => {
+      const el = document.activeElement as HTMLInputElement | null
+      return { tag: el?.tagName ?? '', start: el?.selectionStart ?? -1, end: el?.selectionEnd ?? -1, length: el?.value.length ?? -1 }
+    })
+  function boards(fx: ReturnType<typeof makeFixture>): void {
+    // "Layouts" is the newer board, so it is the one the store selects by default; "Colors" is older and has to be picked.
+    for (const [id, name, createdAt] of [['colorsboard', 'Colors', 1700000000000], ['layoutsboard', 'Layouts', 1700000100000]] as const) {
+      writeFileSync(path.join(fx.boardsDir, `${id}.json`), JSON.stringify({ id, name, createdAt, items: [] }), 'utf8')
+    }
+  }
+
+  test('Rename, type, Cancel, Rename: the field is selected whole and typing replaces it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t171-reselect')
+    boards(fx)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Colors, 0 items' }).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+
+      await openRename.click()
+      await expect(field).toHaveValue('Colors')
+      await window.keyboard.type('zz')
+      await expect(field, 'the typing replaced the name (the board shown at mount was another one)').toHaveValue('zz')
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+      await expect(dialog).toHaveCount(0)
+
+      await openRename.click()
+      await expect(field).toHaveValue('Colors')
+      expect(await selection(window), 'the whole of "Colors" is selected, not a cursor at the end').toEqual({ tag: 'INPUT', start: 0, end: 'Colors'.length, length: 'Colors'.length })
+      await window.keyboard.type('New')
+      await expect(field, 'typing replaces the name').toHaveValue('New')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort()).toEqual(['Layouts', 'New'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('after one board is renamed, Rename on the next board opens with ITS name selected whole', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t171-second')
+    boards(fx)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+
+      await window.getByRole('button', { name: 'Colors, 0 items' }).click()
+      await openRename.click()
+      await field.fill('Colors renamed')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort()).toEqual(['Colors renamed', 'Layouts'])
+
+      await window.getByRole('button', { name: 'Layouts, 0 items' }).click()
+      await openRename.click()
+      await expect(field).toHaveValue('Layouts')
+      expect(await selection(window), 'the second board\'s name is selected whole').toEqual({ tag: 'INPUT', start: 0, end: 'Layouts'.length, length: 'Layouts'.length })
+      await window.keyboard.type('Two')
+      await expect(field, 'typing replaces it, it does not append to it').toHaveValue('Two')
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

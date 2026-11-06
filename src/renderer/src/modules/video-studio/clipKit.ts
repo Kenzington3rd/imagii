@@ -198,6 +198,14 @@ export function kitRunCaption(clipName: string): string {
 }
 
 /**
+ * The same caption for a kit whose video is NOT the open one (T-171 (4)): the clause first, then the clip and the file, so A's "Clip 1" is not read as B's
+ * (`kitRunCaption` alone, and a Cancel that stops A's kit under B's clip list). The button draws it in place of `kitRunCaption` only then.
+ */
+export function kitOtherVideoCaption(clipName: string, fileName: string): string {
+  return `Started on another video: ${kitRunCaption(clipName)} from ${fileName}.`
+}
+
+/**
  * What a canceled kit says (T-113). With files finished it points at the folder that holds
  * them; with none (`landed` is 0) the folder was removed with nothing in it, and
  * "files already finished are in your folder" would send the person looking for a folder

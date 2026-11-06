@@ -33,7 +33,7 @@ beforeEach(() => {
 describe('the job Cancels beside the run stores (T-144)', () => {
   it('each one aims main\'s cancel at the id of the run that is there', async () => {
     useReframeRun.getState().begin({ jobId: 'r1', name: 'c', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: null, phase: 'starting' })
-    useGifRun.getState().begin({ jobId: 'g1', name: 'c' })
+    useGifRun.getState().begin({ jobId: 'g1', name: 'c', videoPath: '/v/a.mp4', fileName: 'a.mp4' })
     useCompileRun.getState().begin({ jobId: 'c1', name: 'c' })
     usePipRun.getState().begin({ jobId: 'p1', name: 'c' })
     await cancelReframe()

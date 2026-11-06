@@ -3822,7 +3822,7 @@ test.describe('T-168 (4): a running job says whose it is', () => {
       await stubChoosers(app, outDir, fileA)
       await holdInMain(app, 'video:exportBatch', [])
       const card = window.locator('[data-tutorial="video-export"]')
-      const OTHER = 'Export of stream-a.mp4, started on another video.'
+      const OTHER = 'Started on another video: export of stream-a.mp4.'
       await card.getByRole('button', { name: 'Choose folder…' }).click()
       await card.getByRole('button', { name: /^Export 1/ }).click()
       await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
@@ -3838,7 +3838,7 @@ test.describe('T-168 (4): a running job says whose it is', () => {
 
       const line = card.getByText(OTHER, { exact: true })
       await expect(line, 'the running batch is named, with the file the person knows it by').toBeVisible()
-      await expect(line).toHaveAttribute('title', 'stream-a.mp4')
+      await expect(line).toHaveAttribute('title', OTHER)
       const queue = card.getByRole('heading', { name: 'Queue' })
       await expect(queue).toBeVisible()
       const lineBox = await line.boundingBox()
@@ -3958,4 +3958,74 @@ test.describe('T-168 (4): a running job says whose it is', () => {
       await app.close()
     }
   })
+})
+
+// ── T-171 Track A (6): the Export panel's other-video line fits ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// T-168 (4)'s line was one `truncate` line ending in "started on another video.", so a long or OBS-style name cut the clause away (and an OBS name was cut inside its date-time). The line is now
+// "Started on another video: export of <file>." on at most two lines, the clause first. Main's `video:exportBatch` is held (T-168 (4)'s approach) so the batch is still running when it is read.
+test.describe('T-171 Track A (6): the Export panel\'s other-video line fits', () => {
+  const OBS = '2026-11-05 21-14-08.mp4'
+  const LONG = `LONG_Season_Finale_${'x'.repeat(120 - 'LONG_Season_Finale_'.length - '.mp4'.length)}.mp4`
+
+  for (const [what, nameA] of [['an OBS name', OBS], ['a 120-character name', LONG]] as const) {
+    test(`${what} at the default window: ${what === 'an OBS name' ? 'the whole sentence is on screen, on at most two lines' : 'the clause is on screen first'}`, async () => {
+      test.setTimeout(120_000)
+      const outDir = path.join(root, `out-t171-export-${Date.now().toString(36)}`)
+      mkdirSync(outDir, { recursive: true })
+      const fileA = path.join(root, 'source', nameA)
+      const fileB = path.join(root, 'source', 't171-export-b.mp4')
+      writeFileSync(fileA, readFileSync(fixture))
+      writeFileSync(fileB, readFileSync(fixture))
+      const { app, window } = await launchWithVideo('t171-export-fit', fileA)
+      try {
+        window.on('dialog', (dialog) => void dialog.accept())
+        await app.evaluate(({ dialog, ipcMain }, arg) => {
+          ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [arg.dir] })
+          const g = globalThis as unknown as { __t171x: () => void }
+          const gate = new Promise<void>((resolve) => {
+            g.__t171x = resolve
+          })
+          ipcMain.removeHandler('video:exportBatch')
+          ipcMain.handle('video:exportBatch', async () => {
+            await gate
+            return []
+          })
+        }, { dir: outDir })
+        const card = window.locator('[data-tutorial="video-export"]')
+        const SENTENCE = `Started on another video: export of ${nameA}.`
+        await card.getByRole('button', { name: 'Choose folder…' }).click()
+        await card.getByRole('button', { name: /^Export 1/ }).click()
+        await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+
+        await window.getByRole('button', { name: 'Close' }).click()
+        await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+        await dropOnVideoImporter(window, fileB, 't171-export-b.mp4')
+        await expect(window.locator('video')).toHaveCount(1)
+        await expect(card.getByRole('button', { name: 'Exporting…' }), 'the batch still runs under B').toBeDisabled({ timeout: 30_000 })
+
+        const line = card.getByText(/Started on another video/)
+        await expect(line).toHaveCount(1)
+        await line.scrollIntoViewIfNeeded()
+        await expect(line).toHaveAttribute('title', SENTENCE)
+        const m = await line.evaluate((el) => {
+          const r = el.getBoundingClientRect()
+          return { text: el.textContent ?? '', sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight, h: r.height, lh: parseFloat(getComputedStyle(el).lineHeight), right: r.right }
+        })
+        const cardBox = (await card.boundingBox())!
+        expect(m.text, 'the clause is the first thing it says').toBe(SENTENCE)
+        expect(m.h, 'at most two lines').toBeLessThanOrEqual(2 * m.lh + 1)
+        expect(m.right, 'inside the card').toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
+        await expect(line, 'the clause is on screen').toBeInViewport()
+        if (nameA === OBS) {
+          expect(m.sw, 'nothing is cut sideways').toBeLessThanOrEqual(m.cw)
+          expect(m.sh, 'nothing is cut below (no ellipsis): the whole sentence is on screen').toBeLessThanOrEqual(m.ch)
+        }
+        await app.evaluate(() => (globalThis as unknown as { __t171x: () => void }).__t171x())
+        await expect(card.getByRole('button', { name: /^Export 1/ })).toBeEnabled({ timeout: 15_000 })
+      } finally {
+        await app.close().catch(() => undefined)
+      }
+    })
+  }
 })

@@ -10,6 +10,7 @@ import {
   kitEffectivePresets,
   kitFailedMessage,
   kitExportLabel,
+  kitOtherVideoCaption,
   kitLimitTargets,
   kitRunCaption,
   kitSrtFilename,
@@ -565,5 +566,19 @@ describe('kitFailedMessage - what a failed kit says depends on what survived (T-
   it('with two or more it counts them and says where they are', () => {
     expect(kitFailedMessage(2)).toBe('Clip Kit failed. The 2 files already finished are in your folder.')
     expect(kitFailedMessage(8)).toBe('Clip Kit failed. The 8 files already finished are in your folder.')
+  })
+})
+
+// T-171 (4): a kit started on another video says so, with the clip and the file, in place of the clip-only caption.
+describe('kitOtherVideoCaption - a kit whose video is not the open one (T-171 (4))', () => {
+  it('puts the clause first, then the clip and the file, so A\'s "Clip 1" is not read as B\'s', () => {
+    expect(kitOtherVideoCaption('Clip 1', 'stream-a.mp4')).toBe('Started on another video: Clip Kit for "Clip 1" from stream-a.mp4.')
+  })
+
+  it('builds on kitRunCaption: a trimmed name, and an emptied one is an unnamed clip', () => {
+    expect(kitOtherVideoCaption('  Cold open  ', '2026-11-05 21-14-08.mp4')).toBe(
+      'Started on another video: Clip Kit for "Cold open" from 2026-11-05 21-14-08.mp4.'
+    )
+    expect(kitOtherVideoCaption('', 'a.mp4')).toBe('Started on another video: Clip Kit for an unnamed clip from a.mp4.')
   })
 })

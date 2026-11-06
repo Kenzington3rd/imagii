@@ -125,9 +125,13 @@ Capture your screen or a window to a single video file, with your microphone
 and webcam if you want them. Game and desktop sound are not captured.
 
 1. Click **Pick a screen or window** and choose a source.
-2. Under **Audio**, check **Record microphone** if you want your voice.
+2. Under **Audio**, check **Record microphone** if you want your voice. If no
+   microphone is found, or **Start recording** says the microphone could not be opened,
+   uncheck **Record microphone** to record without one.
 3. Under **Webcam**, check **Include webcam in recording (picture-in-picture)**,
-   then pick the corner it sits in.
+   then pick the corner it sits in. While it records, the preview shows the take
+   itself, with the webcam where the file will have it; there is no second picture of
+   the camera over it.
 4. Under **Output**, leave **Convert to MP4 after recording** checked (slower,
    better compatibility), or uncheck it for a quick WebM save, which some apps do
    not accept.
@@ -401,15 +405,20 @@ that names the file being converted.)
   — and a batch that finished while you were away shows its finished rows with **Show in folder**. The
   "Exported 2 files" message carries **Show in folder** too, for the first file written, wherever you are when
   the batch ends (on Home, in another studio, or beside another video). With another video open, a
-  line above the queue's rows names the one the batch belongs to (**Export of stream.mp4, started on another video.**),
+  line above the queue's rows names the one the batch belongs to (**Started on another video: export of stream.mp4.**),
   so the rows and **Cancel** are never anonymous. The **GIF**, **Compile** and **Picture-in-picture** cards do the
   same beside their **Cancel** (**Exporting Clip 1…**, **Stitching stream.mp4…**, **Compositing stream.mp4…**: the clip,
   the video, the base file). The same goes for a transcription, a caption burn-in and a Reframe: with another video open,
-  one line above the progress row of **Auto-captions** or **Reframe to 9:16** says whose it is (**Transcription of stream.mp4,
-  started on another video.**, **Caption burn-in on stream.mp4, started on another video.**, **Reframe of Clip 1 from
-  stream.mp4, started on another video.**), and it goes when the job ends. Clip Kit
+  one line above the progress row of **Auto-captions** or **Reframe to 9:16** says whose it is (**Started on another video:
+  transcription of stream.mp4.**, **Started on another video: caption burn-in on stream.mp4.**, **Started on another video:
+  reframe of Clip 1 from stream.mp4.**), and it goes when the job ends. A **GIF** and a Clip Kit started on another video say
+  it the same way (**Started on another video: GIF of Clip 1 from stream.mp4.**, **Started on another video: Clip Kit for "Clip 1"
+  from stream.mp4.**), and so does the Reframe on the card above the player when the video that is open is vertical
+  (**Reframe — Clip 1 from stream.mp4**, and "Started on another video; the reframe keeps going until it finishes or you cancel it.").
+  These lines start with that clause, run to two lines at most, and hold the whole sentence as their tooltip, so a long
+  or camera-style file name never cuts the clause away. Clip Kit
   is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
-  names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel** on a row under the button (the
+  names the clip it was started on (**Clip Kit for "Clip 1"**, until another video is open) and offers **Cancel** on a row under the button (the
   running label stays on one line), and no second kit starts until it ends. **Export** and Clip Kit take turns: while a kit runs, **Export** is off and its tooltip says "Clip Kit is running. Export when it is done.", and while an export runs the kit button is off with "An export is running. Start Clip Kit when it is done." (the kit does not start by itself; press it once the export ends). If you remove that clip the kit keeps running and stays cancelable; if you close the video,
   a card beside the importer keeps the kit's name and its **Cancel** until it ends. The caption model's download is the
   same: its bar and its **Cancel** are there when you come back to **Auto-captions**, and the panel is ready the moment it ends.
@@ -572,7 +581,7 @@ never called loaded.
     list that appears when the box is checked.
   - **Levels** — the compressor preset, **Even volume** with a loudness target
     (pick **Talking and podcasts (−16)**, **YouTube, TikTok, Reels (−14)** or **Broadcast TV and radio (−23)**;
-    the line under the picker says −14 also suits Spotify), and manual gain. The target box takes −70 to −5; a number outside that
+    the line under the picker says −14 also suits Spotify; **Custom** shows in the picker only while the number you typed in the target box matches none of the three, and picking one of the three takes it away), and manual gain. The target box takes −70 to −5; a number outside that
     becomes the nearest edge when you leave the box. imagii measures the whole file
     first, so exports with a loudness target take a little longer. A mono file is
     measured the way stereo speakers play it (the one channel on both sides), so its
@@ -759,8 +768,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   added twice: the notice says **Already on "the board"** and there is nothing new to undo. A double-click on **Save**
   saves once, with one notice, and one **Undo** takes it back. If a picture's thumbnail will not download (the site is not answering, within 10 seconds, or the file is over 8 MB), it is still saved, and its tile draws the picture from where it came from. If you have no board yet, imagii asks you to
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
-- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Rename** with the name the board already has
-  (or with nothing new) changes nothing and adds no **Undo** step. **Delete** asks first, and the question says **Ctrl+Z**
+- **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Rename** opens with the board's whole name selected, every time (also after you typed and cancelled, and for a second board), so typing replaces it;
+  with the name the board already has (or with nothing new) it changes nothing and adds no **Undo** step. **Delete** asks first, and the question says **Ctrl+Z**
   brings the board back; so does the notice that follows, which stays on screen for 8 seconds. Hover an item and click **→ Canvas**
   to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer
   carries its own copy of the picture, so it stays on the canvas after **Clear thumbnail

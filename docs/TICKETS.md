@@ -8588,7 +8588,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 120)
+- **Status:** done (round 120 — see the Done entry)
 
 ---
 
@@ -9166,6 +9166,43 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 120 — T-171, all six counted items, landed in the commit that
+carries this entry. Two Sonnet workers in fresh clones of c326815,
+disjoint source files, merged by the expediter; a container restart cut
+both workers' full Playwright gates, and each was resumed and re-ran its
+gate from a fresh build (no mutation was left applied — both ledgers'
+last specs restored). Track A: every job running for a video that is not
+the open one says so in one rule — a line above its row or button, the
+clause first ("Started on another video: export of <file>." /
+transcription / caption burn-in / reframe of <clip> from <file> / GIF of
+<clip> from <file> / Clip Kit for "<clip>" from <file>), wrapping to at
+most two lines with the whole sentence as its title — so the words that
+matter are on screen at every window size and an OBS date-time name
+reads whole; the GIF and kit runs carry their video like the captions
+and reframe runs; the job card's Reframe row names its file when drawn
+beside an open video; the rename dialog writes the name into the field
+before selecting it, so typing replaces the name after a cancel or on a
+second board. Track B: Record's recording view is the take — the
+pre-compositor webcam thumbnail at a fixed bottom-right is gone; the
+Levels Platform list shows "Custom" only as the read-out of a typed
+target; a missing microphone's hint and a microphone that fails at Start
+both name the remedy ("untick Record microphone"), the camera's
+screen-only fallback unchanged. Deviations, accepted: A keeps the card's
+plain wording when the Reframe is the open video's (the clause would be
+false); B updated networkAllowlist.test.ts's exact <video> inventory
+(forced by the removed thumbnail) and re-pinned three record cases that
+used the thumbnail as a proxy for a camera in the take. Ledgers: A 16
+mutations, B 10, all killed. Expedited personally: one independent
+mutation per track at a seam no ledger row names — A: the GIF line's
+visible text naming the open video's file (title untouched) → the
+held-GIF case red; B: the mic-failure toast mapping the wrapper instead
+of the browser's error (the cause sentence lost) → the mic-failure case
+red — each restored byte-identical, sha256 verified; on the MERGED tree:
+verify x2 (210 files / 6449 tests), test:media 495 passed | 17 skipped
+of 512 on 7.0.2, FULL Playwright 761 of 761 (53.5 min). Applied to
+c326815 by `git apply` with every file byte-identical to the expedited
+merge.
 
 Round 119 — T-170, all four counted items, landed in the commit that
 carries this entry. Two Sonnet workers in fresh clones of 48242ad,

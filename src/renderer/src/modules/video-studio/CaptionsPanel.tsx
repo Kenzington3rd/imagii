@@ -323,7 +323,7 @@ export function CaptionsPanel(): JSX.Element | null {
           ? 'Re-transcribe'
           : 'Transcribe'
   const otherVideoSentence = captionsRun
-    ? `${captionsRun.job === 'burn-in' ? 'Caption burn-in on' : 'Transcription of'} ${captionsRun.name}, started on another video.`
+    ? `Started on another video: ${captionsRun.job === 'burn-in' ? 'caption burn-in on' : 'transcription of'} ${captionsRun.name}.`
     : ''
   // T-89: a phase main cannot measure sends no percent, and gets an
   // indeterminate bar rather than a number that means nothing.
@@ -494,7 +494,7 @@ export function CaptionsPanel(): JSX.Element | null {
       {/* T-170 (2): the run is a module store, so a job started on A is drawn here after A is closed and B is open - the header, the phase row and Cancel are A's, Burn into video is off,
           and nothing said whose. Named only when it is not the open video (there the panel speaks for itself): T-168 (4)'s Export rule. */}
       {captionsRun && captionsRun.videoPath !== source.filePath ? (
-        <p className="text-xs text-ink-dim min-w-0 truncate" title={otherVideoSentence}>
+        <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title={otherVideoSentence}>
           {otherVideoSentence}
         </p>
       ) : null}

@@ -22,6 +22,8 @@ export function GifPanel(): JSX.Element | null {
   const busy = useGifRun((s) => s.run !== null)
   // T-168 (fold): and what it is for - the clip (the run's own `name`), so the card does not say a bare "Exporting…" over a clip nobody can tell.
   const runName = useGifRun((s) => s.run?.name ?? null)
+  // T-171 (4): and the video it was started on, so a GIF held on A's "Clip 1" is not read as B's.
+  const gifRun = useGifRun((s) => s.run)
   // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
   const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
@@ -48,7 +50,7 @@ export function GifPanel(): JSX.Element | null {
       const dir = await resolveOutDir()
       if (!dir) return
       const jobId = nanoid(10)
-      if (!useGifRun.getState().begin({ jobId, name: clip.name })) return
+      if (!useGifRun.getState().begin({ jobId, name: clip.name, videoPath: source.filePath, fileName: source.fileName })) return
       try {
         const result = await window.api.video.exportGif({
           jobId,
@@ -164,6 +166,15 @@ export function GifPanel(): JSX.Element | null {
           busy label is shorter, so the second click of a double-click landed on Cancel and cancelled the job it had just started
           (measured: the idle button spans 1093-1205, Cancel 1147-1205). Where the second press lands now is the disabled primary. */}
       {/* Round 17 B2 */}
+      {/* T-171 (4): named only when it is not the open video (T-168 (4)'s Export rule); the row below stays as it is. */}
+      {gifRun && gifRun.videoPath !== source.filePath ? (
+        <p
+          className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words"
+          title={`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}
+        >
+          {`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}
+        </p>
+      ) : null}
       {busy ? (
         <div className="flex items-center justify-end gap-2">
           {/* T-168 (fold): the button's label is the progress line and stays its width (see above); the clip's name rides beside the Cancel. */}

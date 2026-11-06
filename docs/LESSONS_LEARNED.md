@@ -14,6 +14,64 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-06 - T-171 (round 120), Track A: a job from another video says so in words that fit, and a rename replaces the name
+
+The fifty-seventh sweep, Track A (items 2, 4 and 6; Track B has items 1, 3 and 5).
+
+### (6) [LOW] - T-170's other-video lines put the clause LAST on one truncated row, so the words that matter were the ones cut
+
+- **Bug.** "Reframe of Clip 1 from LONG_Season_Finale_S..." never showed "started on another video" (it lived in the title only), and an ordinary OBS name ("2026-11-05 21-14-08.mp4") was cut inside its date-time at 1024 and 1920, so two recordings read alike. The same shape stood in Export's T-168 (4) line.
+- **Root cause.** One `truncate` line in a 274-434 px column, with the explanation at the END of the sentence: truncation removes the tail, and the tail was the explanation.
+- **Fix.** One rule for every job running for a video that is not the open one: `text-xs text-ink-dim min-w-0 line-clamp-2 break-words`, the clause FIRST ("Started on another video: export of <file>." / "...: transcription of <file>." / "...: caption burn-in on <file>." / "...: reframe of <clip> from <file>."), the whole sentence as the `title`. `break-words` (`overflow-wrap: break-word`) wraps a 120-character unspaced name inside the column, so `[overflow-wrap:anywhere]` was not needed.
+- **Test.** video-pipelines.spec.ts "T-171 Track A" (6) (Captions and Reframe held on A, an OBS name and a 120-character name, at the default window: the text, the title, at most two lines, nothing cut sideways or below, inside the card, the clause in the viewport) and video-core.spec.ts "T-171 Track A (6)" (Export, the same); the T-168 (4) and T-170 (2) cases updated in place; red on c326815. Mutations: the clause moved last again (Reframe, Export), `truncate` for the two-line clamp.
+- **Lesson.** **A sentence that is going to be shortened carries its point at the front.** Truncation, wrapping and clamping all cut the end; write the clause that says WHY first, and measure the line with a name that does not fit (the OBS name is the ordinary one) rather than with one that does.
+
+### (4) [LOW] - A running GIF, Clip Kit or (on the job card) Reframe named only its CLIP
+
+- **Bug.** A's "Clip 1" read as B's "Clip 1", and the Cancel beside it stopped A's job. T-170 (2)'s class, in the three places it did not reach: GifPanel's busy row, ClipKitButton's `kitRunCaption`, and the closed-video card's Reframe row drawn beside a vertical video (T-164 (4)).
+- **Root cause.** `useGifRun` and `useKitRun` carried the clip's name and nothing of the video; the card's Reframe row read `name` alone.
+- **Fix.** Both runs carry `videoPath` and `fileName`, set at every `begin` from the open source. Under another video the GIF panel draws the rule's line above its busy row ("Started on another video: GIF of <clip> from <file>."), the kit button draws `kitOtherVideoCaption` IN PLACE of the clip-only caption, and the card labels its Reframe row "Reframe - <clip> from <file>" with the sentence "Started on another video; the reframe keeps going until it finishes or you cancel it." The card says it only when the run's video is not the open one: a Reframe whose clip was deselected on its own video keeps the plain label (the ticket's wording did not draw that line; "Started on another video" would be false there).
+- **Test.** video-pipelines.spec.ts "T-171 Track A" (4) (a GIF and a kit held on A's "Clip 1", A closed, B opened with its own "Clip 1"; the controls on A; the card with a vertical B), VideoJobsRunning.test.tsx "T-171 (4)", clipKit.test.ts "kitOtherVideoCaption" and the wiring pins; red on c326815. Mutations: the GIF line drawn on its own video too, `videoPath` unset at the GIF begin, the kit caption not replaced, the card label without the file.
+- **Lesson.** **When a run store gets a `videoPath`, grep every reader of every run store for the clip-only name.** T-170 gave two stores the field and left two, and the card; a reader found them. The card's reader is the one that is easy to forget, because it is drawn for the closed video and only sometimes beside an open one.
+
+### (2) [LOW] - The rename dialog lost its pre-selection, so typing APPENDED to the old name
+
+- **Bug.** Rename, type, Cancel, Rename (and renaming a second board after a first, and the first Rename after another board was picked) opened with nothing selected; typing appended to the old name. The T-28 comment promised "Pre-filled and pre-selected, so typing replaces it".
+- **Root cause.** `NameDialog` keeps `value` across opens. The open-effect called `setValue(initialValue)` and then `select()` on the stale DOM text; React's re-render then assigned `input.value`, and an IDL value change moves the cursor to the end and unselects (HTML spec). The pin that existed opened the first board of a fresh app, where the value was already right.
+- **Fix.** In the open-effect, write the DOM value before selecting (`el.value = initialValue; el.select()` after `setValue`), so the re-render finds the value equal and assigns nothing.
+- **Test.** references.spec.ts "T-171 Track A (2)" (Rename, type, Cancel, Rename: selection 0..length and typing "New" gives "New"; a second board's name selected whole) and the wiring pin; red on c326815. Mutation: NameDialog without the DOM write.
+- **Lesson.** **`select()` on a controlled input is undone by the render that follows it unless the DOM already holds the value.** A test of a pre-selection must open the dialog a SECOND time, with a different value than the first, since the first open is the one that works.
+
+## 2026-11-06 - T-171 (round 120), Track B: the preview is the take, the list offers what works, and a missing microphone names its remedy
+
+The fifty-seventh sweep, Track B (items 1, 3 and 5).
+
+### (1) [LOW] - The recording view drew the webcam twice
+
+- **Bug.** With the webcam in the take, the recording view showed the compositor's output (the camera already in the chosen corner, as in the file) and, over it, a second `<video>` of the raw camera at a fixed `bottom-8 right-8`: the face twice for Top left, and over the real composited one at the default.
+- **Root cause.** T-120 attached a camera thumbnail so the person could see the camera was live, before anything asked what the main preview already was. Two previews of one input, one of them at a position that had nothing to do with the file.
+- **Fix.** The thumbnail is gone (the element, `camPreviewRef`, the attach effect's branch, and `camInTake`, which only the thumbnail read). The preview is the take.
+- **Test.** record.spec.ts "T-171 Track B" (1): exactly one visible video, and the camera's colour read from the composite at the middle of the Top left box and not the Bottom right one; the T-120 case moved in place to the one video; interactionWiring.test.ts (the effect holds `main` only, one `<video>` in the file). Red on c326815.
+- **Lesson.** **A preview should be the output, not a second view of an input.** When what the file will contain is already on screen, an extra widget for one input can only disagree with it.
+
+### (3) [LOW] - The Platform select's "Custom" did nothing
+
+- **Bug.** Choosing "Custom" patched nothing and the controlled select snapped back to the preset.
+- **Root cause.** "Custom" is the select's read-out for a target that matches no preset (T-90 derived it from the number), but it was always listed as if it were a choice.
+- **Fix.** The option is rendered only while `lufsTargetToPresetId(target) === 'custom'`; a custom value is typed in the Loudness target box, as before.
+- **Test.** audio.spec.ts "T-171 Track B (3)" (no option at -16; listed and shown at -18; gone after a preset); the T-90 option-list pin updated in place; a wiring pin on the guard.
+- **Lesson.** **A value the app derives is not a choice to offer.** If picking an entry cannot change anything, it belongs in the read-out only while it is true.
+
+### (5) [LOW] - With no microphone, nothing named the remedy that exists
+
+- **Bug.** The microphone hint listed plug in, close other apps, allow access and Refresh, and Start failed with "That device wasn't found. Check it's plugged in, then try again." Neither said that Record microphone could be unticked, and the take recorded without one.
+- **Root cause.** Both messages were written for a device that can be found. For the camera, a missing device already means a screen-only take with a toast; for the microphone the only way past is a tick box nobody pointed at.
+- **Fix.** The microphone hint ends "To record without one, untick Record microphone." (the camera's is unchanged), and the microphone's own `getUserMedia` rejection is marked (`MicStartFailure`) where it happens and recognised by the start's one catch, which runs the same teardown and shows the cause followed by "To record without it, untick Record microphone." One teardown path, one toast site. The camera call is not marked, so its screen-only fallback and its message are untouched.
+- **Test.** devices.test.ts (the hint's last sentence; the camera hint unchanged); record.spec.ts "T-171 Track B" (5) (the toast's last words, no Stop, no live track, no temp take; the unticked control records; a failing camera with the microphone ticked records screen-only and never names the microphone); interactionWiring.test.ts (one marked call, one catch). Red on c326815.
+- **Lesson.** **Say the way out where the refusal is.** When the app can do without a thing, the message that says the thing is missing names the switch that does without it.
+
+---
+
 ## 2026-11-06 - T-170 (round 119), Track A: a running caption or Reframe job says whose it is, and Transcribe always asks
 
 The fifty-sixth sweep, Track A (items 2 and 3; Track B has items 1 and 4).

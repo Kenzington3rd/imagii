@@ -1385,7 +1385,7 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     return out
   }
 
-  it('Record attaches both live previews in an effect on the phase, from the stream refs, and lets go on the way out (3)', () => {
+  it('Record attaches its ONE live preview (the composite) in an effect on the phase, from the stream ref, and lets go on the way out (3; T-171 (1))', () => {
     const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
     const from = studio.indexOf("if (phase !== 'recording') return\n    const main")
     // The effect ends at its dependency list, and that list is the phase: keyed on nothing it would run once, on
@@ -1394,15 +1394,15 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     expect(from, 'the attach effect is there').toBeGreaterThan(0)
     expect(to, 'and it is keyed on the phase').toBeGreaterThan(from)
     const effect = studio.slice(from, to)
-    expect(effect).toMatch(/const main = previewRef\.current\s*const cam = camPreviewRef\.current/)
-    expect(effect).toMatch(/if \(main && streamRef\.current\) \{\s*main\.srcObject = streamRef\.current/)
-    // The camera thumbnail shows a camera that is IN the take: the compositor exists exactly then.
-    expect(effect).toMatch(/if \(cam && camStreamRef\.current && compositorRef\.current\) \{\s*cam\.srcObject = camStreamRef\.current/)
-    expect(effect).toMatch(/return \(\) => \{\s*if \(main\) main\.srcObject = null\s*if \(cam\) cam\.srcObject = null/)
+    expect(effect).toMatch(/const main = previewRef\.current\s*if \(main && streamRef\.current\) \{\s*main\.srcObject = streamRef\.current/)
+    // T-171 (1): there is no camera thumbnail to attach: the composite already holds the webcam in the chosen corner.
+    expect(effect).not.toMatch(/cam/i)
+    expect(effect).toMatch(/return \(\) => \{\s*if \(main\) main\.srcObject = null\s*\}/)
     // ...and nothing assigns srcObject while the phase is still 'idle': startRecording ran before the elements existed.
     const start = studio.slice(studio.indexOf('async function startRecording'), studio.indexOf('function stopRecording'))
     expect(start).not.toMatch(/srcObject/)
     expect(start).not.toMatch(/previewRef|camPreviewRef/)
+    expect(studio).not.toMatch(/camPreviewRef|camInTake/)
   })
 
   it('the recorder is asked for 8 Mbps, merged with the mime option, and the Output hint says what that costs in disk (6)', () => {
@@ -1427,7 +1427,7 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     // The check releases what it was handed and the session, through the one teardown the failure path also uses.
     expect(studio).toMatch(/function leftWhileStarting\(\.\.\.extra: Array<MediaStream \| null>\): boolean \{\s*if \(!unmountedRef\.current\) return false\s*for \(const stream of extra\) stream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)\s*abandonStart\(\)\s*return true/)
     expect(studio).toMatch(/function abandonStart\(\): void \{\s*stopAllStreams\(\)\s*const sid = sessionIdRef\.current[\s\S]*?window\.api\.recording\.abandon\(sid\)/)
-    expect(studio).toMatch(/abandonStart\(\)\s*reportFailure\(err, \{ failed: "Couldn't start recording\." \}\)/)
+    expect(studio).toMatch(/abandonStart\(\)\s*if \(err instanceof MicStartFailure\) \{[\s\S]*?\} else \{\s*reportFailure\(err, \{ failed: "Couldn't start recording\." \}\)/)
     // The flag: false at the start of the mount effect (StrictMode runs the cleanup and the effect again in dev),
     // true in its cleanup, ahead of the stop.
     expect(studio).toMatch(/unmountedRef\.current = false\s*void refreshDevices\(\)/)
@@ -1612,19 +1612,16 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
 describe('T-121 — the round-71 fixes are wired where the person reaches them', () => {
   const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-  it('a camera that fails is let go and has no thumbnail: the catch asks whether the studio is gone, stops the stream, and the box follows camInTake (3)', () => {
+  it('a camera that fails is let go: the catch asks whether the studio is gone and stops the stream (3; T-171 (1): the thumbnail and camInTake are gone)', () => {
     const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
     // The catch opens with the same teardown the awaits above it have, then lets the camera go BEFORE the toast.
     expect(studio).toMatch(
       /\} catch \(err\) \{\s*if \(leftWhileStarting\(micStream\)\) return\s*camStream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)\s*camStreamRef\.current = null\s*const \{ message \} = userFacingError\(err, 'Webcam failed\.'\)\s*toast\.error\(`\$\{message\} Recording screen only\.`/
     )
-    // "A camera is in the take" is set where the compositor ref is and cleared where the streams are let go...
-    expect(studio).toMatch(/compositorRef\.current = compositor\s*if \(leftWhileStarting\(micStream\)\) return\s*setCamInTake\(true\)/)
-    expect(studio).toMatch(/compositorRef\.current = null\s*setCamInTake\(false\)/)
-    expect(studio).toMatch(/const \[camInTake, setCamInTake\] = useState\(false\)/)
-    // ...and the thumbnail is drawn from it, not from the checkbox.
-    expect(studio).toMatch(/\{camInTake \? \(\s*<video\s*ref=\{camPreviewRef\}/)
-    expect(studio).not.toMatch(/\{showCam \? \(\s*<video\s*ref=\{camPreviewRef\}/)
+    // T-171 (1): the recording view has the one <video> (the composite); no second element, no flag that drew it.
+    expect(studio).toMatch(/compositorRef\.current = compositor\s*if \(leftWhileStarting\(micStream\)\) return\s*videoTrackSource = compositor\.outputStream/)
+    expect(studio.match(/<video\b/g)).toHaveLength(1)
+    expect(studio).not.toMatch(/setCamInTake|camInTake/)
   })
 
   it('the Timeline steps and nudges from the frame on screen: all four relative keys read playheadNow, none reads the store time (4)', () => {
@@ -2767,7 +2764,7 @@ describe('T-135 — the twenty-first sweep', () => {
     expect(kit, 'the clip-keyed reading is gone').not.toMatch(/kitRun\.clipId === clip\.id|kitRun\.clipId !== clip\.id|otherKitRunning/)
     expect(kit, 'the button is off, and shows the running label, for ANY run').toMatch(/disabled=\{kitRun !== null \|\| exportRunning\}/)
     expect(kit).toMatch(/\{kitRun !== null \? kitRun\.phase \|\| 'Working…' : `Clip Kit/)
-    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, phase: '', canceled: false \}\)/)
+    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, videoPath: source\.filePath, fileName: source\.fileName, phase: '', canceled: false \}\)/)
     // The cancel latch is the run's field, set by the confirm and read by every step.
     expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)/)
     expect(kit).toMatch(/if \(useKitRun\.getState\(\)\.run\?\.canceled\) throw new CancelledError\(\)/)
@@ -2806,7 +2803,7 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
     // The run names the clip it was started on, so the line survives a rename, a removal and a Close.
     expect(kit).toMatch(/\{kitRunCaption\(kitRun\.clipName\)\}/)
-    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/useKitRun = createRunStore<\{ clipId: string; clipName: string; phase: string; canceled: boolean \}>\(\)/)
+    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/useKitRun = createRunStore<\{ clipId: string; clipName: string; videoPath: string; fileName: string; phase: string; canceled: boolean \}>\(\)/)
     // The closed video's kit: a component reading the same run, drawn above the importer, and nowhere the clip list is. T-137 (3): the component is
     // mounted whether a video is open or not (its live region is the always-mounted wrapper) and draws its card only for a run with no video open.
     expect(kit).toMatch(/export function ClipKitRunning\(\): JSX\.Element \{\s*const kitRun = useKitRun\(\(s\) => s\.run\)\s*const videoOpen = useVideoStore\(\(s\) => s\.source !== null\)\s*const shown = kitRun !== null && !videoOpen/)
@@ -4533,11 +4530,11 @@ describe('T-170 Track A: the other-video line and the always-fresh status', () =
 
   it('(2) each panel draws one line, only while the run is another video\'s, whole as its title - and the sentences are the ticket\'s', () => {
     const captions = strip(read('modules/video-studio/CaptionsPanel.tsx')).replace(/\s+/g, ' ')
-    expect(captions).toMatch(/\{captionsRun && captionsRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 truncate" title=\{otherVideoSentence\}>/)
-    expect(captions).toContain("captionsRun.job === 'burn-in' ? 'Caption burn-in on' : 'Transcription of'} ${captionsRun.name}, started on another video.")
+    expect(captions).toMatch(/\{captionsRun && captionsRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title=\{otherVideoSentence\}>/)
+    expect(captions).toContain("`Started on another video: ${captionsRun.job === 'burn-in' ? 'caption burn-in on' : 'transcription of'} ${captionsRun.name}.`")
     const reframe = strip(read('modules/video-studio/ReframePanel.tsx')).replace(/\s+/g, ' ')
-    expect(reframe).toMatch(/\{reframeRun && reframeRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 truncate" title=\{otherVideoSentence\}>/)
-    expect(reframe).toContain('`Reframe of ${reframeRun.name} from ${reframeRun.fileName}, started on another video.`')
+    expect(reframe).toMatch(/\{reframeRun && reframeRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title=\{otherVideoSentence\}>/)
+    expect(reframe).toContain('`Started on another video: reframe of ${reframeRun.name} from ${reframeRun.fileName}.`')
   })
 
   it('(3) transcribe() asks main on every press: the fresh read is not inside a cached-ready test, and the same-video guard stays', () => {
@@ -4550,5 +4547,71 @@ describe('T-170 Track A: the other-video line and the always-fresh status', () =
     expect(body.indexOf('!== pressedFor) return'), 'drops a press for a video that is gone').toBeGreaterThan(fresh)
     expect(body.indexOf('if (!fresh.ready) {'), 'and only a fresh not-ready opens the setup').toBeGreaterThan(body.indexOf('!== pressedFor) return'))
     expect(body.indexOf('useCaptionsRun.getState().begin('), 'before the job is claimed').toBeGreaterThan(body.indexOf('if (!fresh.ready) {'))
+  })
+})
+
+// ═════════ T-171 Track A: a job from another video says so in words that fit; a rename replaces the name ═════════
+describe('T-171 Track A: the other-video line and the rename selection are wired', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const OTHER_LINE = 'text-xs text-ink-dim min-w-0 line-clamp-2 break-words'
+
+  it('(4) the GIF and kit runs carry the video they were started on, set at every begin from the open source', () => {
+    const runs = strip(read('modules/video-studio/store/runs.ts')).replace(/\s+/g, ' ')
+    expect(runs).toContain('useGifRun = createRunStore<{ jobId: string; name: string; videoPath: string; fileName: string }>()')
+    expect(runs).toContain('useKitRun = createRunStore<{ clipId: string; clipName: string; videoPath: string; fileName: string; phase: string; canceled: boolean }>()')
+    expect(strip(read('modules/video-studio/GifPanel.tsx'))).toMatch(/begin\(\{ jobId, name: clip\.name, videoPath: source\.filePath, fileName: source\.fileName \}\)/)
+    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, videoPath: source\.filePath, fileName: source\.fileName, phase: '', canceled: false \}\)/)
+  })
+
+  it('(4)(6) every panel draws its line with the clause first, two lines at most, the whole sentence as its title - and only for another video\'s run', () => {
+    const gif = strip(read('modules/video-studio/GifPanel.tsx')).replace(/\s+/g, ' ')
+    expect(gif).toContain('{gifRun && gifRun.videoPath !== source.filePath ? ( <p className="' + OTHER_LINE + '" title={`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}')
+    expect(gif.indexOf('gifRun.videoPath !== source.filePath'), 'above the busy row').toBeLessThan(gif.indexOf('{busy ? ('))
+    const exp = strip(read('modules/video-studio/ExportPanel.tsx')).replace(/\s+/g, ' ')
+    expect(exp).toContain('{running && queueSource !== source.filePath && queueSourceName ? ( <p className="' + OTHER_LINE + '" title={`Started on another video: export of ${queueSourceName}.`} > Started on another video: export of {queueSourceName}. </p>')
+    const kit = strip(read('modules/video-studio/ClipKitButton.tsx')).replace(/\s+/g, ' ')
+    expect(kit).toContain('kitRun.videoPath !== source.filePath ? ( <p className="max-w-full min-w-0 line-clamp-2 break-words text-right text-xs text-ink-dim" title={kitOtherVideoCaption(kitRun.clipName, kitRun.fileName)} >')
+    expect(kit, 'on its own video the caption is still the clip\'s').toContain('<span className="max-w-full truncate text-xs text-ink-muted" title={kitRunCaption(kitRun.clipName)}>')
+    expect(kit).not.toMatch(/Export of \{queueSourceName\}/)
+  })
+
+  it('(4) the job card names a Reframe started on another video, and says so under the rows', () => {
+    const card = strip(read('modules/video-studio/VideoJobsRunning.tsx')).replace(/\s+/g, ' ')
+    expect(card).toContain('const reframeElsewhere = videoOpen && snap.reframe !== null && snap.reframe.videoPath !== source.filePath')
+    expect(card).toContain("named('Reframe', `${snap.reframe.name} from ${snap.reframe.fileName}`)")
+    expect(card).toContain("'Started on another video; the reframe keeps going until it finishes or you cancel it.'")
+  })
+
+  it('(2) the rename dialog writes the field\'s DOM value before it selects, so the re-render finds it equal and leaves the selection', () => {
+    const dialog = strip(read('components/NameDialog.tsx')).replace(/\s+/g, ' ')
+    expect(dialog).toContain('setValue(initialValue) ')
+    expect(dialog).toContain('const el = inputRef.current if (el) { el.value = initialValue el.select() }')
+    expect(dialog.indexOf('el.value = initialValue')).toBeLessThan(dialog.indexOf('el.select()'))
+  })
+})
+
+describe('T-171 Track B - Record and Audio say and show what is so', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(3) the Platform select lists Custom only while the target matches no preset', () => {
+    const panel = strip(read('modules/audio-studio/LevelsPanel.tsx')).replace(/\s+/g, ' ')
+    expect(panel).toContain(
+      "{lufsTargetToPresetId(chain.loudnormTargetLufs) === 'custom' ? ( <option value=\"custom\">Custom</option> ) : null}"
+    )
+    expect(panel.match(/<option value="custom">/g)).toHaveLength(1)
+  })
+
+  it('(5) only the microphone call is marked as the microphone failing; the one catch adds the remedy after the same teardown, and the camera call is not marked', () => {
+    const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+    const start = studio.slice(studio.indexOf('async function startRecording'), studio.indexOf('function watchScreenEnd'))
+    expect(start).toMatch(
+      /micStream = await navigator\.mediaDevices\.getUserMedia\(\{ audio: audioConstraint \}\)\.catch\(\(err: unknown\) => \{\s*throw new MicStartFailure\(err\)\s*\}\)\s*if \(leftWhileStarting\(micStream\)\) return/
+    )
+    expect(start.match(/new MicStartFailure/g)).toHaveLength(1)
+    expect(start).toMatch(/camStream = await navigator\.mediaDevices\.getUserMedia\(\{\s*video:/)
+    expect(start).toMatch(
+      /abandonStart\(\)\s*if \(err instanceof MicStartFailure\) \{\s*const \{ message \} = userFacingError\(err\.original, "Couldn't start recording\."\)\s*toast\.error\(`\$\{message\} \$\{MIC_START_REMEDY\}`, \{ duration: ERROR_TOAST_MS \}\)/
+    )
+    expect(studio).toContain("const MIC_START_REMEDY = 'To record without it, untick Record microphone.'")
   })
 })

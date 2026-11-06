@@ -131,6 +131,8 @@ export function reconcileDeviceId(
 export function noDeviceHint(kind: 'microphone' | 'camera'): string {
   return (
     `No ${kind} found. Plug one in, close any other app using it, or allow ${kind} access in ` +
-    'Windows privacy settings, then click Refresh sources.'
+    'Windows privacy settings, then click Refresh sources.' +
+    // T-171 (5): the microphone has a remedy of its own (a missing camera already records screen-only).
+    (kind === 'microphone' ? ' To record without one, untick Record microphone.' : '')
   )
 }

@@ -542,7 +542,7 @@ test.describe('T-27 Record Studio', () => {
   const CAM_WARNING =
     'No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources.'
   const MIC_WARNING =
-    'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources.'
+    'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources. To record without one, untick Record microphone.'
 
   test('mic checkbox toggles the microphone row; with no device it is the warning, not a select', async () => {
     test.setTimeout(120_000)
@@ -745,7 +745,7 @@ test.describe('T-27 Record Studio', () => {
       // T-121: and the camera that is not in the take has no thumbnail. The box was drawn from the checkbox,
       // so a failed camera left an empty accent-bordered rectangle over the screen preview for the whole take.
       await expect(window.locator('video.max-h-\\[60vh\\]')).toHaveCount(1)
-      await expect(window.locator('video.border-accent'), 'no empty camera box over the screen preview').toHaveCount(0)
+      await expect(window.locator('video'), 'no camera in the take: the preview alone, and no compositor video left in the page (T-171 (1))').toHaveCount(1)
 
       await window.getByRole('button', { name: 'Stop' }).click()
       await expect
@@ -1531,9 +1531,9 @@ test.describe('T-27 Record Studio', () => {
 
   // T-120 (3): both previews were assigned inside `startRecording`, while the phase was 'idle' and neither <video>
   // existed, so the recording view was a black box and the webcam thumbnail an empty border. The camera is faked
-  // (this container has none) with a canvas stream, so the compositor really runs and the thumbnail has a real
-  // picture to show.
-  test('the recording view shows the take: the screen preview and, with a camera in the take, its thumbnail (T-120)', async () => {
+  // (this container has none) with a canvas stream, so the compositor really runs. T-171 (1): the thumbnail is gone - the
+  // preview is the composite, the take itself, with the camera in it.
+  test('the recording view shows the take: ONE picture, the composite, with a camera in the take (T-120; T-171 (1))', async () => {
     test.setTimeout(120_000)
     const root = makeRoot('previews')
     const userDataDir = path.join(root, 'userData')
@@ -1577,17 +1577,13 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('button', { name: /Start recording/ }).click()
       await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
 
-      // The screen preview, and the camera thumbnail over it (the compositor keeps two more, off screen, so the
-      // two on screen are found by what they are: the preview is the tall black box, the thumbnail wears the
-      // accent border).
+      // The composite is the only picture on screen (the compositor keeps two more, `display: none`).
       const PREVIEW = 'video.max-h-\\[60vh\\]'
-      const THUMB = 'video.border-accent'
+      await expect(window.locator('video:visible')).toHaveCount(1)
       await expect(window.locator(PREVIEW)).toHaveCount(1)
-      await expect(window.locator(THUMB)).toHaveCount(1)
       const width = (selector: string): Promise<number> =>
         window.evaluate((sel) => (document.querySelector(sel) as HTMLVideoElement | null)?.videoWidth ?? 0, selector)
       await expect.poll(() => width(PREVIEW), { timeout: 15_000, intervals: [200], message: 'the screen preview showed nothing' }).toBeGreaterThan(0)
-      await expect.poll(() => width(THUMB), { timeout: 15_000, intervals: [200], message: 'the camera thumbnail showed nothing' }).toBe(320)
       // The preview is the stream that is being recorded, not a still: its time moves.
       await expect
         .poll(() => window.evaluate((sel) => (document.querySelector(sel) as HTMLVideoElement | null)?.currentTime ?? 0, PREVIEW), { timeout: 15_000 })
@@ -1678,7 +1674,7 @@ test.describe('T-27 Record Studio', () => {
         .toEqual(['ended'])
       // ...and nothing is drawn for it: the screen preview is there, the camera's box is not.
       await expect(window.locator('video.max-h-\\[60vh\\]')).toHaveCount(1)
-      await expect(window.locator('video.border-accent'), 'no empty camera box over the screen preview').toHaveCount(0)
+      await expect(window.locator('video'), 'no camera in the take: the preview alone, and no compositor video left in the page (T-171 (1))').toHaveCount(1)
 
       await window.getByRole('button', { name: 'Stop' }).click()
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
@@ -3056,7 +3052,8 @@ test.describe('T-27 Record Studio', () => {
       await window.getByRole('button', { name: /Start recording/ }).click()
       await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
       await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
-      await expect(window.locator('video.border-accent'), 'the camera is IN the take').toHaveCount(1)
+      // T-171 (1): the camera thumbnail is gone, so "in the take" is the compositor's own two hidden videos beside the one preview.
+      await expect(window.locator('video'), 'the camera is IN the take').toHaveCount(3)
 
       const states = await endScreenTrackOnly(window)
       expect(states).toEqual(expect.arrayContaining(['video:ended', 'audio:live']))
@@ -4208,6 +4205,249 @@ test.describe('T-165 (2): the Record card\'s webcam hint shows only when a webca
       await expect(window.getByText(HINT, { exact: true })).toBeVisible()
       await camBox.uncheck()
       await expect(window.getByText(HINT, { exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// T-171 Track B (items 1 and 5): the recording view draws the take once, and a microphone that fails at Start names the remedy.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('T-171 Track B - Record says and shows what is so', () => {
+  const REMEDY = 'To record without it, untick Record microphone.'
+
+  /** A camera that opens: a flat colour 320x240 canvas that keeps repainting, captured as a stream (this container has none). */
+  async function stubFlatColourCamera(window: Page, colour: string): Promise<void> {
+    await window.evaluate((fill) => {
+      const md = navigator.mediaDevices
+      const previous = md.getUserMedia.bind(md)
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        const v = c?.video
+        if (v && typeof v === 'object' && 'deviceId' in v) {
+          const canvas = document.createElement('canvas')
+          canvas.width = 320
+          canvas.height = 240
+          const ctx = canvas.getContext('2d')
+          window.setInterval(() => {
+            if (!ctx) return
+            ctx.fillStyle = fill
+            ctx.fillRect(0, 0, 320, 240)
+          }, 33)
+          return canvas.captureStream(30)
+        }
+        return previous(c)
+      }
+    }, colour)
+  }
+
+  /**
+   * Records every stream `getUserMedia` hands out (`__held.all`), and makes the MICROPHONE's call reject (or open, when `micFails` is
+   * false: an oscillator stands in, since this container has none) and, when `camFails`, the camera's call reject with NotFoundError.
+   */
+  async function holdAndStub(window: Page, opts: { micFails: boolean; camFails?: boolean }): Promise<void> {
+    await window.evaluate((o) => {
+      const w = window as unknown as { __held: { all: MediaStream[]; micAsked: number } }
+      w.__held = { all: [], micAsked: 0 }
+      const md = navigator.mediaDevices
+      const previous = md.getUserMedia.bind(md)
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        if (c && c.audio && !c.video) {
+          w.__held.micAsked += 1
+          if (o.micFails) throw new DOMException('Requested device not found', 'NotFoundError')
+          const ctx = new AudioContext()
+          const dest = ctx.createMediaStreamDestination()
+          const osc = ctx.createOscillator()
+          osc.connect(dest)
+          osc.start()
+          w.__held.all.push(dest.stream)
+          return dest.stream
+        }
+        const v = c?.video
+        if (o.camFails && v && typeof v === 'object' && 'deviceId' in v) {
+          throw new DOMException('Requested device not found', 'NotFoundError')
+        }
+        const stream = await previous(c)
+        w.__held.all.push(stream)
+        return stream
+      }
+    }, opts)
+  }
+
+  const liveTracks = (window: Page): Promise<string[]> =>
+    window.evaluate(() =>
+      (window as unknown as { __held: { all: MediaStream[] } }).__held.all
+        .flatMap((s) => s.getTracks())
+        .filter((t) => t.readyState === 'live')
+        .map((t) => t.kind)
+    )
+
+  test('with the webcam in the take the recording view holds ONE video, the composite, with the camera in the chosen corner (1)', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t171-onevideo')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, null)
+      await waitForHome(window)
+      await stubCameras(window)
+      await stubFlatColourCamera(window, 'rgb(255, 0, 0)')
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+      await window.getByRole('checkbox').nth(1).check() // include the webcam
+      await window.locator('select').filter({ hasText: 'Bottom right' }).selectOption('top-left')
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+
+      // The compositor keeps two more videos off screen (display: none); the person sees exactly one picture, and it is the take.
+      await expect(window.locator('video:visible'), 'the composite and nothing drawn over it').toHaveCount(1)
+      await expect(window.locator('video.border-accent')).toHaveCount(0)
+
+      // The camera is where the file has it: the stand-in's red at the middle of the Top left box (the compositor's own geometry:
+      // 20% of the width, 16:9, a 1% margin with a 16 px floor), and not at the middle of the Bottom right one.
+      const redAt = (corner: 'top-left' | 'bottom-right'): Promise<boolean> =>
+        window.evaluate((c) => {
+          const v = document.querySelector('video.max-h-\\[60vh\\]') as HTMLVideoElement | null
+          if (!v || v.videoWidth === 0) return false
+          const W = v.videoWidth
+          const H = v.videoHeight
+          const camW = Math.max(64, Math.round(W * 0.2))
+          const camH = Math.round(camW * (9 / 16))
+          const margin = Math.max(16, Math.round(W * 0.01))
+          const cx = Math.round((c === 'top-left' ? margin : W - camW - margin) + camW / 2)
+          const cy = Math.round((c === 'top-left' ? margin : H - camH - margin) + camH / 2)
+          const canvas = document.createElement('canvas')
+          canvas.width = W
+          canvas.height = H
+          const ctx = canvas.getContext('2d')
+          if (!ctx) return false
+          ctx.drawImage(v, 0, 0)
+          const [r, g, b] = ctx.getImageData(cx, cy, 1, 1).data
+          return r > 230 && g < 40 && b < 40
+        }, corner)
+      await expect.poll(() => redAt('top-left'), { timeout: 15_000, intervals: [200], message: 'the camera was not in the top left of the composite' }).toBe(true)
+      expect(await redAt('bottom-right'), 'and the bottom right box is not the camera').toBe(false)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a microphone that fails at Start says how to record without it, and leaves no take and no running track (5)', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t171-micfail')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+      await holdAndStub(window, { micFails: true })
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('checkbox').nth(0)).toBeChecked()
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      await expect
+        .poll(async () => (await readToastLog(window)).some((t) => t.endsWith(`That device wasn't found. Check it's plugged in, then try again. ${REMEDY}`)), {
+          timeout: 20_000,
+          intervals: [200],
+          message: 'the toast did not end with the remedy'
+        })
+        .toBe(true)
+      expect((await readToastLog(window)).join(' | ')).toContain("Couldn't start recording.")
+
+      // The start's teardown ran: no take, no REC, the screen capture let go, Start offered again.
+      await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible()
+      expect(await liveTracks(window), 'a track is still running after the refusal').toEqual([])
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: the same microphone refusal with Record microphone unticked starts the take', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t171-micoff')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, null)
+      await gotoRecordFromHome(window)
+      await installToastLog(window)
+      await holdAndStub(window, { micFails: true })
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('checkbox').nth(0).uncheck()
+      const asked = (): Promise<number> => window.evaluate(() => (window as unknown as { __held: { micAsked: number } }).__held.micAsked)
+      const askedBefore = await asked() // the device scans ask too; the press must not
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      expect(await asked(), 'the press asked for the microphone it was told to leave').toBe(askedBefore)
+      expect((await readToastLog(window)).join(' | ')).not.toContain(REMEDY)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a camera that fails to open still records screen-only with the microphone ticked, and the toast does not blame the microphone (5)', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t171-camfail')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubSaveDialog(app, null)
+      await waitForHome(window)
+      await stubCameras(window)
+      await holdAndStub(window, { micFails: false, camFails: true })
+      await window.getByRole('link', { name: /Record/ }).first().click()
+      await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+      await installToastLog(window)
+      await window.getByRole('checkbox').nth(1).check()
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('checkbox').nth(0)).toBeChecked()
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect
+        .poll(async () => (await readToastLog(window)).some((t) => t.endsWith("That device wasn't found. Check it's plugged in, then try again. Recording screen only.")), {
+          timeout: 20_000,
+          intervals: [200]
+        })
+        .toBe(true)
+      expect((await readToastLog(window)).join(' | ')).not.toContain('untick Record microphone')
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
     } finally {
       await app.close()
       cleanup(root)

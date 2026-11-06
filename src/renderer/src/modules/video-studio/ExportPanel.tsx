@@ -595,10 +595,14 @@ export function ExportPanel(): JSX.Element | null {
       {jobs.length > 0 ? (
         <div className="flex flex-col gap-2 mt-2">
           {/* T-168 (4): a batch keeps its rows while it runs, whatever video is open now - B's Export read "Exporting…" over A's rows and a Cancel nobody could
-              attribute. The line names the video the batch is for; it is only said when it is not the open one (there the rows speak for themselves). */}
+              attribute. The line names the video the batch is for; it is only said when it is not the open one (there the rows speak for themselves).
+              T-171 (6): the clause first and two lines, so "started on another video" and the whole file name are on screen. */}
           {running && queueSource !== source.filePath && queueSourceName ? (
-            <p className="text-xs text-ink-dim min-w-0 truncate" title={queueSourceName}>
-              Export of {queueSourceName}, started on another video.
+            <p
+              className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words"
+              title={`Started on another video: export of ${queueSourceName}.`}
+            >
+              Started on another video: export of {queueSourceName}.
             </p>
           ) : null}
           <PanelHeader icon="package">Queue</PanelHeader>

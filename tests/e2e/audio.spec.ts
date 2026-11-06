@@ -1369,8 +1369,8 @@ test.describe('imagii Audio Studio', () => {
       await expect(platform.locator('option')).toHaveText([
         'Talking and podcasts (−16)',
         'YouTube, TikTok, Reels (−14)',
-        'Broadcast TV and radio (−23)',
-        'Custom'
+        'Broadcast TV and radio (−23)'
+        // T-171 (3): no 'Custom' here - it is listed only while the typed target matches no preset (the next block).
       ])
       await platform.selectOption({ label: 'YouTube, TikTok, Reels (−14)' })
       await expect(lufs).toHaveValue('-14')
@@ -1382,7 +1382,7 @@ test.describe('imagii Audio Studio', () => {
       // Number -> "Custom" detection.
       await lufs.fill('-18')
       await expect(platform).toHaveValue('custom')
-      // Selecting Custom explicitly leaves the typed value alone.
+      // The read-out, once listed, is the current choice: picking it again leaves the typed value alone.
       await platform.selectOption('custom')
       await expect(lufs).toHaveValue('-18')
       // Back onto a preset value and the picker recognises it again.
@@ -5817,6 +5817,43 @@ test.describe('T-170 (1): a meter with no sound under it reads silent', () => {
       await window.waitForTimeout(600)
       await expect(label).toHaveText('-60 dB')
       await expect(window.getByRole('progressbar', { name: 'Drawing the waveform' }), 'still drawing: the reading was held while it drew').toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// T-171 (3): the Platform select's "Custom" was a choice that did nothing (it patched nothing and the controlled select snapped back to the
+// preset). It is listed only while the typed target matches no preset - the select's read-out - and goes when a preset is picked.
+test.describe('T-171 Track B (3): the Platform list offers Custom only while the target is custom', () => {
+  test('no Custom option at a preset target; -18 lists and shows it; picking a preset takes it away', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t171-platform')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const levels = window.locator(LEVELS)
+      await levels.getByRole('checkbox').check()
+      const lufs = levels.getByLabel('Loudness target (LUFS)')
+      const platform = levels.getByLabel('Loudness platform preset')
+      await expect(lufs).toHaveValue('-16')
+      await expect(platform).toHaveValue('podcast')
+      await expect(platform.locator('option'), 'a preset target lists the three presets only').toHaveText([
+        'Talking and podcasts (−16)',
+        'YouTube, TikTok, Reels (−14)',
+        'Broadcast TV and radio (−23)'
+      ])
+      await expect(platform.locator('option[value="custom"]')).toHaveCount(0)
+
+      await lufs.fill('-18')
+      await expect(platform).toHaveValue('custom')
+      await expect(platform.locator('option:checked')).toHaveText('Custom')
+      await expect(platform.locator('option[value="custom"]')).toHaveCount(1)
+
+      await platform.selectOption('streaming')
+      await expect(lufs).toHaveValue('-14')
+      await expect(platform).toHaveValue('streaming')
+      await expect(platform.locator('option[value="custom"]'), 'the read-out goes with the custom value').toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }

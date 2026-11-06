@@ -18,7 +18,7 @@ import { createRunStore } from '../../../lib/runStore'
  * row from the open video; `VideoJobsRunning` draws it when the video is closed, and a closed video has nobody to ask.
  */
 /** The GIF export: its job id is what its Cancel is aimed at. */
-export const useGifRun = createRunStore<{ jobId: string; name: string }>()
+export const useGifRun = createRunStore<{ jobId: string; name: string; videoPath: string; fileName: string }>()
 /** The compilation join. */
 export const useCompileRun = createRunStore<{ jobId: string; name: string }>()
 /** The picture-in-picture composite. */
@@ -46,7 +46,7 @@ export const useCleanAudioRun = createRunStore<{ videoPath: string }>()
  * (T-136 (1): the list draws one kit button, for the selected clip, so a kit that showed itself only on its own clip's button lost its Cancel when
  * another clip was selected, and for good when its clip was removed or the video closed).
  */
-export const useKitRun = createRunStore<{ clipId: string; clipName: string; phase: string; canceled: boolean }>()
+export const useKitRun = createRunStore<{ clipId: string; clipName: string; videoPath: string; fileName: string; phase: string; canceled: boolean }>()
 /** A transcription or a caption burn-in: which one is running, and (T-170 (2)) the video it was started on - `name` is that video's file name. */
 export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in'; name: string; videoPath: string }>()
 /**

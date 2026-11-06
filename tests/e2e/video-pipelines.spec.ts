@@ -13608,7 +13608,9 @@ test.describe('T-164 (4)-(6): the closed-video card and the Compile card', () =>
       await expect(reframeCard(window), 'a vertical video has nothing to reframe: no panel').toHaveCount(0)
       await expect(window.getByText('Reframe — Clip 1'), 'the run still has its row').toBeVisible()
       await expect(window.getByText('The video is closed;'), 'and the card does not say a video is closed while one is open').toHaveCount(0)
-      await expect(window.getByText('The reframe keeps going until it finishes or you cancel it.')).toBeVisible()
+      // T-171 (4): the run is A's and the open video is another, so the row names the clip AND the file, and the sentence says it was started elsewhere.
+      await expect(window.getByText(`Reframe — Clip 1 from ${path.basename(longSrc)}`), 'the row says whose it is').toBeVisible()
+      await expect(window.getByText('Started on another video; the reframe keeps going until it finishes or you cancel it.')).toBeVisible()
       await expect(cardCancel(window), 'with its Cancel').toHaveCount(1)
 
       await cardCancel(window).click()
@@ -14573,7 +14575,7 @@ test.describe('T-170 Track A: a running caption or Reframe job says whose it is;
     try {
       await stubMain(app, { ready: true, holdTranscribe: true, srt: '', outputPath: '' })
       const card = captionsCard(window)
-      const SENTENCE = 'Transcription of t170tx-a.mp4, started on another video.'
+      const SENTENCE = 'Started on another video: transcription of t170tx-a.mp4.'
       await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
       await expect.poll(async () => (await counters(app)).transcribeCalls, { timeout: 15_000 }).toBe(1)
       await expect(card.getByRole('button', { name: 'Transcribing…' })).toBeVisible()
@@ -14604,7 +14606,7 @@ test.describe('T-170 Track A: a running caption or Reframe job says whose it is;
     }
   })
 
-  test('(2) a caption burn-in held on A, A closed, B opened: B\'s Captions panel says "Caption burn-in on <A>, started on another video." (control: on A there is none)', async () => {
+  test('(2) a caption burn-in held on A, A closed, B opened: B\'s Captions panel says "Started on another video: caption burn-in on <A>." (control: on A there is none)', async () => {
     test.setTimeout(240_000)
     const { fileA, fileB } = twoVideos('t170burn')
     const { app, window, outDir } = await launchWithVideo('t170burn', fileA)
@@ -14613,7 +14615,7 @@ test.describe('T-170 Track A: a running caption or Reframe job says whose it is;
       await stubMain(app, { ready: true, holdTranscribe: false, srt: path.join(outDir, 't170burn.srt'), outputPath: burned })
       await stubDialogs(app, { save: [burned] })
       const card = captionsCard(window)
-      const SENTENCE = 'Caption burn-in on t170burn-a.mp4, started on another video.'
+      const SENTENCE = 'Started on another video: caption burn-in on t170burn-a.mp4.'
       // A transcript first (answered at once), so Burn into video is there to press.
       await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
       const burn = card.getByRole('button', { name: 'Burn into video' })
@@ -14638,7 +14640,7 @@ test.describe('T-170 Track A: a running caption or Reframe job says whose it is;
     }
   })
 
-  test('(2) a Reframe held on A\'s clip, A closed, B opened with a clip: B\'s Reframe panel says "Reframe of <clip> from <A>, started on another video." (control: on A there is none)', async () => {
+  test('(2) a Reframe held on A\'s clip, A closed, B opened with a clip: B\'s Reframe panel says "Started on another video: reframe of <clip> from <A>." (control: on A there is none)', async () => {
     test.setTimeout(240_000)
     const { fileA, fileB } = twoVideos('t170rf')
     const { app, window, outDir } = await launchWithVideo('t170rf', fileA)
@@ -14646,7 +14648,7 @@ test.describe('T-170 Track A: a running caption or Reframe job says whose it is;
       await stubMain(app, { ready: true, holdTranscribe: false, srt: '', outputPath: path.join(outDir, 'held-reframe.mp4') })
       await stubDialogs(app, { open: [outDir] })
       const card = reframeCard(window)
-      const SENTENCE = 'Reframe of Clip 1 from t170rf-a.mp4, started on another video.'
+      const SENTENCE = 'Started on another video: reframe of Clip 1 from t170rf-a.mp4.'
       await card.getByRole('button', { name: 'Choose folder…' }).click()
       await card.getByRole('button', { name: 'Reframe to 9:16' }).click()
       await expect.poll(async () => (await counters(app)).reframeCalls, { timeout: 15_000 }).toBe(1)
@@ -14715,4 +14717,213 @@ test.describe('T-170 Track A: a running caption or Reframe job says whose it is;
       await app.close().catch(() => undefined)
     }
   })
+})
+
+// ── T-171 Track A: a job from another video says so in words that fit ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// (4) GIF, Clip Kit and (on the job card) Reframe named only their CLIP, so A's "Clip 1" read as B's and its Cancel stopped A's job. (6) T-170's other-video lines were one `truncate` line in a 274-434 px column:
+// the clause "started on another video" was last and cut away, and an OBS name was cut inside its date-time. The rule is one line above the job's row, the clause FIRST, two lines at most, the whole sentence its
+// title. Main's handlers are replaced by ones that answer when the test says (the T-168 (4) / T-170 approach), so each job is still running when it is read.
+test.describe('T-171 Track A: a job started on another video says so, in words that fit', () => {
+  const OBS = '2026-11-05 21-14-08.mp4'
+  /** 120 characters with no space in them, ending in .mp4. */
+  const LONG = `LONG_Season_Finale_${'x'.repeat(120 - 'LONG_Season_Finale_'.length - '.mp4'.length)}.mp4`
+  const OTHER = /Started on another video/
+
+  /** Replace main's handler for `channel` with one that waits for `releaseHeld(channel)`, then answers with `answer`. */
+  async function hold(app: ElectronApplication, channel: string, answer: unknown): Promise<void> {
+    await app.evaluate(
+      ({ ipcMain }, arg) => {
+        const g = globalThis as unknown as { __t171?: Record<string, () => void> }
+        g.__t171 = g.__t171 ?? {}
+        const gate = new Promise<void>((resolve) => {
+          ;(g.__t171 as Record<string, () => void>)[arg.channel] = resolve
+        })
+        ipcMain.removeHandler(arg.channel)
+        ipcMain.handle(arg.channel, async () => {
+          await gate
+          return arg.answer
+        })
+      },
+      { channel, answer }
+    )
+  }
+  const releaseHeld = (app: ElectronApplication, channel: string): Promise<void> =>
+    app.evaluate((_electron, ch) => (globalThis as unknown as { __t171: Record<string, () => void> }).__t171[ch]?.(), channel)
+  /** `captions:status` READY, so Transcribe starts. */
+  async function captionsReady(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => ({ exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }))
+    })
+  }
+  function twoVideos(nameA: string, nameB = 't171-b.mp4'): { fileA: string; fileB: string } {
+    const fileA = path.join(root, 'source', nameA)
+    const fileB = path.join(root, 'source', nameB)
+    copyFileSync(clipSrc, fileA)
+    copyFileSync(clipSrc, fileB)
+    return { fileA, fileB }
+  }
+  /** Close the open video (the question is accepted) and open `fileB`. */
+  async function closeThenOpen(window: Page, fileB: string): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+    await dropOnVideoImporter(window, fileB, path.basename(fileB))
+    await expect(window.locator('video')).toHaveCount(1)
+    await expect(window.locator('header').getByText(path.basename(fileB), { exact: true })).toBeVisible({ timeout: 30_000 })
+  }
+  const gifCard = (window: Page): Locator => window.locator('.card').filter({ hasText: 'Export as GIF' })
+  /** How a line sits in its box: whether anything is cut (either way), how many lines it is, and where it stands against its card. */
+  const metrics = (line: Locator): Promise<{ text: string; sw: number; cw: number; sh: number; ch: number; h: number; lh: number; left: number; right: number }> =>
+    line.evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      return { text: el.textContent ?? '', sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight, h: r.height, lh: parseFloat(getComputedStyle(el).lineHeight), left: r.left, right: r.right }
+    })
+
+  test('(4) a GIF held on A\'s "Clip 1", A closed, B opened with its own "Clip 1": the line names A above the row, the title is whole, and on A itself there is none', async () => {
+    test.setTimeout(240_000)
+    const { fileA, fileB } = twoVideos('t171gif-a.mp4')
+    const { app, window, outDir } = await launchWithVideo('t171gif', fileA)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await hold(app, 'video:exportGif', { outputPath: path.join(outDir, 'held.gif') })
+      const card = gifCard(window)
+      const SENTENCE = 'Started on another video: GIF of Clip 1 from t171gif-a.mp4.'
+      await card.getByRole('button', { name: 'Export GIF' }).click()
+      await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(card.getByText('Exporting Clip 1…', { exact: true })).toBeVisible()
+      await window.waitForTimeout(300)
+      await expect(card.getByText(OTHER), 'control: on the video the GIF is for there is nothing to explain').toHaveCount(0)
+
+      await closeThenOpen(window, fileB)
+      await expect(card.getByRole('button', { name: 'Exporting…' }), 'the GIF still runs under B').toBeDisabled()
+      const line = card.getByText(SENTENCE, { exact: true })
+      await expect(line, 'the running GIF is named: the clip and the file').toBeVisible()
+      await expect(line).toHaveAttribute('title', SENTENCE)
+      const cancel = card.getByRole('button', { name: 'Cancel', exact: true })
+      const lineBox = await line.boundingBox()
+      const cancelBox = await cancel.boundingBox()
+      expect(lineBox && cancelBox && lineBox.y + lineBox.height <= cancelBox.y, 'the line is above the Cancel row').toBe(true)
+      await expect(card.getByText('Exporting Clip 1…', { exact: true }), 'the busy row beside Cancel stays as it was').toBeVisible()
+
+      await releaseHeld(app, 'video:exportGif')
+      await expect(card.getByRole('button', { name: 'Export GIF' }), 'the job ends').toBeEnabled({ timeout: 15_000 })
+      await expect(line, 'and so does the line').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(4) a Clip Kit held on A\'s "Clip 1", A closed, B opened with its own "Clip 1": the caption names A in place of the clip-only one, and on A itself it is the clip\'s', async () => {
+    test.setTimeout(240_000)
+    const { fileA, fileB } = twoVideos('t171kit-a.mp4')
+    const { app, window, outDir } = await launchWithVideo('t171kit', fileA)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await hold(app, 'video:exportBatch', [])
+      const list = clipListCard(window)
+      const SENTENCE = 'Started on another video: Clip Kit for "Clip 1" from t171kit-a.mp4.'
+      await kitButton(window).click()
+      await expect(kitButton(window)).toHaveText('Exporting platform version 1 of 5…', { timeout: 60_000 })
+      await expect(list.getByText('Clip Kit for "Clip 1"', { exact: true }), 'control: on A the caption is the clip\'s').toBeVisible()
+      await expect(list.getByText(OTHER), 'and there is no other-video line').toHaveCount(0)
+
+      await closeThenOpen(window, fileB)
+      await expect(kitButton(window), 'the kit still runs under B').toHaveText('Exporting platform version 1 of 5…')
+      const line = list.getByText(SENTENCE, { exact: true })
+      await expect(line, 'the running kit is named: the clip and the file').toBeVisible()
+      await expect(line).toHaveAttribute('title', SENTENCE)
+      await expect(list.getByText('Clip Kit for "Clip 1"', { exact: true }), 'the clip-only caption is replaced, not repeated').toHaveCount(0)
+
+      // Cancel it from B's list, as the person would; then let main's held batch go so the kit can unwind.
+      await list.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await releaseHeld(app, 'video:exportBatch')
+      await expectCanceledNotFailed(window, 'Clip Kit canceled.')
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+      await expect(line, 'the line goes with the kit').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(4) the job card: a Reframe held on A, A closed, a vertical B opened - the row reads "Reframe — Clip 1 from <A>" and the sentence starts "Started on another video"', async () => {
+    test.setTimeout(240_000)
+    const vertical = path.join(root, 'source', 't171-vertical.mp4')
+    await ffmpeg([
+      '-y',
+      '-f', 'lavfi', '-i', 'testsrc2=size=180x320:rate=15:duration=2',
+      '-f', 'lavfi', '-i', 'sine=frequency=440:duration=2',
+      '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest',
+      vertical
+    ])
+    const { fileA } = twoVideos('t171card-a.mp4')
+    const { app, window, outDir } = await launchWithVideo('t171card', fileA)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await hold(app, 'video:reframe', { outputPath: path.join(outDir, 'held-reframe.mp4') })
+      await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expect(reframeCard(window).getByRole('button', { name: 'Reframing…' })).toBeDisabled()
+
+      await closeThenOpen(window, vertical)
+      await expect(reframeCard(window), 'a vertical video has nothing to reframe: no panel').toHaveCount(0)
+      const row = window.getByText('Reframe — Clip 1 from t171card-a.mp4', { exact: true })
+      await expect(row, 'the card\'s row says whose Reframe it is').toBeVisible()
+      await expect(row).toHaveAttribute('title', 'Reframe — Clip 1 from t171card-a.mp4')
+      const sentence = window.getByText('Started on another video; the reframe keeps going until it finishes or you cancel it.', { exact: true })
+      await expect(sentence).toBeVisible()
+      await expect(window.getByText('The video is closed;'), 'one is open').toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(1)
+
+      await releaseHeld(app, 'video:reframe')
+      await expect(row, 'the row goes with the job').toHaveCount(0, { timeout: 15_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  for (const [what, nameA] of [['an OBS name', OBS], ['a 120-character name', LONG]] as const) {
+    test(`(6) the Captions and Reframe lines for ${what} at the default window: ${what === 'an OBS name' ? 'the whole sentence is on screen, on at most two lines' : 'the clause is on screen first'}`, async () => {
+      test.setTimeout(240_000)
+      const { fileA, fileB } = twoVideos(nameA, 't171fit-b.mp4')
+      const { app, window, outDir } = await launchWithVideo('t171fit', fileA)
+      try {
+        await captionsReady(app)
+        await stubDialogs(app, { open: [outDir] })
+        await hold(app, 'captions:transcribe', { jobId: 'x', srtPath: '', segments: [], durationMs: 1 })
+        await hold(app, 'video:reframe', { outputPath: path.join(outDir, 'held-reframe.mp4') })
+        await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+        await expect(captionsCard(window).getByRole('button', { name: 'Transcribing…' })).toBeVisible({ timeout: 15_000 })
+        await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+        await expect(reframeCard(window).getByRole('button', { name: 'Reframing…' })).toBeDisabled()
+
+        await closeThenOpen(window, fileB)
+        const lines: Array<[string, Locator, string]> = [
+          ['Captions', captionsCard(window).getByText(OTHER), `Started on another video: transcription of ${nameA}.`],
+          ['Reframe', reframeCard(window).getByText(OTHER), `Started on another video: reframe of Clip 1 from ${nameA}.`]
+        ]
+        for (const [panel, line, sentence] of lines) {
+          await expect(line, `${panel}: one other-video line`).toHaveCount(1)
+          await line.scrollIntoViewIfNeeded()
+          await expect(line).toHaveAttribute('title', sentence)
+          const m = await metrics(line)
+          expect(m.text, `${panel}: the clause is the first thing it says`).toBe(sentence)
+          expect(m.h, `${panel}: at most two lines`).toBeLessThanOrEqual(2 * m.lh + 1)
+          const cardBox = (await (panel === 'Captions' ? captionsCard(window) : reframeCard(window)).boundingBox())!
+          expect(m.right, `${panel}: inside the card, not drawn past it`).toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
+          await expect(line, `${panel}: the clause is on screen`).toBeInViewport()
+          if (nameA === OBS) {
+            expect(m.sw, `${panel}: nothing is cut sideways`).toBeLessThanOrEqual(m.cw)
+            expect(m.sh, `${panel}: nothing is cut below (no ellipsis): the whole sentence is on screen`).toBeLessThanOrEqual(m.ch)
+          }
+        }
+        await releaseHeld(app, 'captions:transcribe')
+        await releaseHeld(app, 'video:reframe')
+        await expect(reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' })).toBeEnabled({ timeout: 15_000 })
+      } finally {
+        await app.close().catch(() => undefined)
+      }
+    })
+  }
 })

@@ -51,8 +51,18 @@ export function NameDialog({
     // Modal's trap has already put focus in the field (it is the first
     // focusable); selecting the text is what makes a rename a rename rather
     // than an append. Child effects run before the parent's, so this lands
-    // after the focus, not before it.
-    inputRef.current?.select()
+    // after the focus, not before it. The DOM value is written first (T-171
+    // (2)): `value` persists across opens, so the field still holds the last
+    // text and React's re-render would assign `input.value` AFTER this
+    // select() - an IDL value change moves the cursor to the end and
+    // unselects (HTML spec), and typing then appended. With the DOM already
+    // equal to `initialValue` the re-render assigns nothing and the
+    // selection stands.
+    const el = inputRef.current
+    if (el) {
+      el.value = initialValue
+      el.select()
+    }
   }, [open, initialValue])
 
   const trimmed = value.trim()

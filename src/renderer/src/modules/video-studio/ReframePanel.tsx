@@ -56,7 +56,8 @@ export function ReframePanel(): JSX.Element | null {
   // are the compiler's - they narrow `source` and `clip` for the body - and the helper repeats them as part of the rule.
   if (!source || !clip || !reframePanelShows(source, clip)) return null
 
-  const otherVideoSentence = reframeRun ? `Reframe of ${reframeRun.name} from ${reframeRun.fileName}, started on another video.` : ''
+  // T-171 (6): the clause first, so it is the part always on screen (the line wraps to two lines and the title holds the whole).
+  const otherVideoSentence = reframeRun ? `Started on another video: reframe of ${reframeRun.name} from ${reframeRun.fileName}.` : ''
 
   async function reframe(): Promise<void> {
     if (startingRef.current) return
@@ -164,7 +165,7 @@ export function ReframePanel(): JSX.Element | null {
       {/* T-170 (2): the run is a module store, so a Reframe started on A is drawn here after A is closed and B is open, with its phase row and Cancel, and nothing said whose.
           Named only when it is not the open video (T-168 (4)'s Export rule). */}
       {reframeRun && reframeRun.videoPath !== source.filePath ? (
-        <p className="text-xs text-ink-dim min-w-0 truncate" title={otherVideoSentence}>
+        <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title={otherVideoSentence}>
           {otherVideoSentence}
         </p>
       ) : null}

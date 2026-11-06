@@ -166,8 +166,8 @@ export function LevelsPanel(): JSX.Element {
                 const choice = e.target.value
                 const match = LUFS_PRESETS.find((p) => p.value === choice)
                 if (match) patchChain({ loudnormTargetLufs: match.target })
-                // 'custom' picked → leave the current value alone; the
-                // numeric input above is the source of truth.
+                // 'custom' is only listed while it is the read-out, so it is not reached from a preset; if it is, leave the
+                // current value alone (the numeric input above is the source of truth).
               }}
               aria-label="Loudness platform preset"
             >
@@ -176,7 +176,11 @@ export function LevelsPanel(): JSX.Element {
                   {opt.label}
                 </option>
               ))}
-              <option value="custom">Custom</option>
+              {/* T-171 (3): "Custom" is the select's read-out for a typed target that matches no preset, not a choice - picking
+                  it patched nothing and the select snapped back. It is listed only while it is true. */}
+              {lufsTargetToPresetId(chain.loudnormTargetLufs) === 'custom' ? (
+                <option value="custom">Custom</option>
+              ) : null}
             </select>
           </label>
           <p className="text-xs text-ink-dim -mt-2">

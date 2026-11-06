@@ -225,7 +225,15 @@ export function VideoJobsRunning(): JSX.Element {
   // T-164 (4): with a video open the panels draw their own jobs - except a Reframe the open video's panel does not show (a vertical video, no clip
   // selected), which has no row anywhere else: it is drawn here, with its Cancel, and only it. Every other row keeps the no-video-open rule.
   const videoOpen = source !== null
-  const rows = !videoOpen ? allRows : reframePanelShows(source, selectedClip) ? [] : allRows.filter((r) => r.kind === 'reframe')
+  // T-171 (4): and a Reframe started on ANOTHER video than the open one says whose it is - the clip and the file in its label, and the sentence under the rows
+  // says it was started on another video - since its "Clip 1" would be read as the open video's. (One started on the open video, its clip since deselected,
+  // keeps the plain label: it is the open video's.)
+  const reframeElsewhere = videoOpen && snap.reframe !== null && snap.reframe.videoPath !== source.filePath
+  const rows = (!videoOpen ? allRows : reframePanelShows(source, selectedClip) ? [] : allRows.filter((r) => r.kind === 'reframe')).map((r) =>
+    r.kind === 'reframe' && reframeElsewhere && snap.reframe
+      ? { ...r, label: named('Reframe', `${snap.reframe.name} from ${snap.reframe.fileName}`) }
+      : r
+  )
   const shown = rows.length > 0
   const [askingExport, setAskingExport] = useState(false)
   // The question is about the batch that is running: it goes with the batch (T-131 (9)), not on to the next one.
@@ -280,7 +288,9 @@ export function VideoJobsRunning(): JSX.Element {
             ))}
             <p className="text-xs text-ink-muted">
               {videoOpen
-                ? 'The reframe keeps going until it finishes or you cancel it.'
+                ? reframeElsewhere
+                  ? 'Started on another video; the reframe keeps going until it finishes or you cancel it.'
+                  : 'The reframe keeps going until it finishes or you cancel it.'
                 : rows.length === 1
                   ? 'The video is closed; the job keeps going until it finishes or you cancel it.'
                   : 'The video is closed; these jobs keep going until they finish or you cancel them.'}

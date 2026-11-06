@@ -39,6 +39,14 @@ const RECORDING_VIDEO_BITS_PER_SECOND = 8_000_000
  */
 type SourceSearch = 'never' | 'searching' | 'done'
 
+/** T-171 (5): the microphone's `getUserMedia` rejected at Start; `original` is what the browser threw. */
+class MicStartFailure extends Error {
+  constructor(readonly original: unknown) {
+    super('microphone failed to start')
+  }
+}
+const MIC_START_REMEDY = 'To record without it, untick Record microphone.'
+
 const WEBCAM_CORNERS: WebcamCorner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
 const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
   'top-left': 'Top left',
@@ -75,10 +83,6 @@ export function RecordStudio(): JSX.Element {
   // shows.
   const [starting, setStarting] = useState(false)
   const startingRef = useRef(false)
-  // T-121: a camera is IN the take - the compositor exists. The thumbnail is drawn from this and not from the
-  // checkbox: checking "Include webcam" and having the camera fail left an empty accent-bordered box over the
-  // screen preview for the whole take. Set where the compositor ref is, cleared where it is let go.
-  const [camInTake, setCamInTake] = useState(false)
   // T-120: this component is gone. `startRecording` awaits the capture, the mic, the camera and the
   // main-process session one after another, and the unmount cleanup runs before any of them lands, so a
   // person who left during "Starting…" left a live capture (and a growing temp webm) nobody owned. Every
@@ -132,7 +136,6 @@ export function RecordStudio(): JSX.Element {
   // T-125 (25): the same for the microphone's audio track (see `watchMicEnd`).
   const micEndOffRef = useRef<(() => void) | null>(null)
   const previewRef = useRef<HTMLVideoElement>(null)
-  const camPreviewRef = useRef<HTMLVideoElement>(null)
   const startTimeRef = useRef<number>(0)
   const deviceScanRef = useRef(0)
   const elapsedTimerRef = useRef<number | null>(null)
@@ -198,23 +201,18 @@ export function RecordStudio(): JSX.Element {
   // the recording view was a black box and the webcam thumbnail an empty border. The attach belongs to the
   // render that has the elements, so it is an effect on the phase, and it lets go of the streams on the way
   // out (the elements go away with the phase, and an element holding a stopped stream is a frozen frame).
-  // The camera thumbnail only shows a camera that is IN the take: the compositor exists exactly when it is, and
-  // the element itself is rendered only then (`camInTake`, T-121), so a failed camera leaves no empty box.
+  // T-171 (1): there is no second, camera-only thumbnail. The main preview is the compositor's output - the webcam already
+  // in the chosen corner, as in the file - and a pre-compositor thumbnail at a fixed corner drew the face twice (and over the
+  // real one at the default). What the preview shows is the take.
   useEffect(() => {
     if (phase !== 'recording') return
     const main = previewRef.current
-    const cam = camPreviewRef.current
     if (main && streamRef.current) {
       main.srcObject = streamRef.current
       main.play().catch(() => undefined)
     }
-    if (cam && camStreamRef.current && compositorRef.current) {
-      cam.srcObject = camStreamRef.current
-      cam.play().catch(() => undefined)
-    }
     return () => {
       if (main) main.srcObject = null
-      if (cam) cam.srcObject = null
     }
   }, [phase])
 
@@ -300,7 +298,6 @@ export function RecordStudio(): JSX.Element {
     // Tear down the composited canvas + offscreen videos if we ran them.
     compositorRef.current?.stop()
     compositorRef.current = null
-    setCamInTake(false)
     if (elapsedTimerRef.current !== null) {
       window.clearInterval(elapsedTimerRef.current)
       elapsedTimerRef.current = null
@@ -369,7 +366,10 @@ export function RecordStudio(): JSX.Element {
         const audioConstraint: MediaTrackConstraints = selectedMicId
           ? { deviceId: { exact: selectedMicId } }
           : {}
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint })
+        // T-171 (5): only the microphone's own rejection is marked, so the one catch below can add the remedy that exists.
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint }).catch((err: unknown) => {
+          throw new MicStartFailure(err)
+        })
         if (leftWhileStarting(micStream)) return
       }
 
@@ -409,7 +409,6 @@ export function RecordStudio(): JSX.Element {
           })
           compositorRef.current = compositor
           if (leftWhileStarting(micStream)) return
-          setCamInTake(true)
           videoTrackSource = compositor.outputStream
         } catch (err) {
           // T-121: the studio was left while the camera or the compositor was opening - the same teardown the
@@ -419,7 +418,7 @@ export function RecordStudio(): JSX.Element {
           // T-121: the take continues WITHOUT the camera, so the camera is let go now. getUserMedia had
           // succeeded (only the compositor failed): its tracks stayed live for the whole take, the camera's
           // light on during a screen-only recording. Nothing else holds the stream (the compositor tore down
-          // its own elements), and nothing is left to show a thumbnail of.
+          // its own elements).
           camStream?.getTracks().forEach((t) => t.stop())
           camStreamRef.current = null
           // T-84: the cause in plain words (the zero-camera case is our own
@@ -507,7 +506,13 @@ export function RecordStudio(): JSX.Element {
       // Round 18 A: if begin() succeeded but start() then threw, reap the
       // just-opened session's empty temp file. abandon is idempotent.
       abandonStart()
-      reportFailure(err, { failed: "Couldn't start recording." })
+      if (err instanceof MicStartFailure) {
+        // T-171 (5): the cause sentence, then the remedy a missing microphone has (the camera's failure already records screen-only).
+        const { message } = userFacingError(err.original, "Couldn't start recording.")
+        toast.error(`${message} ${MIC_START_REMEDY}`, { duration: ERROR_TOAST_MS })
+      } else {
+        reportFailure(err, { failed: "Couldn't start recording." })
+      }
     } finally {
       startingRef.current = false
       setStarting(false)
@@ -932,25 +937,14 @@ export function RecordStudio(): JSX.Element {
       ) : null}
 
       {phase === 'recording' ? (
-        // B11 fix (round 16): the cam preview is `absolute`, but without a
-        // positioned ancestor it climbed to the page root, which on a tall
-        // window made the thumbnail drift far below the main preview. Mark
-        // this wrapper `relative` so the cam thumbnail anchors inside it.
-        <div className="relative flex flex-col gap-4">
+        // T-171 (1): ONE video, the composite - the webcam is seen where the file has it.
+        <div className="flex flex-col gap-4">
           <video
             ref={previewRef}
             className="w-full max-h-[60vh] bg-black rounded"
             muted
             playsInline
           />
-          {camInTake ? (
-            <video
-              ref={camPreviewRef}
-              className="absolute bottom-8 right-8 w-48 rounded shadow-xl border-2 border-accent"
-              muted
-              playsInline
-            />
-          ) : null}
         </div>
       ) : null}
 

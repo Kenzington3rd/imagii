@@ -17,6 +17,7 @@ import {
   kitFailedMessage,
   kitExportLabel,
   kitLimitTargets,
+  kitOtherVideoCaption,
   kitRunCaption,
   kitSrtFilename,
   kitThumbFilename,
@@ -219,7 +220,7 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         typeof lastDir === 'string' && lastDir.length > 0 ? lastDir : undefined
       )
       if (!parentDir) return
-      if (!useKitRun.getState().begin({ clipId: clip.id, clipName: clip.name, phase: '', canceled: false })) return
+      if (!useKitRun.getState().begin({ clipId: clip.id, clipName: clip.name, videoPath: source.filePath, fileName: source.fileName, phase: '', canceled: false })) return
       // T-112: the folder is made before the first job, so a kit that is canceled or fails
       // before ANY file lands in it would leave an empty `<name>-kit-<date>` behind. `landed`
       // counts the files the kit has finished writing (a platform export, a thumbnail); the
@@ -366,10 +367,21 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
 
   return (
     <span className="inline-flex max-w-full flex-col items-end gap-1">
+      {/* T-171 (4): a kit started on another video says so, in place of the clip-only caption (A's "Clip 1" read as B's), and wraps to two lines
+          with the clause first (the same line Export, Captions, Reframe and GIF draw, T-171 (6)). On its own video the caption is the clip's. */}
       {kitRun !== null ? (
-        <span className="max-w-full truncate text-xs text-ink-muted" title={kitRunCaption(kitRun.clipName)}>
-          {kitRunCaption(kitRun.clipName)}
-        </span>
+        kitRun.videoPath !== source.filePath ? (
+          <p
+            className="max-w-full min-w-0 line-clamp-2 break-words text-right text-xs text-ink-dim"
+            title={kitOtherVideoCaption(kitRun.clipName, kitRun.fileName)}
+          >
+            {kitOtherVideoCaption(kitRun.clipName, kitRun.fileName)}
+          </p>
+        ) : (
+          <span className="max-w-full truncate text-xs text-ink-muted" title={kitRunCaption(kitRun.clipName)}>
+            {kitRunCaption(kitRun.clipName)}
+          </span>
+        )
       ) : null}
       <button
         onClick={startKit}

@@ -86,7 +86,7 @@ describe('videoJobRows - one row per running job (T-144)', () => {
 
   it('GIF, Compile and Picture-in-picture name what they are for and invent no progress', () => {
     const rows = videoJobRows(
-      snap({ gif: { jobId: 'g', name: 'Clip 1' }, compile: { jobId: 'c', name: 'stream.mp4' }, pip: { jobId: 'p', name: 'cam.mp4' } })
+      snap({ gif: { jobId: 'g', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4' }, compile: { jobId: 'c', name: 'stream.mp4' }, pip: { jobId: 'p', name: 'cam.mp4' } })
     )
     expect(rows.map((r) => [r.kind, r.label, r.progress, r.cancelTitle])).toEqual([
       ['gif', 'GIF — Clip 1', null, 'Cancel GIF export'],
@@ -127,8 +127,8 @@ describe('videoJobRows - one row per running job (T-144)', () => {
   })
 
   it('a name that was emptied is the bare job, and the Clip Kit is not a row (its own card draws it)', () => {
-    expect(videoJobRows(snap({ gif: { jobId: 'g', name: '   ' } }))[0]?.label).toBe('GIF')
-    expect(videoJobRows(snap({ kit: { clipId: 'c', clipName: 'Clip 1', phase: 'x', canceled: false } }))).toEqual([])
+    expect(videoJobRows(snap({ gif: { jobId: 'g', name: '   ', videoPath: '/v/a.mp4', fileName: 'a.mp4' } }))[0]?.label).toBe('GIF')
+    expect(videoJobRows(snap({ kit: { clipId: 'c', clipName: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4', phase: 'x', canceled: false } }))).toEqual([])
   })
 
   it('several at once come in the order the panels stand', () => {
@@ -155,10 +155,10 @@ describe('the Close question while a job runs (T-144)', () => {
   })
 
   it('counts a Clip Kit with the rest, and says "jobs" for two or more', () => {
-    expect(jobsKeepGoingSentence(snap({ kit: { clipId: 'c', clipName: 'n', phase: '', canceled: false } }))).toBe(
+    expect(jobsKeepGoingSentence(snap({ kit: { clipId: 'c', clipName: 'n', videoPath: '/v/a.mp4', fileName: 'a.mp4', phase: '', canceled: false } }))).toBe(
       'The Clip Kit that is running keeps going; its Cancel stays on screen.'
     )
-    expect(jobsKeepGoingSentence(snap({ gif: { jobId: 'g', name: 'a' }, kit: { clipId: 'c', clipName: 'n', phase: '', canceled: false } }))).toBe(
+    expect(jobsKeepGoingSentence(snap({ gif: { jobId: 'g', name: 'a', videoPath: '/v/a.mp4', fileName: 'a.mp4' }, kit: { clipId: 'c', clipName: 'n', videoPath: '/v/a.mp4', fileName: 'a.mp4', phase: '', canceled: false } }))).toBe(
       'The 2 jobs that are running keep going; their Cancel buttons stay on screen.'
     )
   })
@@ -201,12 +201,12 @@ describe('VideoJobsRunning - the card (T-144)', () => {
 
   it('stays empty while a video is open, whatever runs: the panels draw the job then', () => {
     held.video = { source: { filePath: '/v/a.mp4', probe: { width: 1920, height: 1080 } }, clips: [{ id: 'c1' }], selectedClipId: 'c1' }
-    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1' } }
+    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4' } }
     expect(html()).toBe('<div aria-live="polite" class="-mb-5"></div>')
   })
 
   it('draws a card with the job, its Cancel (named for the job) and the one sentence, in the same region, once the video is closed', () => {
-    held.snap = { ...IDLE, reframe: { jobId: 'r', name: 'Clip 1', percent: 40, phase: 'rendering' } }
+    held.snap = { ...IDLE, reframe: { jobId: 'r', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: 40, phase: 'rendering' } }
     const out = html()
     expect(out).toMatch(/^<div aria-live="polite">/)
     expect(out).not.toContain('-mb-5')
@@ -217,7 +217,7 @@ describe('VideoJobsRunning - the card (T-144)', () => {
   })
 
   it('says "these jobs" when more than one runs, and has one Cancel each', () => {
-    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1' }, scan: { name: 'a.mp4', percent: 3 } }
+    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4' }, scan: { name: 'a.mp4', percent: 3 } }
     const out = html()
     expect(out.match(/>Cancel<\/button>/g)).toHaveLength(2)
     expect(out).toContain('The video is closed; these jobs keep going until they finish or you cancel them.')
@@ -226,7 +226,7 @@ describe('VideoJobsRunning - the card (T-144)', () => {
 
 describe('VideoJobsRunning - a running Reframe always has a row (T-164 (4))', () => {
   const html = (): string => renderToStaticMarkup(<VideoJobsRunning />)
-  const reframe = { jobId: 'r', name: 'Clip 1', percent: 40, phase: 'rendering' as const }
+  const reframe = { jobId: 'r', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: 40, phase: 'rendering' as const }
   const open = (width: number, height: number, selected = true): Record<string, unknown> => ({
     source: { filePath: '/v/a.mp4', probe: { width, height } },
     clips: [{ id: 'c1' }],
@@ -266,7 +266,7 @@ describe('VideoJobsRunning - a running Reframe always has a row (T-164 (4))', ()
 
   it('every other job keeps its rule: with a vertical video open, only the Reframe row is drawn', () => {
     held.video = open(1080, 1920)
-    held.snap = { ...IDLE, reframe, gif: { jobId: 'g', name: 'Clip 1' }, scan: { name: 'a.mp4', percent: 3 } }
+    held.snap = { ...IDLE, reframe, gif: { jobId: 'g', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4' }, scan: { name: 'a.mp4', percent: 3 } }
     const out = html()
     expect(out.match(/>Cancel<\/button>/g)).toHaveLength(1)
     expect(out).toContain('title="Cancel reframe"')
@@ -276,12 +276,12 @@ describe('VideoJobsRunning - a running Reframe always has a row (T-164 (4))', ()
 
   it('a vertical video is open and no Reframe runs: still empty', () => {
     held.video = open(1080, 1920)
-    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1' } }
+    held.snap = { ...IDLE, gif: { jobId: 'g', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4' } }
     expect(html()).toBe('<div aria-live="polite" class="-mb-5"></div>')
   })
 
   it('with no video open the card is what it was: every row, and the closed-video sentence', () => {
-    held.snap = { ...IDLE, reframe, gif: { jobId: 'g', name: 'Clip 1' } }
+    held.snap = { ...IDLE, reframe, gif: { jobId: 'g', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4' } }
     const out = html()
     expect(out).toContain('Reframe — Clip 1')
     expect(out).toContain('GIF — Clip 1')
@@ -303,3 +303,44 @@ describe('videoJobRows - the Export row names the person\'s file (T-164 (5))', (
   })
 })
 
+describe('VideoJobsRunning - a Reframe started on another video says whose it is (T-171 (4))', () => {
+  const html = (): string => renderToStaticMarkup(<VideoJobsRunning />)
+  const reframeOnA = { jobId: 'r', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: 40, phase: 'rendering' as const }
+  const vertical = (filePath: string): Record<string, unknown> => ({
+    source: { filePath, probe: { width: 1080, height: 1920 } },
+    clips: [{ id: 'c1' }],
+    selectedClipId: 'c1'
+  })
+  beforeEach(() => {
+    held.video = { source: null, clips: [], selectedClipId: null }
+    held.snap = { ...IDLE }
+  })
+
+  it('a vertical B is open over A\'s run: the row reads "Reframe — <clip> from <A>" and the sentence starts "Started on another video"', () => {
+    held.video = vertical('/v/b.mp4')
+    held.snap = { ...IDLE, reframe: reframeOnA }
+    const out = html()
+    expect(out).toContain('Reframe — Clip 1 from a.mp4')
+    expect(out).toContain('Started on another video; the reframe keeps going until it finishes or you cancel it.')
+    expect(out).not.toContain('The video is closed')
+    expect(out).toMatch(/<button[^>]*title="Cancel reframe"[^>]*>Cancel<\/button>/)
+  })
+
+  it('control: the run is the open video\'s own (its clip deselected), so the label and the sentence stay plain', () => {
+    held.video = vertical('/v/a.mp4')
+    held.snap = { ...IDLE, reframe: reframeOnA }
+    const out = html()
+    expect(out).toContain('Reframe — Clip 1')
+    expect(out).not.toContain(' from a.mp4')
+    expect(out).not.toContain('Started on another video')
+    expect(out).toContain('The reframe keeps going until it finishes or you cancel it.')
+  })
+
+  it('control: with no video open the closed-video sentences are unchanged and the label is the clip\'s alone', () => {
+    held.snap = { ...IDLE, reframe: reframeOnA }
+    const out = html()
+    expect(out).toContain('Reframe — Clip 1')
+    expect(out).not.toContain(' from a.mp4')
+    expect(out).toContain('The video is closed; the job keeps going until it finishes or you cancel it.')
+  })
+})

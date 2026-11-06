@@ -533,8 +533,8 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   'renderer/src/modules/references/ReferencePanel.tsx': ['<img>'],
   'renderer/src/modules/references/MoodBoardPanel.tsx': ['<img>'],
   // Local pictures (a capture's thumbnail as a data URL, an imported file as a data URL): `<img>` draws them, nothing is requested.
-  // T-125 (26): and the two live-preview `<video>`s, which play the capture's own MediaStream (`srcObject`), never an address.
-  'renderer/src/modules/record-studio/RecordStudio.tsx': ['<img>', '<video>', '<video>'],
+  // T-125 (26), T-171 (1): and the one live-preview `<video>`, which plays the capture's own MediaStream (`srcObject`), never an address.
+  'renderer/src/modules/record-studio/RecordStudio.tsx': ['<img>', '<video>'],
   'renderer/src/modules/record-studio/compositor.ts': ['createElement(video)', 'createElement(video)'],
   'renderer/src/modules/image-studio/ThumbnailVariants.tsx': ['new Image(', '<img>'],
   // T-137 (6), (10): the one place a picture is decoded to be copied onto the canvas (an imported file's data URL, or the mood-board tile the person is looking at, loaded
