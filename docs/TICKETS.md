@@ -8599,7 +8599,7 @@ IMG-PREC.
   measured by the reviewer in a built app). QA main and renderer a, Electron (full-read standard), audio, privacy,
   a11y, UX reader 2, design reader 2 and the three streamer readers clean on their lens; ffmpeg still running at
   dispatch (any finding of its own becomes a Track C on main-process files). Two of the six are consequences of T-171
-  (items 4 and 5). Not counted: a countdown or minimize at Record's Start so a Screen take does not open and close on
+  (items 4 and 5); item 7 (Track C) is item 2's class in Audio Studio, found by the Track A worker. Not counted: a countdown or minimize at Record's Start so a Screen take does not open and close on
   imagii's own window (a feature; owner item); Start partly below the fold at 1024x640 with the microphone hint showing
   (no guide promises it). Two tracks, disjoint source files.
 
@@ -8651,6 +8651,21 @@ IMG-PREC.
      is a component. Fix: one `SpecCard` (components/SpecCard.tsx: name, description, doc size and background, onClick,
      an optional extra line for the Asset Library's license), listed under Shared affordances. TemplatesDialog's unread
      `setHover` state and its mouse handlers (scaffolding for a "planned hover-preview feature") go with the copy.
+
+  **Track C — the same sound is the same sound (item 7, added at the Track A hand-back).**
+  7. **[LOW] Item 2's class in Audio Studio: a sound re-opened from the same file is "another sound"**
+     (audio-studio/ExportDialog.tsx:31, :35; state/audioExport.ts). A video's sound and an AIFF / WMA are played from a
+     fresh `<nanoid10>.wav` extracted on every open (main/audio/extract.ts:109), and the export's rows and its
+     "Export — <name>" label for another sound compare `exportSource === source.filePath`: re-open the same video's
+     sound (Clean audio again) or the same AIFF while its export runs, and the label names the open sound as another
+     and the row vanishes when the export ends. Found by the Track A worker; confirmed by the expediter in source.
+     Fix: the audio identity is the file the person opened — `fromVideo?.convertedFrom ?? fromVideo?.videoPath ??
+     extractedFrom ?? filePath` (the expression ExportDialog already uses for the default name) — one exported
+     `soundKey(source)` in audioStore.ts, recorded by the export store at begin (`sourceKey`) and compared by
+     ExportDialog; any other audio "is this job's sound the open one" comparison goes through it. Covering tests: unit
+     (`soundKey` table; the export store keeps the key) and e2e (audio.spec.ts, NEW describe: a video's sound exported
+     and held, Audio closed, Clean audio on the same video again — no other-sound label, the row still drawn after the
+     export ends; a different file re-opened keeps the label, the control).
 
   Covering tests: unit (NEW describes at the end of the files they touch) and e2e (NEW describes at the end of
   video-pipelines.spec.ts, video-core.spec.ts, record.spec.ts and image.spec.ts), each red on the base except the stated
