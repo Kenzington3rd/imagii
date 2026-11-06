@@ -8692,6 +8692,86 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 121 — see the Done entry)
 
+## T-173 — sweep-59 fixes (round 122)
+
+- **Spec:** the fifty-ninth sweep's four verified findings (candidate clean pass #1 on ed82afb), each confirmed by the
+  expediter against source (item 2 measured by the expediter on ffmpeg 7.0.2; item 1 also by the Electron reader in a
+  scratch Electron). QA main, ffmpeg (real-binary runs on 7.0.2 and 6.1.1), privacy, a11y, both design readers, UX
+  reader 2 and streamer main clean on their lens; item 1 was found by five readers. Item 1 is a consequence of T-172 (1).
+  Not counted: a held Enter on an Asset Library card reaching the native replace question (OS dialog behaviour, needs
+  Windows; the button had no guard before SpecCard either); the Fix wizard summary's "Low rumble removal" beside the
+  panel's "Remove low rumble"; "Add a second track" staying the card's header after one is added; a DuckDuckGo result
+  with neither `source` nor a valid `url`; the import working copy re-transcoded on each re-open (disclosed, the
+  stream-copy fast path named). Three tracks, disjoint source files.
+
+  **Track A — Record lets go of what it opened, and says only what it knows (items 1 and 3).**
+  1. **[MED] A start that a silent SCREEN ends leaves the microphone open** (record-studio/RecordStudio.tsx:364-374,
+     :420, :503-518, `stopAllStreams` :283-305). The microphone is a `let` local of the start until `streamRef.current =
+     combined` (:441); T-172 (1)'s screen `NoPictureError` is rethrown at :420 to the start's one catch, whose
+     `abandonStart()` stops `streamRef`, `camStreamRef`, `screenStreamRef` and the compositor — not the microphone. With
+     "Record microphone" checked (the default) and the webcam on, a minimized window as the source: the toast says
+     "press Start again", Start is back, and the microphone stays live (the OS indicator on; a retry opens another).
+     T-172's e2e unchecks the microphone and counts video tracks only. Fix: the microphone is held in a `micStreamRef`
+     from the moment it is opened, and `stopAllStreams` stops and clears it (once `combined` holds the same tracks a
+     second stop is a no-op); the T-172 (1) comment's "every startRecording exit path must end ownership" is then true.
+  3. **[LOW] "No microphone found" is said before anything was looked for** (RecordStudio.tsx:67, :149-153, :841-843,
+     :875; devices.ts `scanDevices` :97-106). `mics` starts `[]` and the hint is `includeMic && mics.length === 0`, so
+     "No microphone found. Plug one in, close any other app using it, …" is drawn from the first paint until the first
+     scan settles (which waits for the camera probe too) — to a person whose microphone works; the camera's hint the same
+     when the webcam is ticked early. The screen list has T-41's tri-state for exactly this. Fix: a `devicesScanned`
+     flag, false until the first scan has written its lists; the two no-device hints are drawn only once it is true
+     (before that, nothing is claimed).
+
+  **Track B — a surround voice keeps its level in a mix (item 2).**
+  2. **[LOW] With a second track, a 5.1 primary is folded at swresample's normalised matrix, ~7.6 dB down**
+     (audio/process.ts:216-224 `foldToStereo`, the mix graph's `primaryNormalize` / `secondaryNormalize`
+     `aresample=48000,aformat=channel_layouts=stereo`). T-164 (1) folds a surround primary in float as the player's own
+     matrix (`SURROUND_TO_STEREO_FILTER`) — but only for MP3 with no second track; its comment says "with a second track
+     the mix folds both sides itself", and that fold is the normalised one. Measured on 7.0.2: a 5.1 front tone through
+     the mix's normalise -28.7 dB against -21.1 dB through `SURROUND_TO_STEREO_FILTER`; a centre tone -31.7 against
+     -24.1. Even volume and Match measure and target the primary BEFORE that fold, on six channels, and the bed on
+     stereo, so a directly opened 5.1 voice (WAV, FLAC, …) lands ~7.6 dB under the balance the mix means. Fix: with a
+     second track, a primary of more than two channels is folded by `SURROUND_TO_STEREO_FILTER` as the FIRST stage of
+     both passes (the T-164 `folded()` path, for any format), and a second track of more than two channels has
+     `SURROUND_TO_STEREO_FILTER` ahead of its normalise (its channel count read the way the primary's is); mono and
+     stereo inputs are unchanged. The T-164 comment is corrected.
+
+  **Track C — a transcript comes back with its video (item 4).**
+  4. **[MED] A finished transcript is never read back, though Close skips it because it is** (video-studio/store/
+     videoStore.ts:283-293 `videoSessionHasLoss` and its comment "the file is cached on disk and opens again at once";
+     USER_GUIDE:443-444 "imagii keeps it on disk and reads it back at once"; `loadSource` / `clearSource` set `srtPath:
+     null` and `derived: EMPTY_DERIVED`; the only other `srtPath` writer is ProjectIO's project open; whisper names the
+     .srt `<name>-<Date.now()>` and nothing looks one up). Transcribe a three-hour VOD, Close (no question — a
+     transcript is not a loss), re-open it to cut the next clip: the Captions panel is back at first-run Transcribe and
+     the Clip Kit ships no .srt; the file sits in the captions folder, counted, attached to nothing. Fix (the promise is
+     right, the code is not): videoStore keeps, for the session, each video's transcript by `videoKey` — `srtPath`,
+     `derived.transcript` and the probe duration — written whenever either is set for the open video (Transcribe's
+     `setSrtPathFor` / `setDerivedFor`, and `setSrtPath` from a project open), and `loadSource` gives them back to the
+     same video (same key, duration within 0.5 s); Clear transcripts (whose files it deletes) empties it. The Close rule
+     is unchanged. USER_GUIDE says what is so: re-open the same video in the same session and its transcript is back; a
+     saved project (and the autosave) keeps it across a restart.
+
+  Covering tests: unit (NEW describes at the end of the files they touch), e2e (NEW describes at the end of record.spec.ts
+  and video-pipelines.spec.ts or video-core.spec.ts) and Layer 5 (a NEW describe at the end of tests/integration/
+  media.spec.ts), each red on the base except the stated controls: with a stubbed microphone (an audio track the stub
+  holds) checked and the webcam on, a silent screen ends the start and the microphone's track is `ended` (red: live); a
+  silent camera's screen-only take keeps the microphone live while it records (control) and ends it at Stop; with the
+  device scan held, neither no-device hint is drawn, and once it settles with no microphone the hint is (red: drawn
+  while held); a 5.1 voice mixed with a stereo bed (gain mode, and Even volume on) comes out within 0.5 dB of the same
+  voice as stereo (red: ~7.6 dB under), a 5.1 bed likewise, and a mono and a stereo primary are unchanged (controls);
+  Transcribe (stubbed), Close, the same video opened again: the transcript and Save .srt are back, and a different
+  video, a duration that differs and Clear transcripts give none (controls, the last red-first on the clear).
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong (A: none expected beyond the hint; B: none expected; C: the transcript sentence).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback; Track B changes an audio chain, so
+  `npm run test:media` is part of its gates (IMG-PREC) and the expediter re-runs it on the merge — a
+  hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile edits;
+  processes stopped by explicit PID only.
+- **Status:** in progress (round 122)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
