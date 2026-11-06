@@ -8,6 +8,7 @@ import {
   formatClipLength,
   kitCanceledMessage,
   kitEffectivePresets,
+  kitFailedMessage,
   kitExportLabel,
   kitLimitTargets,
   kitRunCaption,
@@ -547,5 +548,22 @@ describe('kitRunCaption - whose kit is running (T-136 (1))', () => {
   it('a clip whose name was emptied is an unnamed clip, never Clip Kit for ""', () => {
     expect(kitRunCaption('')).toBe('Clip Kit for an unnamed clip')
     expect(kitRunCaption('   ')).toBe('Clip Kit for an unnamed clip')
+  })
+})
+
+// T-167 (4): a kit that fails on platform 3 of 5 keeps its two finished files (the folder is removed only when nothing landed), and "Clip Kit failed." did not say so, where a canceled kit does.
+describe('kitFailedMessage - what a failed kit says depends on what survived (T-167 (4))', () => {
+  it('with nothing finished the folder was removed, so it does not point at one', () => {
+    expect(kitFailedMessage(0)).toBe('Clip Kit failed.')
+    expect(kitFailedMessage(0)).not.toMatch(/folder/)
+  })
+
+  it('with one file finished it says so in the singular', () => {
+    expect(kitFailedMessage(1)).toBe('Clip Kit failed. The 1 file already finished is in your folder.')
+  })
+
+  it('with two or more it counts them and says where they are', () => {
+    expect(kitFailedMessage(2)).toBe('Clip Kit failed. The 2 files already finished are in your folder.')
+    expect(kitFailedMessage(8)).toBe('Clip Kit failed. The 8 files already finished are in your folder.')
   })
 })

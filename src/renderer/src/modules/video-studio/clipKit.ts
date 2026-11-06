@@ -1,4 +1,5 @@
 import { clipForExport, clipSpeed, type Clip, type ExportJobSpec, type PlatformId, type WatermarkSpec } from '@shared/clip'
+import { countOf } from '@shared/plural'
 import { cropFrameSize } from '@shared/safeZone'
 import {
   KIT_PLATFORM_IDS,
@@ -204,6 +205,16 @@ export function kitRunCaption(clipName: string): string {
  */
 export function kitCanceledMessage(landed: number): string {
   return landed > 0 ? 'Clip Kit canceled. Files already finished are in your folder.' : 'Clip Kit canceled.'
+}
+
+/**
+ * What a failed kit says (T-167 (4)). The folder is removed only when nothing landed, so a kit that fails on platform 3 of 5 (a full disk) keeps its two finished files, and the
+ * toast says so the way a canceled kit's does. It is `reportFailure`'s `failed` lead, so the cause follows it ("Clip Kit failed. The 2 files already finished are in your folder. Your disk is full...").
+ */
+export function kitFailedMessage(landed: number): string {
+  return landed > 0
+    ? `Clip Kit failed. The ${countOf(landed, 'file')} already finished ${landed === 1 ? 'is' : 'are'} in your folder.`
+    : 'Clip Kit failed.'
 }
 
 /** The same for the three thumbnail frames that follow. `index` is zero-based. */

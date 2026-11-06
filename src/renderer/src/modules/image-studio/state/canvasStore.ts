@@ -117,6 +117,12 @@ function selectionIn(doc: CanvasDocument, id: string | null): string | null {
   return id !== null && doc.layers.some((l) => l.id === id) ? id : null
 }
 
+/** The same value for the record: identical, or two lists (a line's `points`) of the same values in the same order. */
+function sameValue(a: unknown, b: unknown): boolean {
+  if (a === b) return true
+  return Array.isArray(a) && Array.isArray(b) && a.length === b.length && a.every((v, i) => sameValue(v, b[i]))
+}
+
 function pushHistory(history: History, prev: CanvasDocument): History {
   const past = [...history.past, prev]
   return {
@@ -152,6 +158,14 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
   updateLayer: (id, patch, key) => {
     const prev = get().doc
+    // T-167 (2): an edit that changes nothing is nothing to undo, and a step that changes nothing would also clear Redo (the class of `videoStore` T-166 (3) and `removeLayer` T-141 (8)).
+    // A snapped drag shorter than half a cell writes the layer's own x and y back; a patch is a no-op when every field it names has the same value on the PATCHED layer (after
+    // `applyLayerPatch`'s normalising) as on the stored one. Before the history and the coalescing key: neither moves.
+    const stored = prev.layers.find((l) => l.id === id)
+    if (!stored) return
+    const patched = applyLayerPatch(stored, patch) as unknown as Record<string, unknown>
+    const was = stored as unknown as Record<string, unknown>
+    if (Object.keys(patch).every((field) => sameValue(patched[field], was[field]))) return
     // The window is per layer AND per control: the same slider on another layer is another gesture.
     const windowKey = key === undefined ? null : `${id}:${key}`
     const continuing = windowKey !== null && windowKey === get().historyKey
@@ -189,6 +203,8 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
     const prev = get().doc
     const map = new Map(prev.layers.map((l) => [l.id, l]))
     const next = orderedIds.map((id) => map.get(id)).filter((l): l is CanvasLayer => Boolean(l))
+    // T-167 (2): the same layers in the same order is nothing to undo (and would clear Redo).
+    if (next.length === prev.layers.length && next.every((l, i) => l === prev.layers[i])) return
     set({ doc: { ...prev, layers: next }, history: pushHistory(get().history, prev), historyKey: null })
   },
   toggleVisible: (id) => {
@@ -215,6 +231,10 @@ export const useCanvasStore = create<CanvasState>((set, get) => ({
   },
   setRotation: (id, rotation) => {
     const prev = get().doc
+    // T-167 (2): a layer that is not there, or already at this rotation (the "0" preset on a layer at 0, a layer with no rotation counting as 0), is nothing to undo - and a step
+    // that changes nothing would also clear Redo.
+    const stored = prev.layers.find((l) => l.id === id)
+    if (!stored || (stored.rotation ?? 0) === rotation) return
     set({
       doc: {
         ...prev,

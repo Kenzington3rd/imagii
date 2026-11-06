@@ -404,7 +404,8 @@ Repeated UI is a component, not copy-paste:
 - **A new text layer is sized, placed and inked for the open document (T-140 (2), (3), (5); T-141 (2), (6)).** `textLayerFor(doc)` (canvas store) hands
   `newTextLook` (`@shared/newText`) the document, its layers and the three token colors (BG_BASE as the dark ink, INK_BASE as the light one, BG_BASE again as the
   workspace a transparent document shows): the size scales 32 px per 800 px of the shorter side (20 px floor, never wider or taller than the document),
-  the position is `placementFor`'s margin rule on the word's estimated box, and the ink is chosen against what is DRAWN under the word, not the document's
+  the position is the margin rule (`PLACEMENT_MARGIN` in from the corner, less where the page has not the room) on the word's REAL estimated box - not `placementFor`, a picture rule that
+  first shrinks a box to 800 px, which let a tall paste overhang the page bottom (T-167 (1); for a box up to 800 px the two agree) - and the ink is chosen against what is DRAWN under the word, not the document's
   background alone: `surfacesUnder` lists the colours that can show under its box (the document, the rectangles' and ellipses' fills by their own geometry through
   their alpha and opacity, the text layers' colours; a picture is a documented ceiling), `inkFor` takes the ink whose worst contrast against them is best, and
   when neither reaches 4.5:1 (`READABLE_CONTRAST`) the word moves: the other three margin corners in a fixed order, then the nearest place on a grid out from the
@@ -412,6 +413,10 @@ Repeated UI is a component, not copy-paste:
   takes it and the paste branch passes the pasted words, so a pasted sentence follows the same rules as "Text" (it was sized, placed and inked for "Text" and landed 70% off
   the page); `estimatedTextBox` is line-aware (the longest line's width, a `fontSize` tall per line: Konva's line height 1, the rule `surfacesUnder` applies to an existing text
   layer, which now calls it) and `newTextSize` fits both width and height; a long paragraph is sized down to fit one canvas line per line (a marked simplification: no wrap).
+  T-167: the estimate is an UPPER bound per CHARACTER, not one 0.6 em for all (a capital is up to 1.03 em, a digit up to 0.68): each printable ASCII character is the wider of its advance
+  at 400 and at 700 measured from the bundled Inter (canvas `measureText`, 100 px), rounded up to two decimals (`ADVANCE_EM` in `newText.ts`; the measured table is in `newText.test.ts`
+  and holds every entry to it); anything outside ASCII is 0.6. A per-class bound was tried first and cost the POG emote its room (a class bound makes "Text" 2.58 em, the disc's band
+  has about 2.4), so a tighter bound is not just prettier: the estimate also decides where a word can sit. A character that is added is measured the same way, not guessed.
   `makeTextLayer` is unchanged for its other callers. A corner drag
   keeps a picture's and a word's ratio (`keepsRatioOnCornerDrag`; the Transformer's `shiftBehavior` is `inverted` for them, so Shift frees it, and `default`
   for shapes), and a resize of a word ends by folding its scale into its size (`foldTextScale`: `fontSize` takes the height to the Size field's whole pixel,

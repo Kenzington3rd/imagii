@@ -10,6 +10,7 @@ import {
   hookAsk,
   hookWindow,
   HOOK_DEBOUNCE_MS,
+  lateScanMessage,
   scoreHighlights,
   scoreHookQuality,
   type AudioCandidate
@@ -423,5 +424,23 @@ describe('hookAsk and HOOK_DEBOUNCE_MS — the exact window, once the drag settl
     // is over, and a badge that took over half a second to appear would read as broken.
     expect(HOOK_DEBOUNCE_MS).toBeGreaterThan(100)
     expect(HOOK_DEBOUNCE_MS).toBeLessThan(500)
+  })
+})
+
+// T-167 (3): a Scan VOD that ends after its video was closed or replaced used to say nothing (setDerivedFor returned false and the result was dropped), where every sibling late job says so.
+describe('lateScanMessage - a scan that finished for a video that is gone (T-167 (3))', () => {
+  it('names the file, says why nothing was added, and what to do (the staleCaptionsMessage pattern)', () => {
+    expect(lateScanMessage('stream.mp4')).toBe(
+      "The scan of stream.mp4 finished after that video was closed or replaced, so its highlights weren't added. Scan again when you're ready."
+    )
+  })
+
+  it('is true of both closed and replaced, so it never says "another video"', () => {
+    expect(lateScanMessage('a.mp4')).not.toMatch(/another video/i)
+    expect(lateScanMessage('a.mp4')).toMatch(/closed or replaced/)
+  })
+
+  it('names whichever file it is given', () => {
+    expect(lateScanMessage('Épico clutch.mkv')).toContain('The scan of Épico clutch.mkv finished')
   })
 })

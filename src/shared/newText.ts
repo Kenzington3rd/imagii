@@ -10,7 +10,7 @@
  * document, a disc that fills it) the word was inked for the dark workspace and landed on the disc: 1.33:1 on the gold one, 2.92:1 on the red one. `surfacesUnder` says what
  * can show under a box, `inkFor` takes that list, and `newTextLook` moves the word to the first of a fixed list of places where one ink reads against all of it.
  */
-import { placementFor } from './imageBounds'
+import { PLACEMENT_MARGIN } from './imageBounds'
 import { resolveOverlayColor } from './overlayColors'
 import { assert } from './assert'
 import { displayOpacity, type CanvasLayer } from './canvas'
@@ -31,23 +31,56 @@ export const MIN_NEW_TEXT_SIZE = 20
 export const NEW_TEXT_WORD = 'Text'
 
 /**
- * A character's width as a share of the font size, for the estimate. Inter's average advance is about 0.5 em ("Text" measures 2.02 em, 64.7 px at 32 px, in the shipped
- * font), so 0.6 is an UPPER bound: a word that fits by the estimate fits as drawn, which is the direction that matters (a layer placed by an estimate that was too
+ * A character's width as a share of the font size, for the estimate: an UPPER bound for that character (T-167), the direction that matters (a layer placed by an estimate that was too
  * narrow could poke past the edge; one placed by an estimate that is too wide is a few px short of where it could be). Konva sizes a one-line Text `fontSize` tall.
+ *
+ * It was one number for every character, 0.6 em, called an upper bound on the strength of Inter's average advance (about 0.5 em; "Text" drawn measures 2.02 em, 64.7 px at 32 px). It is
+ * not one for capitals: an all-caps sentence measured 0.607 em a character at 400 and 0.614 at 700, "WWWW MMMM" 0.87, so a long all-caps line sized to the page's width overhung its right
+ * edge by 20-80 px; and it was short for 46 of the 94 printable characters at 400 and 51 at 700 (the widest: W 0.985 / 1.020, % 0.982 / 1.004, @ 0.966 / 0.999, M 0.903 / 0.922,
+ * m 0.876 / 0.900, w 0.818 / 0.839, Q 0.765 / 0.773 at 400 / 700, and every digit but 1, 5 and 7 at 400 up to 0.666). Each entry below is the advance MEASURED in the built app (a canvas
+ * 2d context, `ctx.font = '<weight> 100px Inter'` after `document.fonts.ready`, `measureText` of the one character), the wider of 400 and 700, rounded UP to two decimals;
+ * `newText.test.ts` holds the whole measured table and holds every entry to it. A sum of single advances ignores kerning, which narrows Inter's Latin pairs ("Text" draws at 2.02 em, its characters sum to 2.10), so it is an upper bound for the line.
+ *
+ * Per character, not per class (the first cut was five classes: W M m w % @ 1.03, other capitals 0.78, digits and ~ < > = + & $ # 0.68, b d g p q u h n o 0.63, the rest 0.6): "Text" is
+ * 2.58 em by classes (a capital T at 0.78 beside three letters at 0.6) against 2.20 here, and the POG emote's band under its word has room for about 2.4 em (the disc's chord at the
+ * word's bottom edge, less its stroke), so the classes put "+ Add text" on the stroke and then light on gold (image.spec.ts, "+ Add text is readable against what is drawn under it").
+ *
+ * Index = character code - 32 (space to `~`). A character outside printable ASCII (an accented capital, CJK, an emoji) takes `EM_UNMEASURED`, which is an estimate, not a bound.
  */
-const TEXT_EM_PER_CHAR = 0.6
+const ADVANCE_EM = [
+  0.29, 0.33, 0.53, 0.65, 0.66, 1.01, 0.67, 0.33, 0.38, 0.38, 0.54, 0.68,
+  0.32, 0.47, 0.32, 0.38, 0.66, 0.43, 0.63, 0.64, 0.67, 0.62, 0.64, 0.58,
+  0.65, 0.64, 0.32, 0.33, 0.68, 0.68, 0.68, 0.55, 1.00, 0.73, 0.66, 0.74,
+  0.73, 0.61, 0.60, 0.75, 0.75, 0.28, 0.58, 0.71, 0.57, 0.93, 0.76, 0.77,
+  0.65, 0.78, 0.66, 0.66, 0.67, 0.75, 0.73, 1.03, 0.72, 0.72, 0.66, 0.38,
+  0.38, 0.38, 0.49, 0.47, 0.36, 0.58, 0.63, 0.59, 0.63, 0.60, 0.39, 0.63,
+  0.62, 0.27, 0.27, 0.57, 0.27, 0.91, 0.62, 0.61, 0.63, 0.63, 0.40, 0.55,
+  0.36, 0.62, 0.59, 0.84, 0.57, 0.59, 0.57, 0.46, 0.36, 0.46, 0.68
+] as const
+
+/** What a character outside printable ASCII is taken to be: the old flat estimate. */
+const EM_UNMEASURED = 0.6
+
+/** The width of one character as a share of the font size. */
+function emOf(ch: string): number {
+  return ADVANCE_EM[(ch.codePointAt(0) as number) - 32] ?? EM_UNMEASURED
+}
 
 /**
  * The box, in document px, `text` is estimated to take at `fontSize`: never narrower than what is drawn. It is LINE-AWARE (T-166 (1)): as wide as the longest line (a break is
- * `\n` or `\r\n`, which is what a Windows clipboard carries) and a `fontSize` tall for each line, which is how Konva draws a Text (line height 1, width the longest line's). A
- * one-line string is the box it always was: its characters wide, one line tall.
+ * `\n` or `\r\n`, which is what a Windows clipboard carries) and a `fontSize` tall for each line, which is how Konva draws a Text (line height 1, width the longest line's). A line is
+ * as wide as its characters' advances add up to (T-167): an upper bound per character, so a line of capitals or digits is not taken for one of lowercase.
  */
 export function estimatedTextBox(text: string, fontSize: number): { width: number; height: number } {
   assert(Number.isFinite(fontSize) && fontSize > 0, `estimatedTextBox expects a size above 0, got ${fontSize}`)
   const lines = text.split(/\r?\n/)
   // (a reduce, not `Math.max(...)`: a paste can be hundreds of thousands of lines, more than a call takes as arguments)
-  const longest = lines.reduce((most, line) => Math.max(most, [...line].length), 0)
-  return { width: longest * TEXT_EM_PER_CHAR * fontSize, height: lines.length * fontSize }
+  const longest = lines.reduce((most, line) => {
+    let em = 0
+    for (const ch of line) em += emOf(ch)
+    return Math.max(most, em)
+  }, 0)
+  return { width: longest * fontSize, height: lines.length * fontSize }
 }
 
 /**
@@ -260,7 +293,7 @@ const SCAN_PLACES_PER_SIDE = 60
 
 /**
  * Where a word of this `size` is tried, in order (T-141 (2)):
- *   1. the place a picture starts (`placementFor`: `PLACEMENT_MARGIN` in from the top-left corner, less when the document has not the room);
+ *   1. the place a picture starts: `PLACEMENT_MARGIN` in from the top-left corner, less when the document has not the room - for the word's REAL box (T-167 (1));
  *   2. the same margin in from each of the other three corners: top-right, bottom-left, bottom-right;
  *   3. every place on a grid anchored at (1), nearest to it first. A crowded document has no free corner (the POG emote is a disc filled by one big word: the only room is the
  *      band under the word, 6 px wide at the disc's chord), so the corners alone cannot place a word on it; a grid at about 1/60 of the document's sides (2 px on the
@@ -268,8 +301,14 @@ const SCAN_PLACES_PER_SIDE = 60
  * A document that is not a size (a project file the editor never made) has the first place only.
  */
 function candidatePlaces(size: { width: number; height: number }, doc: { width: number; height: number }): Array<{ x: number; y: number }> {
-  const home = placementFor(size.width, size.height, doc.width, doc.height)
   const isSize = Number.isFinite(doc.width) && Number.isFinite(doc.height) && doc.width > 0 && doc.height > 0
+  // T-167 (1): the margin rule on the word's REAL box. `placementFor` is a PICTURE rule - it first shrinks a box to LAYER_DRAWN_MAX_DIM (800 px), which is right for a picture the canvas
+  // then draws that small and wrong for a word, whose box is never shrunk (it is sized to fit): a box over 800 px on a side got its margin from the shrunken box and its real bottom
+  // overhung the page (25 lines on 1200x800 ended at 859). For a box up to 800 px this is exactly what `placementFor` gave (`newText.test.ts` sweeps that), so a one-word or one-line
+  // placement does not move; a document that is not a size keeps the corner `placementFor` returned for it.
+  const home = isSize
+    ? { x: Math.max(0, Math.min(PLACEMENT_MARGIN, doc.width - size.width)), y: Math.max(0, Math.min(PLACEMENT_MARGIN, doc.height - size.height)) }
+    : { x: PLACEMENT_MARGIN, y: PLACEMENT_MARGIN }
   if (!isSize) return [home]
   const maxX = doc.width - size.width
   const maxY = doc.height - size.height
@@ -287,8 +326,8 @@ function candidatePlaces(size: { width: number; height: number }, doc: { width: 
 }
 
 /**
- * Size, place and ink for a new text layer on `doc`: the size from `newTextSize`; the position from `placementFor` - the rule a picture follows, `PLACEMENT_MARGIN` in
- * from the corner when the document has the room and less when it does not - using the word's estimated box, so it is wholly inside; the ink from `inkFor`.
+ * Size, place and ink for a new text layer on `doc`: the size from `newTextSize`; the position by the margin rule a picture follows (`PLACEMENT_MARGIN` in
+ * from the corner when the document has the room and less when it does not) on the word's own estimated box (T-167 (1)), so it is wholly inside; the ink from `inkFor`.
  *
  * T-141 (2): the ink is chosen against what is under the word (`surfacesUnder`: the document, and the shapes and words its box overlaps), not the document alone, and when
  * neither ink reaches `READABLE_CONTRAST` against all of it the word moves, through `candidatePlaces` in order, to the first place where one does. When none does (a

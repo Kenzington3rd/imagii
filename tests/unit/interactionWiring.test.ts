@@ -2219,7 +2219,9 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
     expect(scan).toMatch(/const startedFor = source\.filePath/)
     expect(scan).toMatch(/await window\.api\.video\.findHighlights\(startedFor\)/)
     expect(scan).toMatch(/setDerivedFor\(startedFor, \{ scanCandidates: found \}\)/)
-    expect(scan).toMatch(/if \(!stored\(narrowed\)\) return/)
+    // T-167 (3): ...and says so, with the file name read at the scan's start, before it returns (it was a bare `return`).
+    expect(scan).toMatch(/const startedName = source\.fileName/)
+    expect(scan).toMatch(/if \(!stored\(narrowed\)\) \{\s*toast\(lateScanMessage\(startedName\)[^)]*\)[^\n]*\n\s*return\s*\}/)
     // ...and the store refuses what neither panel can any longer hand it.
     expect(strip(read('modules/video-studio/store/videoStore.ts'))).toMatch(
       /if \(duration - startSec < MIN_SCANNED_CLIP_SEC\) return 'refused'/

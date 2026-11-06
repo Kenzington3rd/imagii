@@ -525,3 +525,45 @@ describe('cutsLeaveNothing - an export with nothing left to write (T-135 (12))',
     expect(cutsLeaveNothing(8, [{ startSec: 0, endSec: 8 }])).toBe(true)
   })
 })
+
+// T-167 (z) / T-110 (z): loudnorm's pass 2 takes measured_I and measured_thresh in -99..0, measured_LRA in 0..99, measured_TP in -99..99 and offset in -99..99 (`ffmpeg -h filter=loudnorm`,
+// 6.1.1 and 7.0.2 alike). A pass-1 measurement that is finite but past them (a -9.8 LUFS master with +12 dB of gain measures +2.16 LUFS) made pass 2 exit 222 and the export fail.
+describe('parseLoudnormJson - a measurement outside loudnorm\'s option range is no measurement (T-167 (z))', () => {
+  const measured = (over: Record<string, string>): string =>
+    JSON.stringify({ input_i: '-23.50', input_tp: '-3.20', input_lra: '5.10', input_thresh: '-33.50', target_offset: '-7.50', ...over })
+
+  it('the control: a block inside every range still parses', () => {
+    expect(parseLoudnormJson(measured({}))).toMatchObject({ input_i: '-23.50', target_offset: '-7.50' })
+  })
+
+  it.each([
+    ['input_i', '0.01'],
+    ['input_i', '2.16'],
+    ['input_i', '-99.01'],
+    ['input_thresh', '0.01'],
+    ['input_thresh', '-99.01'],
+    ['input_lra', '-0.01'],
+    ['input_lra', '99.01'],
+    ['input_tp', '99.01'],
+    ['input_tp', '-99.01'],
+    ['target_offset', '99.01'],
+    ['target_offset', '-99.01']
+  ])('%s = %s alone makes the whole measurement unusable: the caller falls back to single-pass loudnorm', (field, value) => {
+    expect(parseLoudnormJson(measured({ [field]: value }))).toBeNull()
+  })
+
+  it.each([
+    ['input_i', '0.00'],
+    ['input_i', '-99.00'],
+    ['input_thresh', '0.00'],
+    ['input_thresh', '-99.00'],
+    ['input_lra', '0.00'],
+    ['input_lra', '99.00'],
+    ['input_tp', '99.00'],
+    ['input_tp', '-99.00'],
+    ['target_offset', '99.00'],
+    ['target_offset', '-99.00']
+  ])('%s = %s is on the edge of its range and still parses', (field, value) => {
+    expect(parseLoudnormJson(measured({ [field]: value }))).not.toBeNull()
+  })
+})

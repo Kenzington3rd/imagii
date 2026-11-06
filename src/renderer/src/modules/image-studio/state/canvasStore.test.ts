@@ -1,11 +1,14 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { asHint, displayOpacity, type CanvasDocument, type LayerType, type TextLayer } from '@shared/canvas'
+import { asHint, displayOpacity, type CanvasDocument, type CanvasLayer, type LayerType, type TextLayer } from '@shared/canvas'
 import {
   FONT_SIZE_MIN,
   applyLayerPatch,
   foldTextScale,
   keepsRatioOnCornerDrag,
+  makeEllipseLayer,
   makeImageLayer,
+  makeLineLayer,
+  makeRectLayer,
   makeReferenceLayer,
   makeTextLayer,
   textLayerFor,
@@ -667,13 +670,15 @@ describe('typed boxes - one burst of typing is one undo step (T-153 (1))', () =>
     const before = stepsBack()
     useCanvasStore.getState().updateLayer(id, { rotation: 4 }, 'rotation')
     useCanvasStore.getState().updateLayer(id, { rotation: 45 }, 'rotation')
+    // T-167 (2): this pressed 90 twice and counted two steps; the second press of the rotation the layer is already at records nothing now (it would also clear Redo), so the second
+    // press is 180 (typed burst + two presses is still before + 3, and the Undo below lands on 180, not 90).
     useCanvasStore.getState().setRotation(id, 90)
-    useCanvasStore.getState().setRotation(id, 90)
+    useCanvasStore.getState().setRotation(id, 180)
     expect(stepsBack(), 'typed burst + two presses').toBe(before + 3)
     useCanvasStore.getState().updateLayer(id, { rotation: 1 }, 'rotation')
     expect(stepsBack(), 'a preset closes the typing window').toBe(before + 4)
     useCanvasStore.getState().undo()
-    expect(layerNow(id).rotation).toBe(90)
+    expect(layerNow(id).rotation).toBe(180)
   })
 })
 
@@ -691,8 +696,10 @@ describe('textLayerFor(doc, word) - a pasted sentence is sized, placed and inked
 
   it('control: with no word it is today\'s layer - the default page, and a dark template (green on base, the word "Text")', () => {
     expect(look(textLayerFor({ width: 1200, height: 800, background: '#ffffff' }))).toEqual({ x: 60, y: 60, fontSize: 32, fill: BG_BASE })
-    expect(look(textLayerFor(templateDoc('yt-thumb-bold')))).toEqual({ x: 1150.4, y: 60, fontSize: 29, fill: INK_BASE })
-    expect(look(textLayerFor(templateDoc('emote-blank-112')))).toEqual({ x: 52, y: 58, fontSize: 20, fill: BG_BASE })
+    // (T-167 fold: the Bold thumbnail's x was 1150.4 = 1280 - 60 - 4 * 0.6 * 29; "Text" is 2.20 em now (each character its own measured advance), so 1280 - 60 - 63.8 = 1156.2)
+    expect(look(textLayerFor(templateDoc('yt-thumb-bold')))).toEqual({ x: 1156.2, y: 60, fontSize: 29, fill: INK_BASE })
+    // (T-167 fold: the blank emote's place was (52, 58), the nearest spot where a 48 px x 20 px box sits inside the disc; the box is 44 px wide now (2.20 em at 20 px), so the nearest is (56, 58))
+    expect(look(textLayerFor(templateDoc('emote-blank-112')))).toEqual({ x: 56, y: 58, fontSize: 20, fill: BG_BASE })
     expect(textLayerFor(templateDoc('yt-thumb-bold')).text).toBe('Text')
   })
 
@@ -779,5 +786,176 @@ describe('newTextLook with a pasted sentence keeps the whole box inside the page
     const look = newTextLook(doc, INKS, word)
     const under = surfacesUnder(doc, { x: look.x, y: look.y, ...estimatedTextBox(word, look.fontSize) }, INKS.behind)
     expect(worstContrast(look.fill, under, INKS)).toBeGreaterThanOrEqual(READABLE_CONTRAST)
+  })
+})
+
+// T-167 (2): a Stream Graphics edit that changes nothing recorded an undo step and wiped Redo (the "0" rotation preset on a layer already at 0 after an Undo; a snapped drag shorter than half a
+// cell, which `onDragEnd` writes as `updateLayer(id, { x, y })` at the layer's own place; an order the arrows leave as it was). The class T-166 (3) fixed in videoStore and T-141 (8) in `removeLayer`.
+describe('an edit that changes nothing records nothing and keeps Redo (T-167 (2))', () => {
+  /** A rect and an ellipse on the page, one step in `past` and one in `future` (two edits, one Undo), so a wrongly recorded step shows in BOTH lists. */
+  function seed(): { rect: ReturnType<typeof makeRectLayer>; ellipse: ReturnType<typeof makeEllipseLayer> } {
+    const s = useCanvasStore.getState()
+    s.resetDocument()
+    const rect = { ...makeRectLayer(40, 50), id: 'rect-1' }
+    const ellipse = { ...makeEllipseLayer(300, 200), id: 'ellipse-1' }
+    s.addLayer(rect)
+    s.addLayer(ellipse)
+    s.updateLayer(rect.id, { x: 41 })
+    useCanvasStore.getState().undo()
+    expect(useCanvasStore.getState().history.past).toHaveLength(2)
+    expect(useCanvasStore.getState().history.future).toHaveLength(1)
+    return { rect, ellipse }
+  }
+
+  /** Nothing was set at all: the document, both history lists, the object holding them and the coalescing key are the very ones from before. */
+  function expectUntouched(before: ReturnType<typeof useCanvasStore.getState>): void {
+    const after = useCanvasStore.getState()
+    expect(after.doc, 'the document').toBe(before.doc)
+    expect(after.history, 'the history object').toBe(before.history)
+    expect(after.history.past, 'past').toBe(before.history.past)
+    expect(after.history.future, 'future').toBe(before.history.future)
+    expect(after.historyKey, 'historyKey').toBe(before.historyKey)
+    expect(after.canRedo(), 'Redo is still offered').toBe(true)
+  }
+
+  beforeEach(() => {
+    useCanvasStore.getState().resetDocument()
+  })
+
+  it('setRotation to the rotation the layer has (0 on a layer at 0) is no step', () => {
+    const { rect } = seed()
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().setRotation(rect.id, 0)
+    expectUntouched(before)
+  })
+
+  it('a layer with no rotation at all counts as 0, and setRotation of a layer that is not there is no step', () => {
+    const { rect } = seed()
+    // (a project file is read, not made by the editor: its layer may have no rotation key)
+    const bare = { ...rect } as Partial<typeof rect>
+    delete bare.rotation
+    useCanvasStore.setState({ doc: { ...useCanvasStore.getState().doc, layers: [bare as typeof rect, ...useCanvasStore.getState().doc.layers.slice(1)] } })
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().setRotation(rect.id, 0)
+    expectUntouched(before)
+    useCanvasStore.getState().setRotation('no-such-layer', 45)
+    expectUntouched(before)
+  })
+
+  it('updateLayer with the layer\'s own x and y (a drag that snapped back to where it started), with a key and without, is no step', () => {
+    const { rect } = seed()
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().updateLayer(rect.id, { x: rect.x, y: rect.y })
+    expectUntouched(before)
+    useCanvasStore.getState().updateLayer(rect.id, { x: rect.x, y: rect.y }, 'x')
+    expectUntouched(before)
+  })
+
+  it('updateLayer of a layer that is not there is no step', () => {
+    seed()
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().updateLayer('no-such-layer', { x: 5 })
+    expectUntouched(before)
+    useCanvasStore.getState().updateLayer('no-such-layer', { x: 5 }, 'x')
+    expectUntouched(before)
+  })
+
+  it('a patch that leaves every field it names as it was is no step, whatever its shape: a line\'s points copied, a hint retyped with its own words, an empty patch', () => {
+    const s = useCanvasStore.getState()
+    s.resetDocument()
+    const line = { ...makeLineLayer([0, 0, 10, 10, 20, 5]), id: 'line-1' }
+    const hint = asHint({ ...makeTextLayer(10, 10, '@yourhandle'), id: 'hint-1' })
+    s.addLayer(line)
+    s.addLayer(hint)
+    s.updateLayer(line.id, { x: 3 })
+    useCanvasStore.getState().undo()
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().updateLayer(line.id, { points: [0, 0, 10, 10, 20, 5] })
+    expectUntouched(before)
+    useCanvasStore.getState().updateLayer(hint.id, { text: '@yourhandle' } as Partial<TextLayer>)
+    expectUntouched(before)
+    useCanvasStore.getState().updateLayer(hint.id, {})
+    expectUntouched(before)
+    expect((useCanvasStore.getState().doc.layers[1] as TextLayer).hint, 'the hint is still a hint').toBe(true)
+  })
+
+  it('a no-op does not close or open a coalescing window: the key from the last real edit is still the key', () => {
+    const { rect } = seed()
+    useCanvasStore.getState().updateLayer(rect.id, { opacity: 0.5 }, 'opacity')
+    const before = useCanvasStore.getState()
+    expect(before.historyKey).toBe(`${rect.id}:opacity`)
+    // (a real edit cleared Redo, so this is a past-only check)
+    useCanvasStore.getState().updateLayer(rect.id, { opacity: 0.5 })
+    useCanvasStore.getState().updateLayer(rect.id, { opacity: 0.5 }, 'other')
+    const after = useCanvasStore.getState()
+    expect(after.history).toBe(before.history)
+    expect(after.historyKey).toBe(`${rect.id}:opacity`)
+    expect(after.doc).toBe(before.doc)
+  })
+
+  it('reorderLayers with the order the layers already have is no step (the same ids in the same order, an id nothing has among them or not)', () => {
+    const { rect, ellipse } = seed()
+    const before = useCanvasStore.getState()
+    useCanvasStore.getState().reorderLayers([rect.id, ellipse.id])
+    expectUntouched(before)
+    useCanvasStore.getState().reorderLayers([rect.id, 'no-such-layer', ellipse.id])
+    expectUntouched(before)
+  })
+
+  it('control: a real change is still ONE step and clears Redo - a rotation, a patch, an order, a hint retyped to new words', () => {
+    const { rect, ellipse } = seed()
+    const pastBefore = useCanvasStore.getState().history.past.length
+    useCanvasStore.getState().setRotation(rect.id, 45)
+    let s = useCanvasStore.getState()
+    expect(s.history.past, 'one step').toHaveLength(pastBefore + 1)
+    expect(s.canRedo(), 'and Redo is gone').toBe(false)
+    expect(s.doc.layers[0]!.rotation).toBe(45)
+
+    s.undo()
+    expect(useCanvasStore.getState().canRedo()).toBe(true)
+    useCanvasStore.getState().updateLayer(rect.id, { x: 99, y: 98 })
+    s = useCanvasStore.getState()
+    expect(s.history.past).toHaveLength(pastBefore + 1)
+    expect(s.canRedo()).toBe(false)
+    expect(s.doc.layers[0]).toMatchObject({ x: 99, y: 98 })
+
+    s.undo()
+    useCanvasStore.getState().reorderLayers([ellipse.id, rect.id])
+    s = useCanvasStore.getState()
+    expect(s.history.past).toHaveLength(pastBefore + 1)
+    expect(s.canRedo()).toBe(false)
+    expect(s.doc.layers.map((l) => l.id)).toEqual([ellipse.id, rect.id])
+
+    const hint = asHint({ ...makeTextLayer(10, 10, '@yourhandle'), id: 'hint-2' })
+    s.addLayer(hint)
+    const afterAdd = useCanvasStore.getState().history.past.length
+    useCanvasStore.getState().updateLayer(hint.id, { text: 'my_handle' } as Partial<TextLayer>)
+    s = useCanvasStore.getState()
+    expect(s.history.past, 'retyping a hint is a step').toHaveLength(afterAdd + 1)
+    expect((s.doc.layers[2] as TextLayer).hint, 'and it stops being a hint').toBe(false)
+  })
+
+  it('control: a patch that names one field it leaves and one it changes is a step (a drag that moved only along x), and an order that leaves a layer out still applies', () => {
+    const { rect, ellipse } = seed()
+    const past = useCanvasStore.getState().history.past.length
+    useCanvasStore.getState().updateLayer(rect.id, { x: rect.x, y: 77 })
+    expect(useCanvasStore.getState().history.past).toHaveLength(past + 1)
+    expect(useCanvasStore.getState().doc.layers[0]).toMatchObject({ x: rect.x, y: 77 })
+    useCanvasStore.getState().undo()
+    useCanvasStore.getState().reorderLayers([rect.id])
+    expect(useCanvasStore.getState().history.past, 'the ellipse is left out: that is a change').toHaveLength(past + 1)
+    expect(useCanvasStore.getState().doc.layers.map((l) => l.id)).toEqual([rect.id])
+    expect(ellipse.id).toBe('ellipse-1')
+  })
+
+  it('control: a keyed run is still one step - the first edit records, the rest of the run record none, and a different key starts another', () => {
+    const { rect } = seed()
+    const past = useCanvasStore.getState().history.past.length
+    useCanvasStore.getState().updateLayer(rect.id, { opacity: 0.8 }, 'opacity')
+    useCanvasStore.getState().updateLayer(rect.id, { opacity: 0.6 }, 'opacity')
+    useCanvasStore.getState().updateLayer(rect.id, { opacity: 0.4 }, 'opacity')
+    expect(useCanvasStore.getState().history.past).toHaveLength(past + 1)
+    useCanvasStore.getState().updateLayer(rect.id, { strokeWidth: 5 } as Partial<CanvasLayer>, 'strokeWidth')
+    expect(useCanvasStore.getState().history.past).toHaveLength(past + 2)
   })
 })

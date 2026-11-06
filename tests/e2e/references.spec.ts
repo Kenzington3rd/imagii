@@ -3566,3 +3566,78 @@ test.describe('T-166 (4): right-click in a text box', () => {
     }
   })
 })
+
+// ── T-167 (5): a context menu opened from the keyboard pops at the field, not at the mouse pointer ─────────────────────────────────────────
+//
+// The Menu key or Shift+F10 on a focused text box raises the same `context-menu` event with the FIELD's x/y and `menuSourceType: 'keyboard'`; `popup({ window })` alone opens at the
+// cursor, so the menu appeared wherever the pointer was parked. The key is the real one (Playwright's `keyboard.press('Shift+F10')` is a CDP key event the renderer turns into the
+// event), so nothing is emitted by hand. As in T-166 (4), `Menu.prototype.popup` is wrapped in MAIN (the OS draws the native menu outside any page a test can see): it records the OPTIONS
+// popup was given, and a second `context-menu` listener records the params main was handed, so the two are compared.
+test.describe('T-167 (5): the keyboard opens the context menu at the field', () => {
+  test('Shift+F10 on the focused Search box pops the menu with the params\' x, y and sourceType keyboard; a right-click is sourceType mouse', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t167-ctx')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(({ BrowserWindow, Menu }) => {
+        const g = globalThis as unknown as {
+          __popups?: Array<{ x?: number; y?: number; sourceType?: string }>
+          __params?: Array<{ x: number; y: number; menuSourceType: string }>
+        }
+        g.__popups = []
+        g.__params = []
+        Menu.prototype.popup = function (this: Electron.Menu, options?: Electron.PopupOptions) {
+          g.__popups?.push({ x: options?.x, y: options?.y, sourceType: options?.sourceType })
+          return this
+        } as typeof Menu.prototype.popup
+        BrowserWindow.getAllWindows()[0]!.webContents.on('context-menu', (_event, params) => {
+          g.__params?.push({ x: params.x, y: params.y, menuSourceType: params.menuSourceType })
+        })
+      })
+      const read = () =>
+        app.evaluate(() => {
+          const g = globalThis as unknown as {
+            __popups: Array<{ x?: number; y?: number; sourceType?: string }>
+            __params: Array<{ x: number; y: number; menuSourceType: string }>
+          }
+          return { popups: g.__popups, params: g.__params }
+        })
+
+      const box = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await box.click()
+      await expect(box).toBeFocused()
+      // Park the pointer far from the field: the old call opened the menu here.
+      await window.mouse.move(5, 5)
+      await window.keyboard.press('Shift+F10')
+      await expect.poll(async () => (await read()).popups.length, { timeout: 10_000 }).toBe(1)
+      const keyboard = await read()
+      expect(keyboard.params[0]?.menuSourceType, 'the event came from the keyboard').toBe('keyboard')
+      expect(keyboard.popups[0], 'popup was given the params\' own place and source type').toEqual({
+        x: keyboard.params[0]?.x,
+        y: keyboard.params[0]?.y,
+        sourceType: 'keyboard'
+      })
+      // And that place is the field's, not the pointer's (5, 5).
+      const rect = await box.boundingBox()
+      expect(rect, 'the Search box is on screen').not.toBeNull()
+      const px = keyboard.popups[0]?.x as number
+      const py = keyboard.popups[0]?.y as number
+      expect(px, 'x is within the field').toBeGreaterThanOrEqual((rect?.x ?? 0) - 2)
+      expect(px).toBeLessThanOrEqual((rect?.x ?? 0) + (rect?.width ?? 0) + 2)
+      expect(py, 'y is within the field').toBeGreaterThanOrEqual((rect?.y ?? 0) - 2)
+      expect(py).toBeLessThanOrEqual((rect?.y ?? 0) + (rect?.height ?? 0) + 2)
+
+      // Control: a right-click is a mouse event at the click, so the source type is not hard-coded.
+      await box.click({ button: 'right', position: { x: 12, y: 8 } })
+      await expect.poll(async () => (await read()).popups.length, { timeout: 10_000 }).toBe(2)
+      const mouse = await read()
+      expect(mouse.params[1]?.menuSourceType).toBe('mouse')
+      expect(mouse.popups[1]).toEqual({ x: mouse.params[1]?.x, y: mouse.params[1]?.y, sourceType: 'mouse' })
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

@@ -1123,7 +1123,7 @@ test.describe('Image Studio — tools and drawing', () => {
       const pencil = await lastShape(window)
       expect(pencil.cls).toBe('Line')
       expect((pencil.points as number[]).length).toBeGreaterThan(4)
-      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:370).
+      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:390).
       expect(await layerNames(window)).toEqual([
         'Line',
         'Line',
@@ -1409,7 +1409,7 @@ test.describe('Image Studio — selection', () => {
       await window.keyboard.press('Delete')
       await expectLayerCount(window, 2)
       expect(await layerNames(window)).not.toContain('Keep m')
-      // Removing the selected layer clears the selection (canvasStore.ts:183).
+      // Removing the selected layer clears the selection (canvasStore.ts:197).
       await expect(propsCard(window)).toHaveCount(0)
 
       // ── Backspace, the other binding ──
@@ -3503,7 +3503,7 @@ test.describe('Image Studio — history', () => {
       await window.keyboard.press('Control+Shift+z')
       await expectLayerCount(window, 1)
 
-      // A new action after an undo drops the redo branch (canvasStore.ts:124).
+      // A new action after an undo drops the redo branch (canvasStore.ts:130).
       await window.keyboard.press('Control+z')
       await expectLayerCount(window, 2)
       await layerRow(window, 'Rectangle').getByRole('button', { name: 'Duplicate layer' }).click()
@@ -6610,9 +6610,11 @@ test.describe('Image Studio - pastes, selection frame and emote names (T-165 Tra
       const { x: pastedX, ...pastedLook } = look(pasted)
       const { x: addedX, ...addedLook } = look(added)
       expect(pastedLook, 'the pasted layer is the "+ Add text" layer, but for its words').toEqual(addedLook)
-      // The right edges agree (by the editor's estimate, 0.6 em a character: the placement's own box): both are 60 px in from the page's right edge.
+      // The right edges agree (by the editor's estimate, the placement's own box): both are 60 px in from the page's right edge.
+      // T-167 (fold): the estimate is each character's measured advance now, so the widths are not `0.6 em * length` (7.2 em for "PASTED WORDS" and 2.4 em for "Text") but 8.19 em and 2.20 em
+      // (`newText.test.ts` holds the table).
       const fontSize = pasted.fontSize as number
-      expect((pastedX as number) + [...WORDS].length * 0.6 * fontSize, 'the pasted words end where "Text" did').toBeCloseTo((addedX as number) + [...'Text'].length * 0.6 * fontSize, 6)
+      expect((pastedX as number) + 8.19 * fontSize, 'the pasted words end where "Text" did').toBeCloseTo((addedX as number) + 2.2 * fontSize, 6)
     } finally {
       await closeStudio(studio)
     }
@@ -6712,6 +6714,97 @@ test.describe('Image Studio - pasted words land whole, inside the page and reada
       await expect(dialog.getByText('Paste image from clipboard')).toHaveCount(0)
       await window.keyboard.press('Escape')
       await expect(dialog).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-167 Track A: a pasted text stays on the page, and a no-op edit leaves Undo's Redo alone ────────────────────────────────────────────────────────────────────────────────────────────
+//
+// (1) `candidatePlaces` took its home from `placementFor`, a PICTURE rule that scales a box down to 800 px first, so 25 pasted lines on the default page landed with their real bottom at 859 of
+// 800. The clipboard is REAL (Electron's `clipboard`), so is the chord, and the box is the one Konva MEASURED (`getClientRect` relative to the document layer = document units), not the
+// editor's estimate. (2) The "0" rotation preset on a layer already at 0, after an Undo, recorded a step and wiped Redo.
+test.describe('Image Studio - a tall paste stays on the page, and a no-op rotation keeps Redo (T-167 Track A)', () => {
+  /** The last Text node's rectangle as Konva MEASURED it, in document units, and the page's own size (the background node). */
+  function lastTextRect(window: Page): Promise<{ x: number; y: number; width: number; height: number; fontSize: number; text: string; page: { width: number; height: number } }> {
+    return window.evaluate(() => {
+      type N = { getClassName(): string; attrs: { name?: string; fontSize: number; text: string }; getClientRect(o: { relativeTo: unknown }): { x: number; y: number; width: number; height: number }; getParent(): unknown; width(): number; height(): number }
+      const stage = (window as unknown as { __imagiiStage?: { children: Array<{ children: N[] }> } }).__imagiiStage
+      if (!stage) throw new Error('no stage')
+      const kids = stage.children[0]!.children
+      const background = kids.find((n) => n.attrs.name === 'background')
+      const nodes = kids.filter((n) => n.attrs.name !== 'background')
+      const n = nodes[nodes.length - 1]!
+      if (n.getClassName() !== 'Text') throw new Error(`the last node is a ${n.getClassName()}, not a Text`)
+      const r = n.getClientRect({ relativeTo: n.getParent() })
+      return { x: r.x, y: r.y, width: r.width, height: r.height, fontSize: n.attrs.fontSize, text: n.attrs.text, page: { width: background!.width(), height: background!.height() } }
+    })
+  }
+
+  async function putTextOnClipboard(studio: Studio, text: string): Promise<void> {
+    await studio.app.evaluate(({ clipboard }, t) => {
+      clipboard.clear()
+      clipboard.writeText(t)
+    }, text)
+    await studio.window.waitForTimeout(800)
+  }
+
+  test('25 pasted lines of 45 characters on the default page land with their whole measured box inside it', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t167-tall-paste')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(field(window, 'Name')).toHaveCount(0)
+      // (capitals, so the box is over 800 px wide by the editor's estimate - the case the picture rule shrank - and still inside the 1200 px page as drawn)
+      const script = Array.from({ length: 25 }, (_, i) => `${String(i + 1).padStart(2, '0')} ${'THE QUICK BROWN FOX JUMPS OVER THE LAZY DOG'.slice(0, 42)}`)
+      expect(script.every((l) => l.length === 45)).toBe(true)
+      await putTextOnClipboard(studio, script.join('\n'))
+      await window.keyboard.press('Control+v')
+      await expectLayerCount(window, 2)
+      const box = await lastTextRect(window)
+      expect(box.text).toBe(script.join('\n'))
+      test.info().annotations.push({ type: 'stage box', description: JSON.stringify({ ...box, right: box.x + box.width, bottom: box.y + box.height }) })
+      expect(box.page).toEqual({ width: 1200, height: 800 })
+      expect(box.x, 'left edge').toBeGreaterThanOrEqual(0)
+      expect(box.y, 'top edge').toBeGreaterThanOrEqual(0)
+      expect(box.x + box.width, `right edge ${box.x + box.width} of ${box.page.width}`).toBeLessThanOrEqual(box.page.width)
+      expect(box.y + box.height, `bottom edge ${box.y + box.height} of ${box.page.height}`).toBeLessThanOrEqual(box.page.height)
+      expect(box.height, 'it is all 25 lines tall, not a shrunken box').toBeGreaterThan(700)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a rectangle rotated 45 by its preset, Undone, then given the "0" preset: Redo is still enabled (a rotation to where it already is records nothing)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t167-noop-rotation')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
+      await expectLayerCount(window, 2)
+      const angle = async (): Promise<number> => (await lastShape(window)).rotation
+      const redo = window.getByRole('button', { name: 'Redo' })
+      expect(await angle()).toBe(0)
+
+      await window.getByRole('button', { name: 'Rotate 45 degrees' }).click()
+      await expect.poll(angle, { timeout: 10_000 }).toBe(45)
+      await window.keyboard.press('Control+z')
+      await expect.poll(angle, { timeout: 10_000, message: 'Ctrl+Z took the rotation back' }).toBe(0)
+      await expect(redo, 'the rotation is in Redo').toBeEnabled()
+
+      await window.getByRole('button', { name: 'Rotate 0 degrees' }).click()
+      await expect.poll(angle, { timeout: 10_000 }).toBe(0)
+      await expect(redo, 'the "0" preset on a layer already at 0 changed nothing, so Redo is kept').toBeEnabled()
+
+      // ...and Redo still brings the 45 back.
+      await redo.click()
+      await expect.poll(angle, { timeout: 10_000 }).toBe(45)
     } finally {
       await closeStudio(studio)
     }

@@ -357,3 +357,14 @@ function chatDensityMedian(messages: readonly ChatMessage[], bucketSec: number):
   if (buckets.size < 2) return 0
   return median([...buckets.values()])
 }
+
+/**
+ * The toast when a Scan VOD ends after its video was closed or replaced (T-167 (3)). The scan keeps going by design (the Close question says so and its Cancel stays on
+ * screen), but its candidates are for a video that is gone and are dropped; every sibling late job says so (`staleCaptionsMessage` is the model), and the way back is to scan again.
+ */
+export function lateScanMessage(fileName: string): string {
+  return (
+    `The scan of ${fileName} finished after that video was closed or replaced, so its highlights weren't added. ` +
+    "Scan again when you're ready."
+  )
+}

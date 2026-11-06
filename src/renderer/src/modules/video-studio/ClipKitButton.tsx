@@ -14,6 +14,7 @@ import {
   describeKitLimit,
   formatClipLength,
   kitCanceledMessage,
+  kitFailedMessage,
   kitExportLabel,
   kitLimitTargets,
   kitRunCaption,
@@ -349,7 +350,8 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           void window.api.video.removeKitDir(kitDir).catch(() => undefined)
         }
         reportFailure(err, {
-          failed: 'Clip Kit failed.',
+          // T-167 (4): files that landed are in the folder (it is removed only when nothing did), and the toast says so; the cause still follows.
+          failed: kitFailedMessage(landed),
           // T-113: with nothing finished the folder was just removed, and "files already finished
           // are in your folder" would send the person looking for a folder that is gone.
           canceled: kitCanceledMessage(landed)

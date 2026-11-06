@@ -1407,7 +1407,7 @@ test.describe('HighlightPanel', () => {
       const cancel = card.getByRole('button', { name: 'Cancel', exact: true })
       await expect(cancel).toBeVisible({ timeout: 20_000 })
       // T-113: the bar is a named progressbar with its value (it was a colored width).
-      const scanBar = card.getByRole('progressbar', { name: 'Scanning the video for highlights' })
+      const scanBar = card.getByRole('progressbar', { name: `Scanning ${path.basename(longSrc)} for highlights` })
       await expect(scanBar).toBeVisible()
       await expect(scanBar).toHaveAttribute('aria-valuemin', '0')
       await expect(scanBar).toHaveAttribute('aria-valuemax', '100')
@@ -2840,7 +2840,7 @@ test.describe('Leaving a studio mid-job (T-135 (1), (4))', () => {
       await leaveAndReturn(window)
       const scanning = scan().getByRole('button', { name: 'Scanning…' })
       await expect(scanning, 'not "Scan VOD" again: the scan is running and the button is off').toBeDisabled()
-      await expect(scan().getByRole('progressbar', { name: 'Scanning the video for highlights' })).toBeVisible()
+      await expect(scan().getByRole('progressbar', { name: `Scanning ${path.basename(longSrc)} for highlights` })).toBeVisible()
       await scan().getByRole('button', { name: 'Cancel', exact: true }).click()
       await expectCanceledNotFailed(window, 'Scan canceled.')
       await expect(scan().getByRole('button', { name: 'Scan VOD' })).toBeEnabled({ timeout: 30_000 })
@@ -9820,6 +9820,8 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       await window.waitForTimeout(500)
       await expect(scan.locator('li'), 'no candidate of the video that is gone').toHaveCount(0)
       expect(await readToastLog(window), 'and no "Found 1 highlight" for a video that is not open').not.toContain('Found 1 highlight')
+      // T-167 (3): the dropped result is not silent - the toast names the file the scan was for (the replaced one).
+      await expectToast(window, `The scan of ${path.basename(burstSrc)} finished after that video was closed or replaced, so its highlights weren't added.`)
     } finally {
       await app.close()
     }
@@ -12859,7 +12861,7 @@ test.describe('T-149 (3): a Scan VOD that finds nothing says so in the panel, no
       // A re-scan: the line gives way to the progress bar and comes back with the result (this video still has nothing).
       await installSpawnStall(app, [{ match: 'ffmpeg', ms: 4_000 }])
       await card.getByRole('button', { name: 'Re-scan' }).click()
-      await expect(card.getByRole('progressbar', { name: 'Scanning the video for highlights' })).toBeVisible()
+      await expect(card.getByRole('progressbar', { name: `Scanning ${path.basename(flatSrc)} for highlights` })).toBeVisible()
       await expect(line, 'not "found nothing" while a scan is running').toHaveCount(0)
       await expect(line).toBeVisible({ timeout: 60_000 })
 
@@ -13764,4 +13766,169 @@ test.describe('T-165 (5): the caption style line and the pressed preset', () => 
       await app.close()
     }
   })
+})
+
+// ── T-167 (3), (4): a late scan says so and names its file; a failed kit says its finished files are in the folder ───────────────────────────
+//
+// (3) A Scan VOD outlives its video by design (the Close question says "The scan that is running keeps going; its Cancel stays on screen."), but when it ended `setDerivedFor` was false and
+// the result was dropped in silence, where every sibling late job says so. The scan is held in MAIN (its `video:findHighlights` handler is replaced by one that answers when the test says,
+// as T-131 (3) does), so the video can be closed, or another opened, while it runs. Fold: another video's finder showed the running scan as "Scanning…" with a bar named for no file.
+// (4) A kit that fails on platform 3 of 5 keeps its two finished files (the folder goes only when nothing landed). The failing job is the suite's: the source is removed while that job's
+// probe is held (T-112's), so job 3 dies and jobs 1 and 2 are on disk.
+test.describe('T-167 (3), (4): the late scan, the scan\'s bar, and the failed kit', () => {
+  /** Replace the scan's handler in main with one that answers with one candidate when `__scanRelease167` is called. */
+  async function holdScanInMain(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      const g = globalThis as unknown as { __scanRelease167: () => void }
+      let release: () => void = () => undefined
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      g.__scanRelease167 = release
+      ipcMain.removeHandler('video:findHighlights')
+      ipcMain.handle('video:findHighlights', async () => {
+        await gate
+        return [{ startSec: 1, endSec: 5, peakDb: -10, reason: 'loud' }]
+      })
+    })
+  }
+  const releaseScan = (app: ElectronApplication): Promise<void> =>
+    app.evaluate(() => (globalThis as unknown as { __scanRelease167: () => void }).__scanRelease167())
+  /** Close the video the way a person does, answering the question with OK. */
+  async function closeVideo(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+
+  test('a scan that ends after its video was closed says so, naming the file, and raises no "Found" or "No standout" toast', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t167late', clipSrc)
+    try {
+      await holdScanInMain(app)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeVisible()
+      await closeVideo(window)
+      await releaseScan(app)
+      const sentence = `The scan of ${path.basename(clipSrc)} finished after that video was closed or replaced, so its highlights weren't added. Scan again when you're ready.`
+      await expectToast(window, sentence)
+      const entries = await readToastEntries(window)
+      const hit = entries.find((e) => e.text === sentence)
+      expect(hit, 'the sentence is one toast, whole').toBeDefined()
+      expect(hit?.hasIcon, 'a plain toast with the search icon, not a success or error toast').toBe(true)
+      expect(entries.map((e) => e.text).join(' | '), 'the dropped result raised neither result toast').not.toMatch(/Found \d+ highlight|No standout moments/)
+      // Nothing was put on a video that is not open, and the finder is free again for the next one.
+      await window.waitForTimeout(500)
+      await dropOnVideoImporter(window, burstSrc, path.basename(burstSrc))
+      await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' })).toBeEnabled({ timeout: 30_000 })
+      await expect(highlightCard(window).locator('li'), 'the late result was not stored on the next video').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('another video\'s finder names the file the running scan is for', async () => {
+    test.setTimeout(240_000)
+    const { app, window } = await launchWithVideo('t167bar', clipSrc)
+    try {
+      await holdScanInMain(app)
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeVisible()
+      // The bar on the video the scan is for names it.
+      await expect(highlightCard(window).getByRole('progressbar', { name: `Scanning ${path.basename(clipSrc)} for highlights` })).toBeVisible()
+      await closeVideo(window)
+      await dropOnVideoImporter(window, burstSrc, path.basename(burstSrc))
+      await expect(window.locator('video')).toHaveCount(1)
+      // A second video is open and its finder shows that scan: the bar says whose it is, not "the video".
+      const bar = highlightCard(window).getByRole('progressbar')
+      await expect(bar).toHaveAttribute('aria-label', `Scanning ${path.basename(clipSrc)} for highlights`)
+      await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeDisabled()
+      await releaseScan(app)
+      await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' })).toBeEnabled({ timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('a kit whose third job fails says the two finished files are in the folder, then the cause', async () => {
+    test.setTimeout(300_000)
+    const moved = path.join(root, 'source', `t167-kitfail-${Date.now().toString(36)}.mp4`)
+    copyFileSync(clipSrc, moved)
+    const { app, window, outDir } = await launchWithVideo('t167kitfail', moved)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      // Job 3's probe is held: by the time the label says "3 of 5", jobs 1 and 2 are on disk.
+      await installSpawnStall(app, [{ match: 'ffprobe', nth: 3, ms: 6000 }])
+      const kit = kitButton(window)
+      const kitDir = path.join(outDir, `Clip_1-kit-${kitStamp()}`)
+      await kit.click()
+      await expect(kit).toHaveText('Exporting platform version 3 of 5…', { timeout: 180_000 })
+      rmSync(moved) // while job 3's probe is held: the job fails, the kit with it
+
+      const toasts = await expectToast(window, 'Clip Kit failed.')
+      const failure = toasts.find((t) => t.startsWith('Clip Kit failed.')) as string
+      expect(failure).toBe(
+        "Clip Kit failed. The 2 files already finished are in your folder. A file imagii needs isn't there. It may have been moved or deleted."
+      )
+      // They are where the toast says: two platform files, in the folder the kit made, and no more.
+      const landed = withEverything(readdirSync(kitDir))
+      expect(landed, 'jobs 1 and 2 landed and nothing else').toHaveLength(2)
+      expect(landed.every((f) => f.endsWith('.mp4')), landed.join(', ')).toBe(true)
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 30_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// ── T-167 (not counted): a click on the crop box with no drag ──────────────────────────────────────────────────────────────────────────────
+//
+// CropOverlay's onDragStop wrote `d.x / picture.w` back through `setClipCrop`; react-draggable fires its stop on any press and release, so a click with no movement stored a rectangle a float
+// step off the stored one (measured: the box's x moved from 386.1000061035156 to 386.0999755859375 CSS px on a 4:5 crop) and pushed an undo step past T-166 (3)'s equality guard. The witness
+// is the studio's own Undo button: one real crop is one step, so after the click ONE Undo returns the clip to its uncropped state and the button goes disabled - a second, silent step leaves it
+// enabled. The 16:9 crop of the 16:9 fixture is the whole frame (0, 0, 1, 1), whose arithmetic is exact: it is the control that passes on the old code.
+test.describe('T-167: a click on the crop box with no drag', () => {
+  /** Crop the clip to `shape`, press and release on the middle of the box with no movement, then Undo ONCE. Returns the Undo button. */
+  async function cropClickUndo(window: Page, shape: string, click: boolean): Promise<Locator> {
+    const undo = window.getByRole('button', { name: 'Undo' })
+    await expect(undo).toBeDisabled()
+    await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
+    await window.getByRole('button', { name: shape, exact: true }).click()
+    await expect(undo).toBeEnabled()
+    const box = window.locator('.react-draggable.border-accent')
+    await expect(box).toHaveCount(1)
+    const rect = await box.boundingBox()
+    if (click) {
+      await window.mouse.move((rect?.x ?? 0) + (rect?.width ?? 0) / 2, (rect?.y ?? 0) + (rect?.height ?? 0) / 2)
+      await window.mouse.down()
+      await window.mouse.up()
+      await window.waitForTimeout(300)
+    }
+    await undo.click()
+    return undo
+  }
+
+  test('control: with no click, one Undo undoes the crop alone and the button goes disabled', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t167crop-control')
+    try {
+      await expect(await cropClickUndo(window, '9:16', false)).toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  for (const shape of ['16:9', '9:16', '1:1', '4:5']) {
+    test(`with a ${shape} crop, a click on the box adds no undo step`, async () => {
+      test.setTimeout(120_000)
+      const { app, window } = await launchWithVideo(`t167crop-${shape.replace(':', 'x')}`)
+      try {
+        const undo = await cropClickUndo(window, shape, true)
+        await expect(undo, 'one Undo undid the one crop: the click pushed no step of its own').toBeDisabled()
+        await expect(window.getByRole('button', { name: 'Redo' }), 'and the one step is on the Redo side').toBeEnabled()
+      } finally {
+        await app.close()
+      }
+    })
+  }
 })

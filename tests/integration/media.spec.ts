@@ -12754,3 +12754,66 @@ describe('a caption style\'s outline weight is drawn (real burn-in, T-164 (2))',
     expect(counts['reels-minimal'] as number, `${detail}: Reels minimal keeps the old weight`).toBe(counts['subtle-subtitle'])
   }, 300_000)
 })
+
+// ── T-167 (z) / T-110 (z): a hot master with Manual gain and Even volume still exports ─────────────────────────────────────────────────
+//
+// Pass 1 of the two-pass loudness render measures the chain's output up to the loudnorm stage. A -9.8 LUFS master with +12 dB of Manual gain measures +2.16 LUFS, and pass 2 hands that back as
+// `measured_I`, whose range is -99..0: ffmpeg refuses the option ("Value 2.160000 for parameter 'measured_I' out of range [-99 - 0]", exit 222) and the whole export failed. A finite value
+// past loudnorm's option range is now no measurement (`parseLoudnormJson` answers null), so `exportAudio` renders pass 2 with the single-pass loudnorm, which lands on target. Unit
+// string-shape tests cannot show this: only the real binary says whether it accepts the option (IMG-PREC).
+describe('a hot master with +12 dB of Manual gain and Even volume (T-167 (z))', () => {
+  let master = ''
+  const chainOf = (over: Partial<ChainSpec>): ChainSpec => ({ ...DEFAULT_CHAIN_SPEC, loudnorm: true, loudnormTargetLufs: -16, ...over })
+  const specOf = (name: string, chain: ChainSpec): AudioExportSpec => ({
+    jobId: `t167z-${name}`,
+    sourcePath: master,
+    outputPath: path.join(workDir, `t167z-${name}.wav`),
+    chain,
+    format: 'wav'
+  })
+  /** What pass 1 of this chain prints, parsed the way the runner parses it. */
+  async function pass1(chain: ChainSpec): Promise<{ stderr: string; inputI: number }> {
+    const built = buildChain(chain, undefined, false)
+    expect(built.filterPass1, 'a two-pass chain has a measure pass').toBeTruthy()
+    const { stderr } = await ff(['-y', '-i', master, '-af', built.filterPass1 as string, '-f', 'null', '-'])
+    const m = stderr.match(/"input_i"\s*:\s*"(-?[\d.]+)"/)
+    if (!m) throw new Error('loudnorm printed no input_i')
+    return { stderr, inputI: Number(m[1]) }
+  }
+
+  beforeAll(async () => {
+    // 12 s of a 1 kHz tone in two channels reading -9.8 LUFS, a streaming master. lavfi's `sine` is 1/8 amplitude (-18.06 dBFS) and ffmpeg's mono-to-stereo upmix is power-preserving
+    // (each channel at -3 dB), so +11.27 dB puts the meter on -9.8 (the first case reads it back; the peak is about -6.8 dBFS).
+    master = path.join(workDir, 't167z-master.wav')
+    await ff(['-y', '-f', 'lavfi', '-i', 'sine=frequency=1000:sample_rate=48000:duration=12,volume=11.27dB', '-ac', '2', master])
+  }, 60_000)
+
+  it('the fixture is a -9.8 LUFS master, and +12 dB of gain puts pass 1\'s measurement past measured_I\'s range (the trap is in what pass 1 prints)', async () => {
+    const lufs = await measureLufs(master)
+    expect(Math.abs(lufs - -9.8), `the master reads ${lufs} LUFS`).toBeLessThan(0.4)
+    const hot = await pass1(chainOf({ gainDb: 12 }))
+    expect(hot.inputI, 'pass 1 measured above 0 LUFS: measured_I accepts -99..0').toBeGreaterThan(0)
+    const flat = await pass1(chainOf({ gainDb: 0 }))
+    expect(flat.inputI, 'the control: with no gain the measurement is in range').toBeLessThan(0)
+  }, 120_000)
+
+  it('parseLoudnormJson takes pass 1 of the hot chain for no measurement, and pass 1 of the unboosted chain for a measurement', async () => {
+    expect(parseLoudnormJson((await pass1(chainOf({ gainDb: 12 }))).stderr), 'past measured_I').toBeNull()
+    expect(parseLoudnormJson((await pass1(chainOf({ gainDb: 0 }))).stderr), 'in range').not.toBeNull()
+  }, 120_000)
+
+  it('exports through the real runAudioExport (measure, then the single-pass fallback) and lands within 1 LU of -16', async () => {
+    const passes: string[] = []
+    const res = await runAudioExport(specOf('hot-gain', chainOf({ gainDb: 12 })), (p) => passes.push(p.pass))
+    expect(passes, 'the measure pass ran, then the render').toEqual(expect.arrayContaining(['measure', 'render']))
+    const lufs = await measureLufs(res.outputPath)
+    expect(Math.abs(lufs - -16), `exported at ${lufs} LUFS`).toBeLessThan(1)
+    expect(Math.abs((await probeAudio(res.outputPath)).duration - 12)).toBeLessThan(0.3)
+  }, 180_000)
+
+  it('the control: the same master with no gain still gets the measured two-pass render and lands within 1 LU of -16', async () => {
+    const res = await runAudioExport(specOf('flat', chainOf({ gainDb: 0 })), () => {})
+    const lufs = await measureLufs(res.outputPath)
+    expect(Math.abs(lufs - -16), `exported at ${lufs} LUFS`).toBeLessThan(1)
+  }, 180_000)
+})

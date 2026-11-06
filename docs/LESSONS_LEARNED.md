@@ -14,6 +14,80 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-05 - T-167 (round 116), Track A: a tall pasted text stays on the page, the estimate holds for capitals, and a no-op edit leaves Redo alone
+
+The fifty-third sweep, Track A (items 1-2 and a fold).
+
+### (1) [LOW] - A tall pasted text landed partly below the page
+
+- **Bug.** 25 lines of 45 characters on the 1200x800 page landed at size 32, (60, 59.26): a box 864x800 with its bottom at 859. On 1920x1080, 24 lines ended at 1092 and 25 at 1135. T-166 promised "wholly inside".
+- **Root cause.** `candidatePlaces` took the word's home place from `placementFor`, a PICTURE rule: it scales the box down to `LAYER_DRAWN_MAX_DIM` (800 px) first, which is right for a picture the canvas then draws that small. A word's box is never shrunk (it is sized to fit), so a text box over 800 px on a side got its margin from a shrunken box while its real, line-aware box was taller. Nothing failed before T-166 because a one-line word is never over 800 px.
+- **Fix.** The home place is the margin rule on the word's real box: `x = max(0, min(PLACEMENT_MARGIN, doc.width - width))`, the same for `y`; a document that is not a size keeps the corner `placementFor` returned for it. For a box up to 800 px this is exactly what `placementFor` gave.
+- **Test.** newText.test.ts (25 x 45 on 1200x800 at y 0; 24 and 25 lines on 1080p and 4K; a brute-force sweep of 4,300 shapes on five pages; a control comparing the new home with `placementFor` for every box up to 800 px), image.spec.ts "T-167 Track A" (a real 25-line paste; the box Konva measured, 859 of 800 on 3f308a6). Red on 3f308a6 except the control.
+- **Lesson.** **A rule borrowed from another kind of object carries that object's assumptions.** `placementFor` bounds a picture because a picture is drawn bounded; a word is not. Check what a borrowed rule does to its input before the input can leave the range the first caller had.
+
+### Fold - The 0.6 em estimate was not an upper bound for capitals
+
+- **Bug.** The comment called 0.6 em a character an UPPER bound. Inter measures 0.607 em a character for an all-caps sentence at 400, 0.614 at 700 and 0.87 for "WWWW MMMM", so a long all-caps line sized to the page's width overhung its right edge by 20-80 px.
+- **Root cause.** One number for every character, justified by the average advance (about 0.5 em), not by the widest members of the set it claimed to bound.
+- **Fix.** `estimatedTextBox` sums an advance per character, each MEASURED in the built app (a canvas 2d context, `100px Inter` after `document.fonts.ready`, every printable ASCII character at 400 and at 700), the wider of the two rounded up to two decimals (`ADVANCE_EM`); a character outside printable ASCII keeps 0.6. 0.6 was short for 46 of 94 printable characters at 400 and 51 at 700, not only the capitals the ticket named: W 1.03, % 1.01, @ 1.00, M 0.93, m 0.91, w 0.84, Q 0.78, the digits to 0.67, lowercase to 0.63. The pinned "+ Add text" literals moved with it: "Text" is 2.20 em (was 2.4), the Bold thumbnail's x 1156.2 (was 1150.4), the blank emote's place (56, 58) (was (52, 58)); "PASTED WORDS" is 8.19 em (was 7.2).
+- **Test.** newText.test.ts holds the whole measured table at both weights and asserts that no printable character is wider than the estimate, that every entry is the ceiling of its own measured advance (so none is padded), that "WWWW MMMM" and an all-caps sentence are at least as wide as measured, and that an all-caps 90-character line sized to a 1280 page fits it as drawn at either weight.
+- **Lesson.** **An "upper bound" is a claim about the worst member, so measure the worst member.** And an estimate that gets more cautious is not free where it feeds a search: the first cut was five classes (W M m w % @ 1.03, other capitals 0.78, digits and some symbols 0.68, b d g p q u h n o 0.63, the rest 0.6), which made "Text" 2.58 em and left the POG emote's band (about 2.4 em at 20 px between the disc's chord and its stroke) no place: "+ Add text" landed on the dark stroke, 1.59:1 on rendered pixels (image.spec.ts "+ Add text is readable against what is drawn under it", twice). An upper bound per class over-covers the common letters by the most; per character costs 95 numbers and keeps every common word near what it measures. The estimate decides where a word can sit, so its tightness is a placement property, not only a safety one.
+
+### (2) [LOW] - A Stream Graphics edit that changed nothing recorded an undo step and wiped Redo
+
+- **Bug.** A rect rotated 45, Undo (Redo available), then the "0" rotation preset on the layer now at 0: Redo gone, `past` 2, a byte-identical document. A snapped drag shorter than half a cell does the same (`onDragEnd` writes the layer's own x and y back).
+- **Root cause.** The class T-166 (3) fixed in `videoStore` and T-141 (8) in `removeLayer`: a writer that pushes history without asking whether anything changed. `updateLayer`, `setRotation` and `reorderLayers` were the three left.
+- **Fix.** `setRotation` returns when the layer is missing or already at that rotation (a missing rotation is 0). `updateLayer` returns, before history and the coalescing key, when the layer is missing or every field the patch names has the same value on the patched layer (after `applyLayerPatch`'s normalising) as on the stored one; a line's `points` compare by value. `reorderLayers` returns when the resulting order is the same layers in the same order. The other writers: `addLayer` and `duplicateLayer` always add; `toggleVisible` and `toggleLocked` always flip (an unknown id is not reachable, the rows exist); `removeLayer` was guarded in T-141 (8); `setDocument` replaces the whole document on purpose (a template, an asset; each application gives its layers fresh ids, so a template over itself is a replace by value, not a no-op, and is left).
+- **Test.** canvasStore.test.ts "T-167 (2)" (`doc`, `history`, `past`, `future` and `historyKey` are the same objects after each no-op, with and without a key; a real change is still one step and clears Redo), image.spec.ts "T-167 Track A" (rotate 45 by its preset, Ctrl+Z, the "0" preset: Redo is still enabled). Red on 3f308a6. An existing case that pressed the 90 preset twice and counted two steps now presses 90 then 180.
+- **Lesson.** **Grep a class, not a symptom.** `removeLayer` (T-141), `videoStore` (T-166) and now these three are the same hole, found one writer at a time. A writer that records history takes the guard; the next one added should be reviewed for it before it ships.
+
+## 2026-11-05 - T-167 (round 116), Track B: a late scan and a failed kit say what they left, the keyboard's menu opens at the field, a hot master with gain still exports, and a click on the crop box is not an edit
+
+The fifty-third sweep, Track B (items 3-5, the (z) fold and the crop-click check).
+
+### (3) [LOW] - A Scan VOD that ended after its video was closed or replaced said nothing
+
+- **Bug.** The Close question promises "The scan that is running keeps going; its Cancel stays on screen." and the closed-video card shows "Scan VOD - x.mp4 NN%", but when the scan ended `setDerivedFor` was false and `if (!stored(narrowed)) return` dropped the result with no word, where every sibling late job says so. Meanwhile another open video's finder showed that scan as "Scanning..." with a bar named for no file.
+- **Root cause.** The guard that keeps a result off the wrong video (T-131 (3)) was written as a silent return. The siblings (`staleCaptionsMessage`, `previewCopySkippedMessage`, the importer's skipped sentence) each added their sentence when the guard fired; this one did not.
+- **Fix.** `lateScanMessage(fileName)` in `shared/highlights.ts` ("The scan of <file> finished after that video was closed or replaced, so its highlights weren't added. Scan again when you're ready."), raised as a plain toast with the search icon when `stored(...)` is false, with the file name read at the scan's start (`startedName`; by the end the open video is another one or none). The scan's ProgressTrack is named for the run (`Scanning ${scanRun.name} for highlights`), so on another video it reads as that video's scan.
+- **Test.** highlights.test.ts "lateScanMessage", copyConventions.test.ts (the two-sentence list), video-pipelines.spec.ts "T-167 (3), (4)" (a scan held in main, the video closed, the scan released: the sentence names the file, no "Found" or "No standout" toast; a second video opened while it runs reads the first file's name on the bar), the T-131 (3) replaced-video pin extended in place, and the three pins of the old bar name (a11ySweep, "Cancel kills the scan", "Leaving a studio mid-job", T-149 (3)) moved to the new one. Red on 3f308a6.
+- **Lesson.** **A guard that drops a result for a reason the person caused is a message, not a return.** When the silent guard is added, the sentence goes in the same commit; grep the siblings for the pattern before writing a new `return`.
+
+### (4) [LOW] - A Clip Kit that failed mid-batch did not say its finished files were in the folder
+
+- **Bug.** The folder is removed only when nothing landed, so a kit that fails on platform 3 of 5 keeps two files, but the toast was "Clip Kit failed." plus the cause, where a canceled kit says "Files already finished are in your folder."
+- **Root cause.** `kitCanceledMessage(landed)` was written for the cancel (T-113); `reportFailure`'s `failed` stayed a constant.
+- **Fix.** `kitFailedMessage(landed)` beside it: "Clip Kit failed. The 2 files already finished are in your folder." (`countOf`, is/are), "Clip Kit failed." with none. It is `reportFailure`'s `failed`, so the cause still follows. A cause that main words as a finished sentence stands alone in `userFacingError` (tier 2), as it did before.
+- **Test.** clipKit.test.ts "kitFailedMessage" (0, 1, 2 and 8), copyConventions.test.ts (two sentences with files, one without), video-pipelines.spec.ts "T-167 (3), (4)" (the source removed while job 3's probe is held: the toast reads the whole sentence with the cause, and the folder holds the two files). Red on 3f308a6.
+- **Lesson.** **When a failure and a cancel leave the same files, they say the same thing about them.**
+
+### (5) [LOW] - A context menu opened from the keyboard popped at the mouse pointer
+
+- **Bug.** The Menu key or Shift+F10 on a focused text box raises `context-menu` with the field's `x`/`y` and `menuSourceType: 'keyboard'`, but `popup({ window })` defaults to the cursor, so the menu opened wherever the pointer was parked.
+- **Root cause.** T-166 (4) used the mouse's default for an event that has a place of its own.
+- **Fix.** `popup({ window: win, x: params.x, y: params.y, sourceType: params.menuSourceType })`.
+- **Test.** references.spec.ts "T-167 (5)": the real Shift+F10 (Playwright's CDP key event reaches Chromium's own handler on Linux, so nothing is emitted by hand) with the pointer parked at (5, 5); the recorded popup options equal the `context-menu` params' x, y and 'keyboard', and sit inside the Search box; a right-click is 'mouse'. Red on 3f308a6.
+- **Lesson.** **A default that follows the pointer is wrong for an event the keyboard can raise.** Read the event's own place.
+
+### Fold (T-110 (z)) - A hot master with Manual gain and Even volume failed to export
+
+- **Bug.** A -9.8 LUFS master with +12 dB of Manual gain and Even volume measured +2.15 in pass 1; pass 2 handed it back as `measured_I`, whose range is -99..0, and ffmpeg exited 222 ("Value 2.150000 for parameter 'measured_I' out of range [-99 - 0]") on both the bundled 7.0.2 and 6.1.1, so the export failed. The single-pass loudnorm of the same chain lands on -16.
+- **Root cause.** T-114 made a NON-FINITE measurement (silence) no measurement. A finite value past the option's range was the same class and went unhandled.
+- **Fix.** `parseLoudnormJson` returns null when any field is outside loudnorm's option range (`ffmpeg -h filter=loudnorm`: measured_I and measured_thresh -99..0, measured_LRA 0..99, measured_TP -99..99, offset -99..99); `exportAudio` already renders pass 2 single-pass on null.
+- **Test.** chain.test.ts (each field just past its range is null, the edges still parse), media.spec.ts "a hot master with +12 dB of Manual gain and Even volume" (Layer 5, real `runAudioExport`, 7.0.2 and 6.1.1: succeeds and lands within 1 LU of -16; the unboosted control still takes the measured two-pass). Red on 3f308a6 (pass 2 exit 222).
+- **Lesson.** **When a value feeds an option with a range, "finite" is not "valid".** Take the range from the tool's own option table and test the real binary: the string-shape tests passed on the broken code.
+
+### Check (not counted) - A click on the crop box with no drag pushed an undo step
+
+- **Bug.** On a 9:16, 1:1 or 4:5 crop a press and release on the box (no movement) lit a second Undo step; the box's x moved from 386.1000061035156 to 386.0999755859375 CSS px.
+- **Root cause.** react-draggable ends a gesture on any press and release, and `onDragStop` stored `d.x / picture.w`, which is not the stored `x` to the last bit, past T-166 (3)'s exact-equality guard in `setClipCrop`.
+- **Fix.** `CropOverlay` remembers the box's pixel position at `onDragStart` and stores nothing at `onDragStop` when it has not moved (the gesture is still ended).
+- **Test.** video-pipelines.spec.ts "T-167: a click on the crop box with no drag" (the Undo button: one Undo undoes the one crop, for 9:16, 1:1 and 4:5; the 16:9 crop of the 16:9 fixture is the whole frame and passes on the old code; a no-click control). Red on 3f308a6.
+- **Lesson.** **An equality guard in the store is only as good as the number the caller computes.** Do not round-trip a value through a division to say "unchanged"; compare what the person did.
+
+---
+
 ## 2026-11-05 - T-166 (round 115), Track A: pasted words land whole, inside the picture and readable
 
 The fifty-second sweep, Track A (item 1 and a fold).

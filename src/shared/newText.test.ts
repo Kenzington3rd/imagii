@@ -11,7 +11,7 @@ import {
   surfacesUnder,
   worstContrast
 } from './newText'
-import { PLACEMENT_MARGIN } from './imageBounds'
+import { PLACEMENT_MARGIN, placementFor } from './imageBounds'
 import type { CanvasLayer, EllipseLayer, ImageLayer, LineLayer, RectLayer, TextLayer } from './canvas'
 
 /**
@@ -169,8 +169,10 @@ describe('newTextSize - 32 px at the size it was chosen for, in proportion to th
 })
 
 describe('estimatedTextBox - never narrower than the drawn word, so a box that fits by the estimate fits as drawn', () => {
-  it('is 0.6 em a character wide and one em tall', () => {
-    expect(estimatedTextBox('Text', 32)).toEqual({ width: 4 * 0.6 * 32, height: 32 })
+  // T-167 (fold): was `4 * 0.6 * 32` (76.8); each character is its own measured advance now ("Text": T 0.67, e 0.60, x 0.57, t 0.36 = 2.20 em, 70.4 at 32 px).
+  it('is its characters\' own advances wide (a capital more than 0.6 em, a narrow letter less) and one em tall', () => {
+    expect(estimatedTextBox('Text', 32).width).toBeCloseTo((0.67 + 0.6 + 0.57 + 0.36) * 32, 9)
+    expect(estimatedTextBox('Text', 32).height).toBe(32)
     expect(estimatedTextBox('', 32)).toEqual({ width: 0, height: 32 })
   })
 
@@ -583,24 +585,37 @@ describe('newTextLook with layers - where the word goes when its first place can
 // `fontSize` tall per line: Konva's line height is 1 and its width the longest line's, the rule `surfacesUnder` already applied to an existing text layer) and `newTextSize` fits both.
 describe('estimatedTextBox is line-aware - the longest line wide, a line tall each (T-166 (1))', () => {
   it('"ab\\ncdef" at 10 px is 4 characters wide (the longer line) and two lines tall', () => {
-    expect(estimatedTextBox('ab\ncdef', 10)).toEqual({ width: 4 * 0.6 * 10, height: 20 })
+    // (T-167: was `4 * 0.6 * 10` = 24; "cdef" is c 0.59, d 0.63, e 0.60, f 0.39 = 2.21 em: 22.1)
+    const box = estimatedTextBox('ab\ncdef', 10)
+    expect(box.width).toBeCloseTo(22.1, 9)
+    expect(box.height).toBe(20)
   })
 
-  it('control: a one-line string is the old box, word for word (width 0.6 em a character, one em tall)', () => {
+  // (T-167: this control said a one-line string is `length * 0.6 * size`; each character is its own measured advance now, so the control holds the shape that did not change: a one-line
+  // string is the sum of its characters' widths, one em tall, '' is no width, and a character outside printable ASCII is the old 0.6.)
+  it('control: a one-line string is the sum of its characters\' advances wide and one em tall', () => {
     for (const [text, size] of [['Text', 32], ['Subscribe now for more streams', 29], ['', 10], ['\u{1F600}', 10]] as const) {
-      expect(estimatedTextBox(text, size), text).toEqual({ width: [...text].length * 0.6 * size, height: size })
+      const box = estimatedTextBox(text, size)
+      const ascii = [...text].every((ch) => ch.charCodeAt(0) >= 32 && ch.charCodeAt(0) <= 126)
+      const em = [...text].reduce((sum, ch) => sum + (ascii ? Math.ceil(Math.max(measuredEm(ch, 400), measuredEm(ch, 700)) * 100 - 1e-9) / 100 : 0.6), 0)
+      expect(box.width, text).toBeCloseTo(em * size, 9)
+      expect(box.height, text).toBe(size)
     }
   })
 
   it('a Windows clipboard\'s \\r\\n is one line break, not a character at the end of the line', () => {
     expect(estimatedTextBox('ab\r\ncdef', 10)).toEqual(estimatedTextBox('ab\ncdef', 10))
     // (the longer line first: a \r left on it would make it 5 characters, not 4)
-    expect(estimatedTextBox('abcd\r\nef', 10)).toEqual({ width: 4 * 0.6 * 10, height: 20 })
+    // (T-167: was `4 * 0.6 * 10` = 24; "abcd" is a 0.58, b 0.63, c 0.59, d 0.63 = 2.43 em: 24.3)
+    const box = estimatedTextBox('abcd\r\nef', 10)
+    expect(box.width).toBeCloseTo(24.3, 9)
+    expect(box.height).toBe(20)
     expect(estimatedTextBox('a\r\nb\r\nc', 10).height).toBe(30)
   })
 
   it('a blank line is a line (the box is as tall as the text is drawn)', () => {
-    expect(estimatedTextBox('a\n\nb', 10)).toEqual({ width: 0.6 * 10, height: 30 })
+    // (T-167: was `0.6 * 10` = 6; "b" is the wider of the two letters at 0.63 em: 6.3)
+    expect(estimatedTextBox('a\n\nb', 10)).toEqual({ width: 0.63 * 10, height: 30 })
   })
 })
 
@@ -631,9 +646,10 @@ describe('newTextSize fits the whole pasted text, not just its width (T-166 (1))
     expect(newTextSize(112, 112, 'a\nb\nc\nd\ne\nf\ng')).toBe(16)
   })
 
+  // (T-167: "Text" is 2.20 em wide now, was 2.4; the one page that moved is the 30 px strip, whose width-fit size is 13, was 12. The rest are sized by the proportional rule.)
   it('control: a one-line word is sized exactly as before (the default word on every page)', () => {
     for (const [w, h] of [[1200, 800], [112, 112], [1280, 720], [30, 500], [3840, 2160]] as const) {
-      const old = Math.max(1, Math.min(Math.max(Math.round((DEFAULT_TEXT_SIZE * Math.min(w, h)) / 800), MIN_NEW_TEXT_SIZE), Math.floor(Math.min(w / (4 * 0.6), h))))
+      const old = Math.max(1, Math.min(Math.max(Math.round((DEFAULT_TEXT_SIZE * Math.min(w, h)) / 800), MIN_NEW_TEXT_SIZE), Math.floor(Math.min(w / 2.2, h))))
       expect(newTextSize(w, h), `${w}x${h}`).toBe(old)
     }
   })
@@ -646,5 +662,207 @@ describe('newTextLook with a pasted two-line title stays inside a page too short
     const box = estimatedTextBox(word, look.fontSize)
     expect(look.fontSize).toBe(15)
     expect(look.y + box.height).toBeLessThanOrEqual(30)
+  })
+})
+
+// ── T-167 Track A: a pasted text stays on its page, by its REAL box; and the estimate is an upper bound for capitals too ────────────────────────────────────────────────────────────
+//
+// (1) `candidatePlaces` took its home from `placementFor`, a PICTURE rule that first scales a box down to `LAYER_DRAWN_MAX_DIM` (800 px): a text box over 800 px on a side got its margin
+// from the shrunken box and its real (line-aware since T-166) bottom overhung the page (25 lines of 45 characters on 1200x800: size 32 at (60, 59.26), bottom 859). A word's box is never shrunk,
+// it is sized to fit, so the home is the margin rule on the real box. (fold) `estimatedTextBox` called 0.6 em a character an UPPER bound, which it was not for capitals: an all-caps sentence
+// measured 0.607 em a character at 400 and 0.614 at 700 in the bundled Inter, "WWWW MMMM" 0.87, so a long all-caps line sized to the page's width overhung its right edge by 20-80 px.
+//
+// INTER_ADVANCES are the advances MEASURED in the built app (a canvas 2d context, `ctx.font = '<weight> 100px Inter'` after `document.fonts.ready`, `measureText` for each printable ASCII
+// character), at 100 px, so each number is also the advance in em times 100; index 0 is character code 32. Weight 700 is not a bundled face (400, 500 and 600 are), so Chromium draws
+// it with the 600 face; the table is kept for both because the estimate is held to the wider of the two.
+const INTER_400 = [
+  28.125, 28.759765625, 46.58203125, 63.330078125, 64.16015625, 98.193359375, 64.404296875, 29.98046875,
+  36.474609375, 36.474609375, 50.09765625, 66.162109375, 28.80859375, 45.99609375, 28.80859375, 36.03515625,
+  63.0859375, 40.673828125, 60.986328125, 61.767578125, 64.599609375, 59.326171875, 62.01171875, 56.591796875,
+  61.865234375, 62.01171875, 28.80859375, 30.17578125, 66.162109375, 66.162109375, 66.162109375, 51.123046875,
+  96.58203125, 68.994140625, 65.4296875, 73.046875, 72.16796875, 60.107421875, 59.033203125, 74.609375,
+  74.31640625, 26.85546875, 57.080078125, 67.1875, 56.54296875, 90.33203125, 75.341796875, 76.46484375,
+  63.8671875, 76.46484375, 64.35546875, 64.16015625, 64.55078125, 74.4140625, 68.994140625, 98.53515625,
+  68.212890625, 67.87109375, 62.890625, 36.474609375, 36.03515625, 36.474609375, 47.119140625, 45.60546875,
+  32.275390625, 56.15234375, 61.23046875, 57.12890625, 61.23046875, 58.30078125, 37.01171875, 61.328125,
+  59.130859375, 24.21875, 24.21875, 54.8828125, 24.21875, 87.59765625, 59.08203125, 59.9609375,
+  61.23046875, 61.23046875, 37.646484375, 52.783203125, 32.71484375, 59.130859375, 56.201171875, 81.8359375,
+  54.58984375, 56.201171875, 55.224609375, 42.626953125, 33.251953125, 42.626953125, 66.162109375
+]
+const INTER_700 = [
+  25.1953125, 32.12890625, 52.294921875, 64.35546875, 65.0390625, 100.439453125, 66.259765625, 32.568359375,
+  37.3046875, 37.3046875, 53.955078125, 67.28515625, 31.884765625, 46.533203125, 31.884765625, 37.890625,
+  65.966796875, 42.28515625, 62.3046875, 63.623046875, 66.6015625, 61.23046875, 63.96484375, 57.6171875,
+  64.013671875, 63.96484375, 31.884765625, 32.91015625, 67.28515625, 67.28515625, 67.28515625, 54.345703125,
+  99.90234375, 72.75390625, 65.91796875, 73.681640625, 72.216796875, 60.546875, 58.7890625, 74.90234375,
+  74.560546875, 27.685546875, 57.958984375, 70.3125, 56.54296875, 92.236328125, 75.927734375, 76.85546875,
+  64.501953125, 77.294921875, 65.234375, 65.0390625, 66.015625, 73.583984375, 72.75390625, 102.001953125,
+  71.97265625, 71.337890625, 65.234375, 37.3046875, 37.890625, 37.3046875, 48.14453125, 46.923828125,
+  35.107421875, 57.421875, 62.40234375, 58.251953125, 62.40234375, 59.130859375, 38.8671875, 62.548828125,
+  61.23046875, 26.171875, 26.171875, 56.93359375, 26.171875, 90.0390625, 61.181640625, 60.888671875,
+  62.40234375, 62.40234375, 39.697265625, 54.931640625, 35.302734375, 61.23046875, 58.69140625, 83.935546875,
+  56.884765625, 58.837890625, 56.591796875, 45.458984375, 35.888671875, 45.458984375, 67.28515625
+]
+const INTER_ADVANCES = { 400: INTER_400, 700: INTER_700 } as const
+/** The measured advance of `ch` in em, at the weight. */
+const measuredEm = (ch: string, weight: 400 | 700): number => (INTER_ADVANCES[weight][ch.charCodeAt(0) - 32] as number) / 100
+
+describe('a pasted text stays wholly on its page: the home place is the margin rule on the REAL box (T-167 (1))', () => {
+  const WHITE = (width: number, height: number): { width: number; height: number; background: string } => ({ width, height, background: '#ffffff' })
+  const lines = (count: number, line: string): string => Array.from({ length: count }, () => line).join('\n')
+  const EPS = 1e-6
+
+  function expectInside(doc: { width: number; height: number; background: string }, word: string, what: string): void {
+    const look = newTextLook(doc, INKS, word)
+    const box = estimatedTextBox(word, look.fontSize)
+    expect(look.x, `${what}: left`).toBeGreaterThanOrEqual(0)
+    expect(look.y, `${what}: top`).toBeGreaterThanOrEqual(0)
+    expect(look.x + box.width, `${what}: right ${look.x + box.width} of ${doc.width}`).toBeLessThanOrEqual(doc.width + EPS)
+    expect(look.y + box.height, `${what}: bottom ${look.y + box.height} of ${doc.height}`).toBeLessThanOrEqual(doc.height + EPS)
+  }
+
+  it('25 lines of 45 characters on the default 1200x800 page: the bottom is the page\'s, not 859 (size 32 fills the height, so the margin gives way to y 0)', () => {
+    const word = lines(25, 'a'.repeat(45))
+    const look = newTextLook(WHITE(1200, 800), INKS, word)
+    expect(look.fontSize).toBe(32)
+    expect(look.y).toBe(0)
+    expect(look.x).toBe(PLACEMENT_MARGIN)
+    expectInside(WHITE(1200, 800), word, '25 x 45 on 1200x800')
+  })
+
+  it('24 and 25 short lines on a 1080p and a 4K page keep their bottom on the page (they ended at 1092 and 1135 on the 1080p one)', () => {
+    for (const [w, h] of [[1920, 1080], [3840, 2160]] as const) {
+      for (const count of [24, 25]) expectInside(WHITE(w, h), lines(count, 'Line of text'), `${count} lines on ${w}x${h}`)
+    }
+    // (the numbers behind it: 25 lines at the 43 px the 1080p page fits is 1075 tall, so only 5 px of margin are left, not 60)
+    expect(newTextLook(WHITE(1920, 1080), INKS, lines(25, 'Line of text'))).toMatchObject({ fontSize: 43, y: 5 })
+  })
+
+  it('a sweep: lines 1-60 x characters 1-300, on five page sizes, finds no box outside its page (a combination too big for the 1 px floor is not a placement and is skipped)', () => {
+    const started = Date.now()
+    // (a mix of the classes, so the estimate's widths are in play: a capital, a wide glyph, a digit, a lowercase and a space)
+    const pattern = 'WaQ8m e'
+    const lineOf = (n: number): string => pattern.repeat(Math.ceil(n / pattern.length)).slice(0, n)
+    let checked = 0
+    let skipped = 0
+    for (const [w, h] of [[1200, 800], [1280, 720], [1920, 1080], [3840, 2160], [112, 112]] as const) {
+      for (let count = 1; count <= 60; count += 3) {
+        for (let chars = 1; chars <= 300; chars += 7) {
+          const word = lines(count, lineOf(chars))
+          const atOnePx = estimatedTextBox(word, 1)
+          if (atOnePx.width > w || atOnePx.height > h) {
+            skipped++
+            continue
+          }
+          expectInside(WHITE(w, h), word, `${count} lines x ${chars} characters on ${w}x${h}`)
+          checked++
+        }
+      }
+    }
+    expect(checked, 'most of the grid is a real placement').toBeGreaterThan(1500)
+    expect(checked + skipped).toBe(5 * 20 * 43)
+    // (the grid is 4,300 placements; this is here so a slow sweep is noticed, not to time the machine)
+    expect(Date.now() - started).toBeLessThan(20_000)
+  })
+
+  it('a line that fills the page\'s width starts at the page\'s edge, not the margin: the right edge is the page\'s (a one-line text over 800 px wide)', () => {
+    // (1000 'a' is 580 em: the width-fit size is 2, a box 1160 px wide on a 1200 px page, so the margin gives way to x 40)
+    const word = 'a'.repeat(1000)
+    const look = newTextLook(WHITE(1200, 800), INKS, word)
+    const box = estimatedTextBox(word, look.fontSize)
+    expect(box.width, 'a box wider than 800 px').toBeGreaterThan(800)
+    expect(look.x).toBeCloseTo(40, 6)
+    expect(look.x).toBe(Math.min(PLACEMENT_MARGIN, 1200 - box.width))
+    expect(look.x + box.width).toBeLessThanOrEqual(1200 + EPS)
+    // and one that cannot fit even at 1 px (300 characters on the 112 px emote is 180 px wide) starts at the edge, never left of it
+    const wide = newTextLook(WHITE(112, 112), INKS, 'a'.repeat(300))
+    expect(wide.fontSize).toBe(1)
+    expect(wide.x).toBe(0)
+    // ...and one too tall for it (200 lines on the same page) starts at the top edge, never above it
+    const tall = newTextLook(WHITE(112, 112), INKS, lines(200, 'a'))
+    expect(tall.fontSize).toBe(1)
+    expect(tall.y).toBe(0)
+  })
+
+  it('control: a box up to 800 px on each side is placed exactly as `placementFor` placed it (the margin, less where the page has not the room)', () => {
+    let compared = 0
+    for (const [w, h] of [[1200, 800], [1280, 720], [1920, 1080], [3840, 2160], [112, 112]] as const) {
+      for (let count = 1; count <= 30; count += 2) {
+        for (let chars = 1; chars <= 60; chars += 3) {
+          const word = lines(count, 'a'.repeat(chars))
+          const look = newTextLook(WHITE(w, h), INKS, word)
+          const box = estimatedTextBox(word, look.fontSize)
+          if (box.width > 800 || box.height > 800 || box.width > w || box.height > h) continue
+          const old = placementFor(box.width, box.height, w, h)
+          expect({ x: look.x, y: look.y }, `${count} x ${chars} on ${w}x${h}`).toEqual({ x: old.x, y: old.y })
+          compared++
+        }
+      }
+    }
+    expect(compared, 'a real sweep of small boxes').toBeGreaterThan(400)
+  })
+})
+
+describe('estimatedTextBox is an upper bound per character (T-167 fold)', () => {
+  const PRINTABLE = Array.from({ length: 95 }, (_, i) => String.fromCharCode(32 + i))
+  const em = (ch: string): number => estimatedTextBox(ch, 100).width / 100
+  const ceil2 = (n: number): number => Math.ceil(n * 100 - 1e-9) / 100
+  /** The sum of the measured advances of `text` at a weight, in px at `size`: what a canvas would draw it at if no pair kerned. */
+  const measured = (text: string, weight: 400 | 700, size = 100): number => [...text].reduce((sum, ch) => sum + measuredEm(ch, weight), 0) * size
+
+  it('control: the table is the 95 printable ASCII characters at both weights, and the widest are the ones the ticket measured (W 98.5 at 400, 102.0 at 700)', () => {
+    expect(INTER_400).toHaveLength(95)
+    expect(INTER_700).toHaveLength(95)
+    expect(measuredEm('W', 400)).toBeCloseTo(0.985, 3)
+    expect(measuredEm('W', 700)).toBeCloseTo(1.02, 3)
+    expect(measuredEm(' ', 400)).toBeCloseTo(0.281, 3)
+    // ("Text" sums to about 2.1 em here, not the 2.02 the comment on the estimate gives for it drawn: `measureText` of one character cannot see the T-e kerning pair.)
+  })
+
+  it('no printable character is wider than the estimate, at 400 or at 700', () => {
+    for (const ch of PRINTABLE) {
+      for (const weight of [400, 700] as const) {
+        expect(em(ch), `"${ch}" at ${weight}: measured ${measuredEm(ch, weight)} em`).toBeGreaterThanOrEqual(measuredEm(ch, weight))
+      }
+    }
+  })
+
+  it('each character is the wider of its two measured advances rounded UP to two decimals, and no more (so no entry is padded past what was measured)', () => {
+    for (const ch of PRINTABLE) {
+      expect(em(ch), `"${ch}": ${measuredEm(ch, 400)} / ${measuredEm(ch, 700)}`).toBeCloseTo(ceil2(Math.max(measuredEm(ch, 400), measuredEm(ch, 700))), 10)
+    }
+    // (the numbers, for whoever reads this: W 1.0200 -> 1.03, Q 0.7729 -> 0.78, "~" 0.6729 -> 0.68, "d" 0.6240 -> 0.63, "i" 0.2422 -> 0.27 (700), a space 0.2812 -> 0.29)
+    expect([em('W'), em('Q'), em('~'), em('d'), em('i'), em(' ')]).toEqual([1.03, 0.78, 0.68, 0.63, 0.27, 0.29])
+  })
+
+  it('"WWWW MMMM" and an all-caps sentence are at least as wide as they measure at 400 and 700 (they were 0.6 em a character: 540 against 802 at 100 px)', () => {
+    for (const text of ['WWWW MMMM', 'SUBSCRIBE NOW FOR MORE STREAMS', 'WE ARE LIVE IN FIVE MINUTES WITH MORE MAYHEM THAN WEMBLEY']) {
+      for (const weight of [400, 700] as const) {
+        expect(estimatedTextBox(text, 100).width, `"${text}" at ${weight}`).toBeGreaterThanOrEqual(measured(text, weight))
+      }
+    }
+    expect(measured('WWWW MMMM', 700)).toBeGreaterThan(800)
+  })
+
+  it('an all-caps 90-character line sized to the page\'s width fits it as drawn, at 400 and at 700 (it was sized by 0.6 em a character and overhung by hundreds of px)', () => {
+    const word = 'GOWNMOMWHOMEWOMENDOHAMMER'.repeat(4).slice(0, 90)
+    expect(word).toHaveLength(90)
+    const size = newTextSize(1280, 720, word)
+    for (const weight of [400, 700] as const) {
+      expect(measured(word, weight, size), `drawn at ${weight}, size ${size}`).toBeLessThanOrEqual(1280)
+    }
+    // (and the size is still the fitting one: a pixel more would not fit by the estimate)
+    expect(estimatedTextBox(word, size + 1).width).toBeGreaterThan(1280)
+  })
+
+  it('a line is the sum of its characters\' widths, the longest line sets the width, and a character the table does not cover is 0.6 em', () => {
+    expect(estimatedTextBox('Wa', 100).width).toBeCloseTo(103 + 58, 6)
+    expect(estimatedTextBox('Wa\nQaaa', 100).width).toBeCloseTo(78 + 3 * 58, 6)
+    expect(estimatedTextBox('\u{1F600}', 100).width, 'an emoji is a single character of the fallback width').toBeCloseTo(60, 6)
+    expect(estimatedTextBox('\u00C9', 100).width, 'so is an accented capital').toBeCloseTo(60, 6)
+  })
+
+  it('"Text", the default word, is 2.20 em: narrower than the 2.4 em of the flat 0.6 estimate (and than the 2.58 of a class estimate, which left the POG emote\'s band no room)', () => {
+    expect(estimatedTextBox('Text', 100).width).toBeCloseTo(220, 6)
   })
 })

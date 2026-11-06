@@ -3,6 +3,7 @@ import toast from 'react-hot-toast'
 import { parseChatLog } from '@shared/chatLog'
 import { countOf } from '@shared/plural'
 import {
+  lateScanMessage,
   scoreHighlights,
   type AudioCandidate,
   type ScoredHighlight
@@ -102,6 +103,8 @@ export function HighlightPanel(): JSX.Element | null {
   async function scan(): Promise<void> {
     if (!source || noSound) return
     const startedFor = source.filePath
+    // T-167 (3): the file's name is read now - by the time a late scan ends the open video is another one or none.
+    const startedName = source.fileName
     // The claim is the store's: one scan at a time however many times this panel has been mounted (main has ONE scan slot).
     if (!useScanRun.getState().begin({ name: source.fileName, percent: 0 })) return
     try {
@@ -117,7 +120,11 @@ export function HighlightPanel(): JSX.Element | null {
         peakDb: c.peakDb,
         reason: c.reason === 'sustained-loud' ? 'sustained-loud' : 'loud'
       }))
-      if (!stored(narrowed)) return
+      if (!stored(narrowed)) {
+        // T-167 (3): the scan outlived its video (closed or replaced; the Close question promises it keeps going). Its candidates are dropped, and the person is told, as every sibling late job does.
+        toast(lateScanMessage(startedName), { icon: <Icon name="search" size={18} /> })
+        return
+      }
       if (narrowed.length === 0) {
         toast('No standout moments found in this video', { icon: <Icon name="search" size={18} /> })
       } else {
@@ -201,7 +208,8 @@ export function HighlightPanel(): JSX.Element | null {
 
       {scanning ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
-          <ProgressTrack label="Scanning the video for highlights" percent={progress} />
+          {/* T-167 (3) fold: the label names the file the RUN is for, so on another open video this reads as that video's scan. */}
+          <ProgressTrack label={`Scanning ${scanRun?.name ?? 'the video'} for highlights`} percent={progress} />
           <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(progress)}%</span>
           {/* Round 17 B3: single-slot cancel, no jobId needed. */}
           <RunningCancel title="Cancel scan" onClick={cancelScan} />

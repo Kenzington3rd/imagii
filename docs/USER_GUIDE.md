@@ -291,7 +291,9 @@ that names the file being converted.)
   clip's start and follow its speed, so they line up with the file in the folder (a
   clip nobody speaks in gets no `.srt`, and the toast says so). The button counts as it
   goes (**Exporting platform version 2 of 5…**). If you cancel before any file is
-  finished, the folder is removed and the toast says only **Clip Kit canceled.**
+  finished, the folder is removed and the toast says only **Clip Kit canceled.** If the kit fails part of the way (a full disk,
+  a source that went missing), the files already finished stay in the folder and the toast says so (**Clip Kit failed. The 2 files
+  already finished are in your folder.**, then the reason).
 - **Text overlays** — **+ Add text** draws a caption on the selected clip's export.
   The **Color** box takes a color name (**white**, **gold**) or a code (**#ffcc00**) and
   shows the code once you leave the box; a name imagii doesn't know is refused right
@@ -324,7 +326,10 @@ that names the file being converted.)
   stops, so a loud sign-off before a muted stretch is not stretched across the
   silence. A scan that finds nothing says **No standout moments found in this video**
   and leaves the line **No standout moments found in this video.** in the panel (the
-  toast fades; the line stays until you scan again or open another video).
+  toast fades; the line stays until you scan again or open another video). The bar names the video it is scanning
+  (**Scanning stream.mp4 for highlights**), so on another video it reads as that video's scan. A scan that ends after you
+  closed its video or opened another says so (**The scan of stream.mp4 finished after that video was closed or replaced, so
+  its highlights weren't added. Scan again when you're ready.**) and adds nothing to the video that is open.
 - **Reframe to 9:16** — cuts a vertical 9:16 strip (1080×1920)
   for TikTok, Reels, and Shorts. Pick **Left**, **Center**, or **Right**. It
   doesn't track faces or action. It cuts the strip from the crop you drew for the clip

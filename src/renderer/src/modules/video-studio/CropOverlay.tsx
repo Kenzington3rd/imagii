@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import type { CropBox } from '@shared/safeZone'
 import { useVideoStore } from './store/videoStore'
@@ -163,6 +164,8 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const setClipCrop = useVideoStore((s) => s.setClipCrop)
   const endGesture = useVideoStore((s) => s.endGesture)
+  // T-167: where the box was when the press began, in the box's own pixels (see onDragStop).
+  const dragStart = useRef<{ x: number; y: number } | null>(null)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? null
   if (!clip || !rect || rect.w <= 0 || rect.h <= 0) return null
@@ -192,7 +195,18 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
         // coalescing window here is what makes a second drag of the
         // rectangle its own undo step instead of a silent extension of the
         // first one.
+        onDragStart={(_e, d) => {
+          dragStart.current = { x: d.x, y: d.y }
+        }}
         onDragStop={(_e, d) => {
+          // T-167: react-draggable ends a gesture on any press and release, a plain click included, and `d.x / picture.w` is not always the stored `x` to the last bit (a 9:16 crop's box moved
+          // 3e-5 px and pushed an undo step past the store's equality guard). A press that did not move the box has nothing to store.
+          const start = dragStart.current
+          dragStart.current = null
+          if (start && start.x === d.x && start.y === d.y) {
+            endGesture()
+            return
+          }
           setClipCrop(activeClip.id, {
             x: Math.max(0, Math.min(1 - cropRect.w, d.x / picture.w)),
             y: Math.max(0, Math.min(1 - cropRect.h, d.y / picture.h)),

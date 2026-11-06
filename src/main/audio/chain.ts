@@ -324,16 +324,35 @@ export function chainEndsWithLoudnorm(filterChain: string): boolean {
   return lastStage.startsWith('loudnorm=')
 }
 
+/**
+ * T-167 (z), T-110 (z): the ranges of loudnorm's pass-2 options (the option table `ffmpeg -h filter=loudnorm` prints, identical on the bundled 7.0.2 and 6.1.1):
+ *   measured_I      (from -99 to 0)    <- input_i
+ *   measured_TP     (from -99 to 99)   <- input_tp
+ *   measured_LRA    (from 0 to 99)     <- input_lra
+ *   measured_thresh (from -99 to 0)    <- input_thresh
+ *   offset          (from -99 to 99)   <- target_offset
+ * A value past them is refused by ffmpeg ("Value 2.16 for parameter 'measured_I' out of range [-99 - 0]", exit 222), as -inf is.
+ */
+const LOUDNORM_RANGE = {
+  input_i: [-99, 0],
+  input_tp: [-99, 99],
+  input_lra: [0, 99],
+  input_thresh: [-99, 0],
+  target_offset: [-99, 99]
+} as const
+
 /** A plain decimal as loudnorm prints one ("-23.50", "0.00"); `-inf`, `inf`, `nan` are not. */
 const PLAIN_DECIMAL = /^-?\d+(?:\.\d+)?$/
 
 /**
  * The pass-1 measurement from loudnorm's JSON block, or `null` when there is nothing pass 2
  * can use: no block, a block missing a field, or - T-114 - a field that is not a finite
- * number. A SILENT input prints `input_i: "-inf"`, `input_tp: "-inf"` and `target_offset:
+ * number, or - T-167 (z) - one outside the option's range. A SILENT input prints `input_i: "-inf"`, `input_tp: "-inf"` and `target_offset:
  * "inf"`; handed back as `measured_I=-inf`, ffmpeg refuses the option ("out of range
  * [-99 - 0]") and the whole export fails. `null` is not an error here: `exportAudio` renders
- * pass 2 with the single-pass dynamic loudnorm when it has no measurement.
+ * pass 2 with the single-pass dynamic loudnorm when it has no measurement (`process.ts` `exportAudio`: `if (parsed) measurement = parsed`, else `buildChain(..., undefined, ...)`).
+ * T-167 (z): a finite measurement can still be past loudnorm's option range - a -9.8 LUFS master with +12 dB of Manual gain measures `input_i` +2.16, and `measured_I` accepts
+ * -99..0 - so pass 2 exited 222 and the export failed; that is no measurement as well, and the single-pass render of the same chain lands on target.
  */
 export function parseLoudnormJson(stderrOutput: string): LoudnormMeasurement | null {
   const start = stderrOutput.lastIndexOf('{')
@@ -341,9 +360,11 @@ export function parseLoudnormJson(stderrOutput: string): LoudnormMeasurement | n
   if (start === -1 || end === -1 || end < start) return null
   try {
     const obj = JSON.parse(stderrOutput.slice(start, end + 1)) as Record<string, unknown>
-    const field = (key: string): string | null => {
+    const field = (key: keyof typeof LOUDNORM_RANGE): string | null => {
       const v = obj[key]
-      return typeof v === 'string' && PLAIN_DECIMAL.test(v) && Number.isFinite(Number(v)) ? v : null
+      if (typeof v !== 'string' || !PLAIN_DECIMAL.test(v) || !Number.isFinite(Number(v))) return null
+      const [lo, hi] = LOUDNORM_RANGE[key]
+      return Number(v) >= lo && Number(v) <= hi ? v : null
     }
     const i = field('input_i')
     const tp = field('input_tp')

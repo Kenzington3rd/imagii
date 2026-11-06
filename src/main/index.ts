@@ -210,9 +210,13 @@ function createWindow(): void {
 
   // T-166 (4): Electron has no built-in context menu, so a right-click in a text box showed nothing (no Cut, Copy, Paste, Select all). The items come from the
   // pure `contextMenuTemplate`; a target that is not a text box and has no selected words gets an empty list and no menu. Spellcheck is off, so no suggestions.
+  // T-167 (5): `popup({ window })` alone opens at the mouse pointer, and the Menu key or Shift+F10 raises this same event with the FIELD's x/y and `menuSourceType: 'keyboard'`:
+  // the menu opened wherever the pointer was parked, off the field, even on another monitor. So the params' own place and source type are passed.
   win.webContents.on('context-menu', (_event, params) => {
     const items = contextMenuTemplate(params)
-    if (items.length > 0) Menu.buildFromTemplate(items).popup({ window: win })
+    if (items.length > 0) {
+      Menu.buildFromTemplate(items).popup({ window: win, x: params.x, y: params.y, sourceType: params.menuSourceType })
+    }
   })
 
   mainWindow.webContents.setWindowOpenHandler((details) => {

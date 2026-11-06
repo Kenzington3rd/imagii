@@ -8270,7 +8270,7 @@ IMG-PREC.
   and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
   run by the expediter on the merge; Track B, which changes the audio chain, also runs `npm run test:media`) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 116)
+- **Status:** done (round 116 — see the Done entry)
 
 ---
 
@@ -8432,7 +8432,7 @@ IMG-PREC.
   name, a limitation its header now states); (y) the convert's
   -progress parser trusts each chunk's lines — a line split across
   chunks could yield one wrong percent for one tick (a line buffer
-  fixes it); (z) a loudnorm measurement that is finite but outside
+  fixes it); (z) [CLOSED by T-167, round 116: `parseLoudnormJson` treats an out-of-range measurement as none] a loudnorm measurement that is finite but outside
   ffmpeg's accepted ranges (input_i above 0 LUFS needs manual gain
   on already-hot audio) would still fail pass 2 — treat
   out-of-range as no-measurement like non-finite; (aa) the
@@ -8843,6 +8843,50 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 116 — T-167, all five counted items, the capitals fold, the T-110
+(z) fold and the crop-click check, landed in the commit that carries
+this entry. Two Sonnet workers in fresh clones of 3f308a6, disjoint
+source files, merged by the expediter; a container restart stopped both
+mid-gates, and each was resumed from its own transcript (no mutation
+was left applied; every cut gate re-run from the start). Track A: a
+new word's home place is the margin rule on its real box, not the
+picture rule that shrank a box to 800 px, so a 25-line paste stays on
+the page; the text estimate is a measured upper bound per printable
+character (Inter at 400 and 700, the wider, rounded up), so capitals,
+digits and symbols no longer overhang; Stream Graphics' setRotation,
+updateLayer and reorderLayers record nothing for an edit that changes
+nothing, so Redo survives. Track B: a Scan VOD that ends after its
+video is closed or replaced says so, naming the file, and the scan bar
+names the file it is for; a Clip Kit that fails mid-batch says its
+finished files are in the folder; a keyboard-opened context menu opens
+at the field; an out-of-range loudnorm measurement falls back to the
+single pass, so a hot master with gain and Even volume exports (T-110
+(z), closed); a click on the crop box with no drag is not an edit
+(found real by the worker: the box moved 3e-5 px).
+Deviations, accepted: A shipped a per-character table instead of the
+ticket's classes (the classes widened "Text" past the POG emote's band
+and failed the T-141 (2) readability gates), with every moved literal
+stated; A moved three docClaims anchors; B's Layer 5 case lives in
+tests/integration/media.spec.ts (the suite's home), moved pins of the
+old scan-bar name in place, and kept the `scanning ?` form docClaims
+pins. Ledgers: A 81 mutation rows (the final design's 38 after the
+second NOTE; one equivalent mutant disclosed), B 32, all others killed.
+Found not fixed: non-ASCII characters keep the 0.6 em estimate; a
+finished sentence thrown by main replaces `failed` (existing
+userFacingError tier 2); Match loudness now takes the plain-gain
+fallback for a voice measured above 0 LUFS. Expedited personally: one
+independent mutation per track at a seam no ledger row names — A: a
+layer with no rotation no longer counting as 0 → canvasStore.test.ts
+red; B: the late-scan toast naming the video open at the end instead
+of the one scanned → the T-131 (3) replaced-video pin red — each
+restored byte-identical, sha256 verified; on the MERGED tree: verify x2
+(209/6395), test:media 495 passed | 17 skipped of 512 on 7.0.2, FULL Playwright 710 of
+712 (51.1 min; the two failures are listed flakes: T-89 passed 5 of 5
+standalone, and T-131 failed 8 of 10 on the tip and 7 of 10 on the
+base build, alternated — pre-existing, now a ticket item).
+Applied to 3f308a6 by `git apply` with every file byte-identical to
+the expedited merge.
 
 Round 115 — T-166, all four counted items and the fold, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

@@ -3,6 +3,8 @@ import path from 'node:path'
 import ts from 'typescript'
 import { RENDERER_ROOT } from './routeSources'
 import { burnInDoneMessage, captionsReadyMessage, clearedTranscriptsMessage, staleCaptionsMessage } from '../../src/shared/captions'
+import { lateScanMessage } from '../../src/shared/highlights'
+import { kitFailedMessage } from '../../src/renderer/src/modules/video-studio/clipKit'
 import { previewCopySkippedMessage } from '../../src/shared/mediaFormats'
 import {
   HOLE,
@@ -689,7 +691,7 @@ describe('T-159 (1): nothing Audio Studio shows its person calls their sound a "
 // simplification: the list is hand-kept; a new `*Message` helper that the renderer toasts as a result must be added here. Upgrade: none needed while there are five.
 // Covered: captionsReadyMessage (0, 1, 3), burnInDoneMessage (all four argument pairs), clearedTranscriptsMessage (its two single-sentence successes) and previewCopySkippedMessage (a
 // single-sentence warning toast). Left out, each with its reason: staleCaptionsMessage and clearedTranscriptsMessage's partial branch are TWO sentences (both keep their periods,
-// asserted below); clearedTranscriptsMessage's refusal and `ipcErrorMessage` are failures (a full sentence with its period); `overlayOutsideClipMessage` is an inline note in the editor, not a toast;
+// asserted below, with lateScanMessage (T-167 (3)) and kitFailedMessage's two-sentence branch (T-167 (4), a failure: a full sentence with its period); clearedTranscriptsMessage's refusal and `ipcErrorMessage` are failures (a full sentence with its period); `overlayOutsideClipMessage` is an inline note in the editor, not a toast;
 // `clearTranscriptsQuestion` is a confirm's question, not a result.
 describe('T-163 (3): a helper-built single-sentence result toast has no trailing period', () => {
   const ONE_SENTENCE: Array<[string, string]> = [
@@ -713,6 +715,11 @@ describe('T-163 (3): a helper-built single-sentence result toast has no trailing
 
   it('the two-sentence toasts keep both periods', () => {
     expect(staleCaptionsMessage('a.mp4')).toMatch(/\. .*\.$/)
+    // T-167 (3): the late scan's toast is two sentences, like the captions one it follows.
+    expect(lateScanMessage('a.mp4')).toMatch(/\. .*\.$/)
+    // T-167 (4): kitFailedMessage is a FAILURE (reportFailure's `failed`, a full sentence with its period, followed by the cause): two sentences when files survived, one when none did.
+    expect(kitFailedMessage(2)).toMatch(/\. .*\.$/)
+    expect(kitFailedMessage(0)).toMatch(/^[^.]*\.$/)
     expect(clearedTranscriptsMessage({ removed: 1, failed: 2 }).text).toMatch(/\. .*\.$/)
   })
 })
