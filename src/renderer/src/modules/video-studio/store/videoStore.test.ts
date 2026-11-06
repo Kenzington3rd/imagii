@@ -7,6 +7,7 @@ import {
   videoDiscardMessage,
   videoHasNoSound,
   videoSessionHasLoss,
+  videoKey,
   useVideoStore
 } from './videoStore'
 import type { VideoSource } from './videoStore'
@@ -1903,5 +1904,114 @@ describe('T-166 (3): an edit that changes nothing pushes no undo step', () => {
     useVideoStore.getState().endGesture()
     expect(leavesHistoryAlone(() => useVideoStore.getState().updateTextOverlay(id, oid, { sizePx: 512 + 50 }))).toBe(true)
     expect(clip().textOverlays[0]!.sizePx).toBe(512)
+  })
+})
+
+/**
+ * T-172 (2): "the same video" is the original the person opened. A converted import's working copy is `<base>-<nanoid8>.mp4`, NEW on every open, so closing
+ * stream.flv and opening it again changes `filePath` and nothing the person would call a different video. The three `set*For` guards take `videoKey(source)`.
+ */
+describe('videoKey - one identity for the same video (T-172 (2))', () => {
+  const COPY_1 = '/tmp/imports/stream-aB3dE5fG.mp4'
+  const COPY_2 = '/tmp/imports/stream-Zx9Kp2Lm.mp4'
+  const ORIGINAL = '/media/stream.flv'
+  const CANDIDATES = [{ startSec: 10, endSec: 20, peakDb: -4, reason: 'loud' as const }]
+  const SEGMENTS = [{ startSec: 0, endSec: 2, text: 'hello' }]
+
+  beforeEach(() => {
+    vi.stubGlobal('window', { api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => FAKE_SOURCE.probe } } })
+    useVideoStore.getState().clearSource()
+  })
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('is the file itself for a plain file, and the ORIGINAL for a converted import (never the working copy)', () => {
+    expect(videoKey({ filePath: '/v/a.mp4' })).toBe('/v/a.mp4')
+    expect(videoKey({ filePath: COPY_1, convertedFrom: ORIGINAL })).toBe(ORIGINAL)
+    expect(videoKey({ filePath: COPY_1, convertedFrom: ORIGINAL })).toBe(videoKey({ filePath: COPY_2, convertedFrom: ORIGINAL }))
+    expect(videoKey({ filePath: COPY_1, convertedFrom: ORIGINAL })).not.toBe(videoKey({ filePath: COPY_1, convertedFrom: '/media/other.flv' }))
+  })
+
+  it('a loaded converted import has the original as its key, and a second open of it has the same one', async () => {
+    await useVideoStore.getState().loadSource(COPY_1, ORIGINAL)
+    const first = useVideoStore.getState().source!
+    await useVideoStore.getState().loadSource(COPY_2, ORIGINAL)
+    const second = useVideoStore.getState().source!
+    expect(second.filePath, 'a new working copy').not.toBe(first.filePath)
+    expect(videoKey(second)).toBe(videoKey(first))
+    expect(videoKey(second)).toBe(ORIGINAL)
+  })
+
+  it('setDerivedFor lands a result on the same original re-opened (a new working copy), and refuses a different original', async () => {
+    await useVideoStore.getState().loadSource(COPY_1, ORIGINAL)
+    const startedKey = videoKey(useVideoStore.getState().source!)
+    await useVideoStore.getState().loadSource(COPY_2, ORIGINAL)
+    expect(useVideoStore.getState().setDerivedFor(startedKey, { scanCandidates: CANDIDATES })).toBe(true)
+    expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
+    // Control: a DIFFERENT original is another video, converted or not.
+    await useVideoStore.getState().loadSource('/tmp/imports/other-Qq1Ww2Ee.mp4', '/media/other.flv')
+    expect(useVideoStore.getState().setDerivedFor(startedKey, { transcript: SEGMENTS })).toBe(false)
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+  })
+
+  it('setSrtPathFor lands on the same original re-opened, and refuses a different original (and a closed video)', async () => {
+    await useVideoStore.getState().loadSource(COPY_1, ORIGINAL)
+    const startedKey = videoKey(useVideoStore.getState().source!)
+    await useVideoStore.getState().loadSource(COPY_2, ORIGINAL)
+    expect(useVideoStore.getState().setSrtPathFor(startedKey, '/tmp/stream.srt')).toBe(true)
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/stream.srt')
+    expect(useVideoStore.getState().setSrtPathFor(startedKey, null), 'null forgets it, under the same rule').toBe(true)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    await useVideoStore.getState().loadSource('/tmp/imports/other-Qq1Ww2Ee.mp4', '/media/other.flv')
+    expect(useVideoStore.getState().setSrtPathFor(startedKey, '/tmp/stream.srt')).toBe(false)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().setSrtPathFor(startedKey, '/tmp/stream.srt')).toBe(false)
+  })
+
+  it('setPreviewCopyFor lands on the same original re-opened, and refuses a different original', async () => {
+    await useVideoStore.getState().loadSource(COPY_1, ORIGINAL)
+    const startedKey = videoKey(useVideoStore.getState().source!)
+    await useVideoStore.getState().loadSource(COPY_2, ORIGINAL)
+    expect(useVideoStore.getState().setPreviewCopyFor(startedKey, '/tmp/imports/preview-Aa1Bb2Cc.mp4', 12)).toBe(true)
+    expect(useVideoStore.getState().previewUrl).toBe('imagii-file:///tmp/imports/preview-Aa1Bb2Cc.mp4')
+    await useVideoStore.getState().loadSource('/tmp/imports/other-Qq1Ww2Ee.mp4', '/media/other.flv')
+    expect(useVideoStore.getState().setPreviewCopyFor(startedKey, '/tmp/imports/preview-Dd3Ee4Ff.mp4')).toBe(false)
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+  })
+
+  it('the guards take the ORIGINAL\'s path for a converted import (a literal key: red for the guard itself, apart from `videoKey`)', async () => {
+    await useVideoStore.getState().loadSource(COPY_2, ORIGINAL)
+    expect(useVideoStore.getState().setDerivedFor(ORIGINAL, { scanCandidates: CANDIDATES })).toBe(true)
+    expect(useVideoStore.getState().setSrtPathFor(ORIGINAL, '/tmp/stream.srt')).toBe(true)
+    expect(useVideoStore.getState().setPreviewCopyFor(ORIGINAL, '/tmp/imports/preview-Aa1Bb2Cc.mp4')).toBe(true)
+    expect(useVideoStore.getState().derived.scanCandidates).toEqual(CANDIDATES)
+    expect(useVideoStore.getState().srtPath).toBe('/tmp/stream.srt')
+    expect(useVideoStore.getState().previewUrl).toBe('imagii-file:///tmp/imports/preview-Aa1Bb2Cc.mp4')
+  })
+
+  it('control: a DIFFERENT original is refused by all three guards, converted or not, and nothing is stored (the key is a literal: no `videoKey` involved)', async () => {
+    await useVideoStore.getState().loadSource(COPY_2, ORIGINAL)
+    await useVideoStore.getState().loadSource('/tmp/imports/other-Qq1Ww2Ee.mp4', '/media/other.flv')
+    expect(useVideoStore.getState().setDerivedFor(ORIGINAL, { scanCandidates: CANDIDATES })).toBe(false)
+    expect(useVideoStore.getState().setSrtPathFor(ORIGINAL, '/tmp/stream.srt')).toBe(false)
+    expect(useVideoStore.getState().setPreviewCopyFor(ORIGINAL, '/tmp/imports/preview-Aa1Bb2Cc.mp4')).toBe(false)
+    expect(useVideoStore.getState().derived.scanCandidates).toBeNull()
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    expect(useVideoStore.getState().previewUrl).toBeNull()
+    await useVideoStore.getState().loadSource('/v/plain.mp4')
+    expect(useVideoStore.getState().setDerivedFor(ORIGINAL, { scanCandidates: CANDIDATES }), 'a plain file is not a converted import\'s original').toBe(false)
+    useVideoStore.getState().clearSource()
+    expect(useVideoStore.getState().setDerivedFor(ORIGINAL, { scanCandidates: CANDIDATES }), 'nothing open').toBe(false)
+  })
+
+  it('a plain file keeps the old rule: the same path is the video, another path is not, and a working copy\'s path is not a converted import\'s key', async () => {
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { scanCandidates: CANDIDATES })).toBe(true)
+    expect(useVideoStore.getState().setDerivedFor('/v/b.mp4', { transcript: SEGMENTS })).toBe(false)
+    await useVideoStore.getState().loadSource(COPY_1, ORIGINAL)
+    expect(useVideoStore.getState().setDerivedFor(COPY_1, { transcript: SEGMENTS }), 'the working copy is not the identity').toBe(false)
+    expect(useVideoStore.getState().setDerivedFor(ORIGINAL, { transcript: SEGMENTS })).toBe(true)
   })
 })

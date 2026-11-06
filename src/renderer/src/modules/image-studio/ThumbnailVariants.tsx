@@ -139,7 +139,7 @@ export function ThumbnailVariants({ open, onClose, format, quality, scale, emote
   const out = outputPixels(doc.width, doc.height, scale)
   const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
   // T-161 (7): the card's second note too ("Bigger than YouTube's thumbnail size"): a HiDPI 2x default writes 2560x1440 variants.
-  const sizeNote = thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
+  const sizeNote = thumbnailSizeNote(out.width, out.height, doc)
 
   // T-119: the Generate button is swapped for the previews when the render finishes, and the focused button
   // goes with it - keyboard focus fell to the page behind the dialog. It lands on "Save all", the next thing

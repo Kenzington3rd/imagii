@@ -542,7 +542,7 @@ test.describe('T-27 Record Studio', () => {
   const CAM_WARNING =
     'No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources.'
   const MIC_WARNING =
-    'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources. To record without one, untick Record microphone.'
+    'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources. To record without one, uncheck Record microphone.'
 
   test('mic checkbox toggles the microphone row; with no device it is the warning, not a select', async () => {
     test.setTimeout(120_000)
@@ -4216,7 +4216,7 @@ test.describe('T-165 (2): the Record card\'s webcam hint shows only when a webca
 // T-171 Track B (items 1 and 5): the recording view draws the take once, and a microphone that fails at Start names the remedy.
 // ---------------------------------------------------------------------------------------------------------------------------------------
 test.describe('T-171 Track B - Record says and shows what is so', () => {
-  const REMEDY = 'To record without it, untick Record microphone.'
+  const REMEDY = 'To record without it, uncheck Record microphone.'
 
   /** A camera that opens: a flat colour 320x240 canvas that keeps repainting, captured as a stream (this container has none). */
   async function stubFlatColourCamera(window: Page, colour: string): Promise<void> {
@@ -4443,10 +4443,139 @@ test.describe('T-171 Track B - Record says and shows what is so', () => {
           intervals: [200]
         })
         .toBe(true)
-      expect((await readToastLog(window)).join(' | ')).not.toContain('untick Record microphone')
+      expect((await readToastLog(window)).join(' | ')).not.toContain('uncheck Record microphone')
 
       await window.getByRole('button', { name: 'Stop' }).click()
       await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// T-172 Track B (item 1): a source that opens and sends no picture ends the start at the limit instead of leaving Start on "Starting..." for good.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('T-172 Track B - a source that sends no picture', () => {
+  /**
+   * Stubs `getUserMedia`: the source named in `frameless` gets `canvas.captureStream(0)` (a stream that opens, has a live video track and never
+   * sends a frame, so `play()` on a video holding it stays pending); the other gets a stream that repaints. Every stream handed out is kept in
+   * `__held` so a test can ask which tracks are still live. The screen is told apart from the camera by its `mandatory` desktop constraint.
+   */
+  async function stubNoPicture(window: Page, frameless: 'camera' | 'screen'): Promise<void> {
+    await window.evaluate((which) => {
+      const w = window as unknown as { __held: MediaStream[] }
+      w.__held = []
+      const md = navigator.mediaDevices
+      const previous = md.getUserMedia.bind(md)
+      const make = (frames: boolean): MediaStream => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 320
+        canvas.height = 240
+        const ctx = canvas.getContext('2d')
+        if (frames) {
+          let n = 0
+          window.setInterval(() => {
+            if (!ctx) return
+            ctx.fillStyle = `hsl(${(n++ * 9) % 360}, 80%, 50%)`
+            ctx.fillRect(0, 0, 320, 240)
+          }, 33)
+        }
+        const s = canvas.captureStream(frames ? 30 : 0)
+        w.__held.push(s)
+        return s
+      }
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        const v = c?.video
+        if (v && typeof v === 'object' && 'mandatory' in v) return make(which !== 'screen') // the screen
+        if (v && typeof v === 'object' && 'deviceId' in v) return make(which !== 'camera') // the camera
+        return previous(c)
+      }
+    }, frameless)
+  }
+
+  const liveVideoTracks = (window: Page): Promise<number> =>
+    window.evaluate(
+      () =>
+        (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getVideoTracks()).filter((t) => t.readyState === 'live').length
+    )
+
+  async function openRecordWithWebcam(app: ElectronApplication, frameless: 'camera' | 'screen'): Promise<Page> {
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, null)
+    await waitForHome(window)
+    await stubCameras(window)
+    await stubNoPicture(window, frameless)
+    await window.getByRole('link', { name: /Record/ }).first().click()
+    await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+    await installToastLog(window)
+    await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+    await window.getByRole('checkbox').nth(1).check() // include the webcam
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    return window
+  }
+
+  test('a camera that opens and sends no picture: after the limit the toast says so, the take is the screen alone, REC counts and the camera is let go', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('t172-nocampic')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecordWithWebcam(app, 'camera')
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      await expect
+        .poll(async () => (await readToastLog(window)).includes('The camera sent no picture for 10 seconds. Recording screen only.'), {
+          timeout: 40_000,
+          intervals: [250],
+          message: 'the start is pending for good: no toast after the limit'
+        })
+        .toBe(true)
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 15_000 })
+      // Only the screen's track is still live, and the compositor's offscreen videos are gone: the preview alone.
+      await expect.poll(() => liveVideoTracks(window), { timeout: 10_000, intervals: [200], message: 'the frameless camera stayed live' }).toBe(1)
+      await expect(window.locator('video')).toHaveCount(1)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a screen that opens and sends no picture, with the webcam on: the toast says so, Start is back, nothing is held and no take opens', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('t172-noscrpic')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecordWithWebcam(app, 'screen')
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      const SENTENCE = 'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+      await expect
+        .poll(async () => (await readToastLog(window)).includes(SENTENCE), {
+          timeout: 40_000,
+          intervals: [250],
+          message: 'the start is pending for good: no toast after the limit'
+        })
+        .toBe(true)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled({ timeout: 15_000 })
+      await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+      await expect(window.getByText(/REC 00:/)).toHaveCount(0)
+      expect((await readToastLog(window)).join(' | '), 'a stalled screen cannot be recorded: no screen-only fallback').not.toContain('Recording screen only.')
+      await expect.poll(() => liveVideoTracks(window), { timeout: 10_000, intervals: [200], message: 'a stream stayed live after the failed start' }).toBe(0)
+      await expect(window.locator('video'), 'no offscreen compositor video is left in the page').toHaveCount(0)
       expect(leftoverTemps(userDataDir)).toEqual([])
     } finally {
       await app.close()

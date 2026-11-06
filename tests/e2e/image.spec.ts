@@ -6810,3 +6810,156 @@ test.describe('Image Studio - a tall paste stays on the page, and a no-op rotati
     }
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// T-172 Track B (items 3 and 6): the channel banner is not told it is a thumbnail, and the template card is one component.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('Image Studio - the channel banner and the template card (T-172 Track B)', () => {
+  const BIGGER = "Bigger than YouTube's thumbnail size"
+
+  test('the "YouTube · Channel banner" template: no thumbnail size note on the Export card or in Variants; the 2K thumbnail template, the same size, still has it', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t172-banner')
+    const { window } = studio
+    try {
+      const banner = templateById('yt-banner-channel')
+      await templateCard(window, banner).click()
+      await expectTemplateApplied(window, banner)
+      const card = window.locator(EXPORT)
+      for (const scale of ['1', '2', '0.5']) {
+        await card.getByLabel('Scale').selectOption(scale)
+        await expect(card.getByTestId('export-output-size')).toHaveText(
+          `Output: ${banner.doc.width * Number(scale)}×${banner.doc.height * Number(scale)}`
+        )
+        await expect(card, `a banner at ${scale}x is not a thumbnail`).not.toContainText(BIGGER)
+      }
+      await card.getByLabel('Scale').selectOption('1')
+      await card.getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await expect(dialog.getByTestId('variants-output')).toContainText('Output: 2560×1440 PNG, as the Export card')
+      await expect(dialog.getByTestId('variants-output')).not.toContainText(BIGGER)
+      await dialog.getByRole('button', { name: 'Generate 3 variants' }).click()
+      await expect(dialog.locator('img')).toHaveCount(4, { timeout: 30_000 })
+      await expect(dialog.getByTestId('variants-output')).not.toContainText(BIGGER)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: "YouTube · Bold thumbnail (2K)", 2560×1440 like the banner, says it is bigger on the Export card and in Variants', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t172-thumb2k')
+    const { window } = studio
+    try {
+      const thumb = templateById('yt-thumb-bold-2k')
+      await templateCard(window, thumb).click()
+      await expectTemplateApplied(window, thumb)
+      const card = window.locator(EXPORT)
+      await card.getByLabel('Scale').selectOption('1')
+      await expect(card.getByTestId('export-output-size')).toHaveText('Output: 2560×1440')
+      await expect(card).toContainText(`${BIGGER} (1280×720).`)
+      await card.getByRole('button', { name: 'Variants' }).click()
+      await expect(window.locator('[role="dialog"]').getByTestId('variants-output')).toContainText(`${BIGGER} (1280×720).`)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a banner project saved and opened again, after another template took the canvas: the banner is back and still no note (the kind rides in the file)', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t172-banner-project')
+    const { app, window } = studio
+    try {
+      const banner = templateById('yt-banner-channel')
+      const thumb = templateById('yt-thumb-bold-2k')
+      await templateCard(window, banner).click()
+      await expectTemplateApplied(window, banner)
+
+      // Save from Home: the Save dialog answers with a file of our choosing.
+      const projectFile = path.join(studio.root, 'banner.imagii.json')
+      await app.evaluate(({ dialog }, file) => {
+        const target = dialog as unknown as { showSaveDialog: unknown; showOpenDialog: unknown }
+        target.showSaveDialog = async () => ({ canceled: false, filePath: file })
+        target.showOpenDialog = async () => ({ canceled: false, filePaths: [file] })
+      }, projectFile)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(projectFile), { timeout: 15_000 }).toBe(true)
+      const saved = JSON.parse(readFileSync(projectFile, 'utf8')) as { imageCanvas: { doc: { kind?: string; width: number } } }
+      expect(saved.imageCanvas.doc.kind, 'the file carries the kind').toBe('channel-art')
+
+      // Another template takes the canvas: the 2K thumbnail, which has the note.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await window.getByRole('button', { name: 'Templates' }).click()
+      await templateCard(window, thumb).click()
+      await expectTemplateApplied(window, thumb)
+      const card = window.locator(EXPORT)
+      await card.getByLabel('Scale').selectOption('1')
+      await expect(card).toContainText(`${BIGGER} (1280×720).`)
+
+      // Open the saved project: the banner is back, and so is the quiet card.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [250] }).toContain('Project loaded')
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expectTemplateApplied(window, banner)
+      await card.getByLabel('Scale').selectOption('1')
+      await expect(card.getByTestId('export-output-size')).toHaveText('Output: 2560×1440')
+      await expect(card, 'the re-opened banner is still not a thumbnail').not.toContainText(BIGGER)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  /** What each template card shows, read from the page: thumbnail (aspect ratio and whether it is the checkerboard), name, description and size line. */
+  type CardRead = { name: string; description: string; size: string; aspect: string; checker: boolean; html: string }
+  const readCards = (window: Page, scope: string): Promise<CardRead[]> =>
+    window.evaluate((sel) => {
+      return Array.from(document.querySelectorAll(`${sel} button.card`)).map((b) => {
+        const thumb = b.children[0] as HTMLElement
+        return {
+          name: b.children[1]?.textContent ?? '',
+          description: b.children[2]?.textContent ?? '',
+          size: b.children[3]?.textContent ?? '',
+          aspect: thumb.style.aspectRatio,
+          checker: thumb.style.background.includes('repeating-conic-gradient'),
+          html: b.outerHTML
+        }
+      })
+    }, scope)
+
+  test('the Import panel grid and the Streamer templates dialog draw every template the same way: thumbnail (checkerboard for a clear one), name, description, size line', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t172-speccard')
+    const { window } = studio
+    try {
+      const fromPanel = await readCards(window, '[data-tutorial="image-import"]')
+      expect(fromPanel).toHaveLength(CANVAS_TEMPLATES.length)
+      await startBlank(window)
+      await window.getByRole('button', { name: 'Templates' }).click()
+      const fromDialog = await readCards(window, '[role="dialog"]')
+      expect(fromDialog).toHaveLength(CANVAS_TEMPLATES.length)
+
+      for (const t of CANVAS_TEMPLATES) {
+        const expected = {
+          name: t.name,
+          description: t.description,
+          size: `${t.doc.width} × ${t.doc.height}`,
+          aspect: `${t.doc.width} / ${t.doc.height}`,
+          checker: t.doc.background === 'transparent'
+        }
+        for (const [site, cards] of [['panel', fromPanel], ['dialog', fromDialog]] as const) {
+          const { html, ...got } = cards.find((c) => c.name === t.name) ?? { name: 'MISSING', html: '' }
+          expect(got, `${site}: ${t.name}`).toEqual(expected)
+        }
+        expect(fromDialog.find((c) => c.name === t.name)?.html, `${t.name}: the two sites draw the same markup`).toBe(
+          fromPanel.find((c) => c.name === t.name)?.html
+        )
+      }
+      expect(fromPanel.some((c) => c.checker), 'the catalog has a transparent template, so the checkerboard is exercised').toBe(true)
+      expect(fromPanel.some((c) => !c.checker), 'and a filled one').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

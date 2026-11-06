@@ -124,7 +124,7 @@ held by this list alone, so a new one must be added below:
   renderer file this list does not name.
 - **The transparency checkerboard: `CHECKER_A` and `CHECKER_B` (T-71, T-123).** Two warm darks in `styles/tokens.ts`
   (`#221616`, `#1c1313`) drawn as an inline `repeating-conic-gradient` behind a transparent preview (the Stream Graphics
-  import panel, the Templates dialog and the Asset Library). They are JS-only tokens: no className draws them, so
+  import panel, the Templates dialog and the Asset Library: all three draw it through `components/SpecCard.tsx`, T-172). They are JS-only tokens: no className draws them, so
   `tailwind.config.js` has no mirror for them, and `designTokensInSync.test.ts` (which compares each token it names with its
   Tailwind twin) has nothing to compare. `CHECKER_B` happens to be `BG_ELEVATED`'s value; it is its own token so a
   retheme of the card does not retint the tiles. They are named here, in the one place a raw value may live, so the next

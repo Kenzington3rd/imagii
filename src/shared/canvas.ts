@@ -72,6 +72,12 @@ export interface CanvasDocument {
   width: number
   height: number
   background: string
+  /**
+   * What the document is FOR, when its size alone cannot say. 'channel-art' (the YouTube channel banner template) is 2560x1440, the
+   * same size as a 2K thumbnail, so the Export card's "Bigger than YouTube's thumbnail size" note keys on this and stays quiet for it.
+   * It rides in the document (a saved project and an autosave keep it); a different template or a new document does not carry it.
+   */
+  kind?: 'channel-art'
   layers: CanvasLayer[]
 }
 

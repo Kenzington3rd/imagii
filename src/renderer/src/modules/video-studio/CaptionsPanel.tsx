@@ -18,7 +18,7 @@ import {
 import { countOf } from '@shared/plural'
 import { landedBesideNote } from '@shared/landedPath'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
-import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound } from './store/videoStore'
+import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound, videoKey } from './store/videoStore'
 import {
   cancelCaptionsJob,
   cancelModelInstall,
@@ -121,7 +121,7 @@ export function CaptionsPanel(): JSX.Element | null {
     clearStartingRef.current = true
     try {
       // The video the clear was pressed for, held across the await like a job's (T-112): the forgetting below is for it, not for what is open by then.
-      const startedFor = source?.filePath
+      const startedKey = source ? videoKey(source) : undefined
       setConfirmClear(false)
       const result = await window.api.captions.clearTranscripts()
       const message = clearedTranscriptsMessage(result)
@@ -132,7 +132,7 @@ export function CaptionsPanel(): JSX.Element | null {
       else toast.success(message.text)
       if (result.removed > 0) {
         setDerived({ transcript: null })
-        if (startedFor) setSrtPathFor(startedFor, null)
+        if (startedKey) setSrtPathFor(startedKey, null)
       }
     } catch (err) {
       reportFailure(err, { failed: "Couldn't clear the saved transcripts." })
@@ -148,10 +148,11 @@ export function CaptionsPanel(): JSX.Element | null {
     // are there: the model downloads while the person fetches the engine, the engine and its .dll files are copied in, Transcribe is pressed - the stale answer showed an already-open card.
     // Ready over files that are gone: the panel itself tells a person to delete the model file to replace it, and a press before "Refresh status" reached main and failed. So EVERY press asks
     // main again, and only a fresh "not ready" opens the setup. The begin() claim below still makes a double press one job.
-    const pressedFor = source.filePath
+    const pressedKey = videoKey(source)
     const fresh = await window.api.captions.status()
     useCaptionsStatus.setState({ status: fresh })
-    if (useVideoStore.getState().source?.filePath !== pressedFor) return // closed or replaced while main answered: the press was for that video
+    const openNow = useVideoStore.getState().source
+    if (openNow === null || videoKey(openNow) !== pressedKey) return // closed or replaced while main answered: the press was for that video
     if (!fresh.ready) {
       setShowSetup(true)
       return
@@ -159,15 +160,17 @@ export function CaptionsPanel(): JSX.Element | null {
     // T-112: the video this job is FOR. It takes minutes and nothing locks the app: close
     // it, drop another, and the result arrived to attach itself to whatever was open.
     const startedFor = source.filePath
+    // T-172 (2): the transcript is for the original the person opened, so a converted import re-opened while this runs still receives it; main reads `startedFor`.
+    const startedKey = videoKey(source)
     const startedName = source.fileName
-    if (!useCaptionsRun.getState().begin({ job: 'transcribe', name: startedName, videoPath: startedFor })) return
+    if (!useCaptionsRun.getState().begin({ job: 'transcribe', name: startedName, videoPath: startedKey })) return
     useCaptionsProgress.setState({ progress: null })
     try {
       const result = await window.api.captions.transcribe({
         jobId: nanoid(10),
         sourcePath: startedFor
       })
-      if (!setSrtPathFor(startedFor, result.srtPath)) {
+      if (!setSrtPathFor(startedKey, result.srtPath)) {
         toast(staleCaptionsMessage(startedName), {
           icon: <Icon name="warning" size={18} />,
           duration: 8000
@@ -177,11 +180,11 @@ export function CaptionsPanel(): JSX.Element | null {
       // T-162 (1): a run that found no speech has no transcript file (srtPath null): no preview, no Save .srt, no Burn into video, and the toast is neutral - not a green tick over nothing.
       // T-163 (1): and it is "ran, found nothing" (`[]`), not "never run" (`null`): the panel keeps a line where the preview would be, the way Scan VOD does (T-149 (3)).
       if (result.srtPath === null) {
-        useVideoStore.getState().setDerivedFor(startedFor, { transcript: [] })
+        useVideoStore.getState().setDerivedFor(startedKey, { transcript: [] })
         toast(captionsReadyMessage(0), { icon: <Icon name="warning" size={18} /> })
         return
       }
-      useVideoStore.getState().setDerivedFor(startedFor, { transcript: result.segments })
+      useVideoStore.getState().setDerivedFor(startedKey, { transcript: result.segments })
       toast.success(captionsReadyMessage(result.segments.length))
     } catch (err) {
       reportFailure(err, { failed: 'Transcription failed.', canceled: 'Transcription canceled.' })
@@ -235,7 +238,7 @@ export function CaptionsPanel(): JSX.Element | null {
         return
       }
       const ranged = selectedClip !== null
-      if (!useCaptionsRun.getState().begin({ job: 'burn-in', name: source.fileName, videoPath: source.filePath })) return
+      if (!useCaptionsRun.getState().begin({ job: 'burn-in', name: source.fileName, videoPath: videoKey(source) })) return
       useCaptionsProgress.setState({ progress: null })
       try {
         const result = await window.api.captions.burnIn({
@@ -493,7 +496,7 @@ export function CaptionsPanel(): JSX.Element | null {
 
       {/* T-170 (2): the run is a module store, so a job started on A is drawn here after A is closed and B is open - the header, the phase row and Cancel are A's, Burn into video is off,
           and nothing said whose. Named only when it is not the open video (there the panel speaks for itself): T-168 (4)'s Export rule. */}
-      {captionsRun && captionsRun.videoPath !== source.filePath ? (
+      {captionsRun && captionsRun.videoPath !== videoKey(source) ? (
         <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title={otherVideoSentence}>
           {otherVideoSentence}
         </p>

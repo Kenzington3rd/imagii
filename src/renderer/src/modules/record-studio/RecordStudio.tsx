@@ -16,7 +16,7 @@ import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
 import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastKeptTake, toastSaved } from '../../lib/savedToast'
-import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
+import { NoPictureError, startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
 import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
 import { micLostLine, saveCard, SAVE_RUNNING_MESSAGE } from './saveCard'
 import { useRecordSave } from './saveRun'
@@ -45,7 +45,7 @@ class MicStartFailure extends Error {
     super('microphone failed to start')
   }
 }
-const MIC_START_REMEDY = 'To record without it, untick Record microphone.'
+const MIC_START_REMEDY = 'To record without it, uncheck Record microphone.'
 
 const WEBCAM_CORNERS: WebcamCorner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
 const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
@@ -415,6 +415,9 @@ export function RecordStudio(): JSX.Element {
           // awaits above have, and no toast for a screen nobody is looking at (the start used to carry on from
           // here and open a take for it).
           if (leftWhileStarting(micStream)) return
+          // T-172 (1): a stalled SCREEN cannot be recorded, and the fallback below records the screen: it would open a take of nothing.
+          // The outer catch releases everything and says the sentence.
+          if (err instanceof NoPictureError && err.source === 'screen') throw err
           // T-121: the take continues WITHOUT the camera, so the camera is let go now. getUserMedia had
           // succeeded (only the compositor failed): its tracks stayed live for the whole take, the camera's
           // light on during a screen-only recording. Nothing else holds the stream (the compositor tore down

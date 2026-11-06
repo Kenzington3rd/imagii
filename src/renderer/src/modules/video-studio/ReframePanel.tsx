@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
 import { REFRAME_TARGET, reframePanelShows, reframePhaseLabel, reframeReadout, type ReframePhase } from '@shared/reframe'
 import { clipRecipe } from '@shared/clip'
-import { useVideoStore } from './store/videoStore'
+import { useVideoStore, videoKey } from './store/videoStore'
 import { cancelReframe, useReframeRun } from './store/runs'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -71,7 +71,7 @@ export function ReframePanel(): JSX.Element | null {
       const resolvedOutDir = await resolveOutDir()
       if (!resolvedOutDir) return
       const jobId = nanoid(10)
-      if (!useReframeRun.getState().begin({ jobId, name: clip.name, videoPath: source.filePath, fileName: source.fileName, percent: null, phase: 'starting' })) return
+      if (!useReframeRun.getState().begin({ jobId, name: clip.name, videoPath: videoKey(source), fileName: source.fileName, percent: null, phase: 'starting' })) return
       try {
         const result = await window.api.video.reframe({
           jobId,
@@ -164,7 +164,7 @@ export function ReframePanel(): JSX.Element | null {
       </div>
       {/* T-170 (2): the run is a module store, so a Reframe started on A is drawn here after A is closed and B is open, with its phase row and Cancel, and nothing said whose.
           Named only when it is not the open video (T-168 (4)'s Export rule). */}
-      {reframeRun && reframeRun.videoPath !== source.filePath ? (
+      {reframeRun && reframeRun.videoPath !== videoKey(source) ? (
         <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title={otherVideoSentence}>
           {otherVideoSentence}
         </p>

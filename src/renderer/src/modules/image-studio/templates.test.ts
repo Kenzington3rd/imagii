@@ -50,3 +50,14 @@ describe('round-16 banner templates', () => {
     expect(stale).toBeUndefined()
   })
 })
+
+describe('the channel banner is channel art (T-172 (3))', () => {
+  it('the YouTube channel banner says kind: channel-art, so its Export card stays quiet; the 2K thumbnail, the same size, does not', () => {
+    const banner = CANVAS_TEMPLATES.find((t) => t.id === 'yt-banner-channel')
+    const thumb = CANVAS_TEMPLATES.find((t) => t.id === 'yt-thumb-bold-2k')
+    expect(banner?.doc.kind).toBe('channel-art')
+    expect(thumb?.doc.kind).toBeUndefined()
+    expect([banner?.doc.width, banner?.doc.height]).toEqual([thumb?.doc.width, thumb?.doc.height])
+    expect(CANVAS_TEMPLATES.filter((t) => t.doc.kind !== undefined).map((t) => t.id)).toEqual(['yt-banner-channel'])
+  })
+})

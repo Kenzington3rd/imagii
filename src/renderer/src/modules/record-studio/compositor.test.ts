@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { computeContainRect, computeCornerRect, drawFrame, startCompositor, __testing__ } from './compositor'
+import { NoPictureError, computeContainRect, computeCornerRect, drawFrame, startCompositor, __testing__ } from './compositor'
 
 /**
  * Pure-function tests for the compositor. The actual canvas drawing and
@@ -564,5 +564,105 @@ describe('startCompositor keeps its 30 on any display (T-156 (1))', () => {
     const per = await framesPerTick([...before, ...after])
     const first = per.slice(before.length)
     expect(first.slice(0, 3)).toEqual([1, 0, 0])
+  })
+})
+
+/**
+ * T-172 (1): `play()` on a MediaStream-backed video stays pending until the first frame, and `startCompositor` awaited it BEFORE the 10 s metadata
+ * race, so a camera that opened and sent nothing left Start on "Starting..." for good with both offscreen <video>s in the document. Each `play()` is
+ * now raced against the same limit and rejects with a NoPictureError naming the source.
+ */
+describe('startCompositor gives up on a source that sends no picture (T-172 (1))', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  /** A document stub that tracks which <video>s are attached; `stalled` names the sources whose play() never settles. */
+  function setup(stalled: Array<'screen' | 'camera'>): { attached: () => number } {
+    const attached = new Set<unknown>()
+    let made = 0
+    const video = (): Record<string, unknown> => {
+      const who = made++ === 0 ? 'screen' : 'camera'
+      return {
+        readyState: 4,
+        videoWidth: 1920,
+        videoHeight: 1080,
+        style: {},
+        muted: false,
+        playsInline: false,
+        srcObject: null,
+        parentNode: null,
+        play: () => (stalled.includes(who) ? new Promise<void>(() => undefined) : Promise.resolve()),
+        pause: () => undefined
+      }
+    }
+    const canvas = {
+      width: 0,
+      height: 0,
+      getContext: () => ({ fillStyle: '', fillRect: () => undefined, drawImage: () => undefined }),
+      captureStream: () => ({ getTracks: () => [] })
+    }
+    vi.stubGlobal('document', {
+      body: {
+        appendChild: (v: { parentNode: unknown }) => {
+          v.parentNode = { removeChild: (c: unknown) => attached.delete(c) }
+          attached.add(v)
+        }
+      },
+      createElement: (tag: string) => (tag === 'canvas' ? canvas : video())
+    })
+    vi.stubGlobal('requestAnimationFrame', () => 1)
+    vi.stubGlobal('cancelAnimationFrame', () => undefined)
+    return { attached: () => attached.size }
+  }
+
+  const opts = { screenStream: {} as MediaStream, webcamStream: {} as MediaStream, webcamCorner: 'bottom-right' as const }
+
+  async function settle(p: Promise<unknown>): Promise<{ error: unknown; value: unknown }> {
+    return p.then(
+      (value) => ({ error: null, value }),
+      (error: unknown) => ({ error, value: null })
+    )
+  }
+
+  it('a camera whose play() never settles rejects with a NoPictureError for the camera at the limit, and leaves no offscreen <video> in the document', async () => {
+    vi.useFakeTimers()
+    const dom = setup(['camera'])
+    const done = settle(startCompositor(opts))
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(dom.attached(), 'still waiting just under the limit: both videos are mounted').toBe(2)
+    await vi.advanceTimersByTimeAsync(2)
+    const { error } = await done
+    expect(error).toBeInstanceOf(NoPictureError)
+    expect((error as NoPictureError).source).toBe('camera')
+    expect((error as Error).message).toBe('The camera sent no picture for 10 seconds.')
+    expect(dom.attached()).toBe(0)
+  })
+
+  it('a screen whose play() never settles rejects with a NoPictureError for the screen, in a finished sentence that says what to do', async () => {
+    vi.useFakeTimers()
+    const dom = setup(['screen'])
+    const done = settle(startCompositor(opts))
+    await vi.advanceTimersByTimeAsync(10_001)
+    const { error } = await done
+    expect(error).toBeInstanceOf(NoPictureError)
+    expect((error as NoPictureError).source).toBe('screen')
+    expect((error as Error).message).toBe(
+      'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+    )
+    expect(dom.attached()).toBe(0)
+  })
+
+  it('control: a play() that resolves is no rejection, and no timer is left behind to fire at the limit', async () => {
+    vi.useFakeTimers()
+    const dom = setup([])
+    const handle = await startCompositor(opts)
+    expect(dom.attached()).toBe(2)
+    expect(vi.getTimerCount(), 'the race cleared its timer: nothing is left to reject later').toBe(0)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(dom.attached(), 'a late timer would have torn the compositor down').toBe(2)
+    handle.stop()
+    expect(dom.attached()).toBe(0)
   })
 })

@@ -405,30 +405,32 @@ describe('outputPixels', () => {
 
 describe('thumbnailSizeNote', () => {
   const NOTE = "Bigger than YouTube's thumbnail size (1280×720)."
+  const SOLID = { background: '#120c0c' }
+  const CLEAR = { background: 'transparent' }
 
   it('stays quiet at YouTube\'s own size and below', () => {
-    expect(thumbnailSizeNote(1280, 720, false)).toBeNull()
-    expect(thumbnailSizeNote(640, 360, false)).toBeNull()
+    expect(thumbnailSizeNote(1280, 720, SOLID)).toBeNull()
+    expect(thumbnailSizeNote(640, 360, SOLID)).toBeNull()
   })
 
   it('speaks up for a 16:9 export that is bigger', () => {
-    expect(thumbnailSizeNote(2560, 1440, false)).toBe(NOTE)
-    expect(thumbnailSizeNote(3840, 2160, false)).toBe(NOTE)
-    expect(thumbnailSizeNote(1920, 1080, false)).toBe(NOTE)
+    expect(thumbnailSizeNote(2560, 1440, SOLID)).toBe(NOTE)
+    expect(thumbnailSizeNote(3840, 2160, SOLID)).toBe(NOTE)
+    expect(thumbnailSizeNote(1920, 1080, SOLID)).toBe(NOTE)
   })
 
   it('stays quiet for a shape that is not a thumbnail: square, vertical, wide banner', () => {
-    expect(thumbnailSizeNote(1080, 1080, false)).toBeNull()
-    expect(thumbnailSizeNote(1080, 1920, false)).toBeNull()
-    expect(thumbnailSizeNote(2560, 423, false)).toBeNull()
+    expect(thumbnailSizeNote(1080, 1080, SOLID)).toBeNull()
+    expect(thumbnailSizeNote(1080, 1920, SOLID)).toBeNull()
+    expect(thumbnailSizeNote(2560, 423, SOLID)).toBeNull()
   })
 
   it('stays quiet for a transparent document — that is a stream overlay, not a thumbnail', () => {
-    expect(thumbnailSizeNote(1920, 1080, true)).toBeNull()
+    expect(thumbnailSizeNote(1920, 1080, CLEAR)).toBeNull()
   })
 
   it('does not divide by zero', () => {
-    expect(thumbnailSizeNote(0, 0, false)).toBeNull()
+    expect(thumbnailSizeNote(0, 0, SOLID)).toBeNull()
   })
 })
 
@@ -447,5 +449,18 @@ describe('jpgTransparencyNote', () => {
   it('stays quiet for a filled document in either format', () => {
     expect(jpgTransparencyNote('jpg', false)).toBeNull()
     expect(jpgTransparencyNote('png', false)).toBeNull()
+  })
+})
+
+describe('thumbnailSizeNote knows channel art (T-172 (3))', () => {
+  const NOTE = "Bigger than YouTube's thumbnail size (1280×720)."
+
+  it('is null for the channel banner: 2560x1440 like a 2K thumbnail, but not one', () => {
+    expect(thumbnailSizeNote(2560, 1440, { background: '#120c0c', kind: 'channel-art' })).toBeNull()
+    expect(thumbnailSizeNote(5120, 2880, { background: '#120c0c', kind: 'channel-art' })).toBeNull()
+  })
+
+  it('still speaks up for the same size without the kind (control)', () => {
+    expect(thumbnailSizeNote(2560, 1440, { background: '#120c0c' })).toBe(NOTE)
   })
 })

@@ -87,6 +87,16 @@ export function isPicture(extractedFromPath: string, hasVideo: boolean | null | 
   return hasVideo ?? isVideoFilename(extractedFromPath)
 }
 
+/**
+ * T-172 Track C (7): which sound this is - the file the person OPENED, the identity "the same sound" means. A video's sound and an AIFF / WMA are played from a
+ * fresh `<nanoid10>.wav` extracted on every open (main/audio/extract.ts), so `filePath` is the open's, not the sound's: re-opening the same file is a new
+ * `filePath`. The original of a converted import wins over its working copy (the name `fileName` shows and a project saves). Anything that asks "is this job's
+ * sound the open one" compares this; the real scratch path stays `filePath`, for what reads the audio (the export input, the mux).
+ */
+export function soundKey(source: Pick<AudioSource, 'filePath' | 'fromVideo' | 'extractedFrom'>): string {
+  return source.fromVideo?.convertedFrom ?? source.fromVideo?.videoPath ?? source.extractedFrom ?? source.filePath
+}
+
 function fileNameFromPath(p: string): string {
   const cleaned = p.replace(/\\/g, '/')
   return cleaned.substring(cleaned.lastIndexOf('/') + 1)

@@ -11,7 +11,9 @@ import { assert } from '@shared/assert'
  *      need actual HTMLVideoElement instances because canvas.drawImage()
  *      accepts those but not MediaStreams directly.
  *   2. Create a hidden canvas at the screen's natural resolution.
- *   3. Wait for both videos to report `playing` so width/height are real.
+ *   3. Start both videos and wait for each to show its first picture (`play()` on a stream stays pending until the first frame) and
+ *      report its metadata, so width/height are real. Each wait ends at the same 10 s limit: a source that sends no picture rejects
+ *      with a `NoPictureError` naming it, instead of leaving the setup pending.
  *   4. Start a requestAnimationFrame loop drawing screen-full + webcam-corner.
  *   5. canvas.captureStream(fps) returns a MediaStream the recorder uses.
  *
@@ -22,6 +24,22 @@ import { assert } from '@shared/assert'
  *
  * Audio mixing is the caller's concern — this module is video-only.
  */
+
+/**
+ * A source that opened but sent no picture within START_TIMEOUT_MS. The message is a finished sentence (userFacingError keeps one
+ * whole), so a toast can show it as it is. `source` lets the caller tell a camera (the take can go on without it) from the screen
+ * (it cannot).
+ */
+export class NoPictureError extends Error {
+  constructor(readonly source: 'camera' | 'screen') {
+    super(
+      source === 'camera'
+        ? 'The camera sent no picture for 10 seconds.'
+        : 'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+    )
+    this.name = 'NoPictureError'
+  }
+}
 
 export type WebcamCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 
@@ -208,7 +226,7 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   let ctx: CanvasRenderingContext2D
   let canvas: HTMLCanvasElement
   try {
-    await Promise.all([screenVid.play(), camVid.play()])
+    await Promise.all([playWithin(screenVid, 'screen'), playWithin(camVid, 'camera')])
     await waitForMetadata(screenVid)
     await waitForMetadata(camVid)
 
@@ -270,15 +288,37 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   return { outputStream, stop }
 }
 
-/** Max wait for a video element to report metadata before we give up. */
-const METADATA_TIMEOUT_MS = 10000
+/** Max wait for a source's first picture (`play()`) or its metadata before we give up. */
+const START_TIMEOUT_MS = 10000
+
+/**
+ * `v.play()` on a MediaStream-backed video stays pending until the first frame arrives, so a source that opens and sends nothing
+ * would leave `startCompositor` pending for good. Races it against START_TIMEOUT_MS; on the limit it rejects with a NoPictureError
+ * naming `who`. The timer is cleared on either outcome.
+ */
+function playWithin(v: HTMLVideoElement, who: 'camera' | 'screen'): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new NoPictureError(who)), START_TIMEOUT_MS)
+    v.play().then(
+      () => {
+        clearTimeout(timer)
+        resolve()
+      },
+      (err: unknown) => {
+        clearTimeout(timer)
+        reject(err)
+      }
+    )
+  })
+}
 
 /**
  * Resolves once the video element has reported `loadedmetadata` so
  * videoWidth/videoHeight are real numbers, not zero. Rejects after
- * METADATA_TIMEOUT_MS so a stream that produces a track but never emits
+ * START_TIMEOUT_MS so a stream that produces a track but never emits
  * `loadedmetadata` cannot leave `startCompositor` pending forever — the
  * setup-phase try/catch then runs `teardownOffscreen` and propagates.
+ * (A source that never sends a picture is caught earlier, by `playWithin`.)
  */
 function waitForMetadata(v: HTMLVideoElement): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -300,8 +340,8 @@ function waitForMetadata(v: HTMLVideoElement): Promise<void> {
     }
     timer = setTimeout(() => {
       cleanup()
-      reject(new Error(`video metadata did not arrive within ${METADATA_TIMEOUT_MS} ms`))
-    }, METADATA_TIMEOUT_MS)
+      reject(new Error(`video metadata did not arrive within ${START_TIMEOUT_MS} ms`))
+    }, START_TIMEOUT_MS)
     v.addEventListener('loadedmetadata', onReady)
   })
 }

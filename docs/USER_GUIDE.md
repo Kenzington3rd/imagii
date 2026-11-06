@@ -131,7 +131,10 @@ and webcam if you want them. Game and desktop sound are not captured.
 3. Under **Webcam**, check **Include webcam in recording (picture-in-picture)**,
    then pick the corner it sits in. While it records, the preview shows the take
    itself, with the webcam where the file will have it; there is no second picture of
-   the camera over it.
+   the camera over it. A camera that opens but sends no picture is given 10 seconds:
+   then imagii says "The camera sent no picture for 10 seconds. Recording screen
+   only." and records the screen without it. If the screen itself sends no picture,
+   imagii says so, stops, and **Start recording** is back to try another screen or window.
 4. Under **Output**, leave **Convert to MP4 after recording** checked (slower,
    better compatibility), or uncheck it for a quick WebM save, which some apps do
    not accept.
@@ -428,7 +431,11 @@ that names the file being converted.)
   press **Close** keeps going, and a card beside the importer lists each one - what it is and which clip or file it is for, how far
   along it is where imagii can tell, and its own **Cancel** - until it finishes or you cancel it. **Close** says so when it asks
   ("The export that is running keeps going; its Cancel stays on screen."). An export's row names the video as you
-  opened it (**stream.flv**), not the working copy imagii made to play it. A Reframe is the one job that can also
+  opened it (**stream.flv**), not the working copy imagii made to play it. Open the same file again (a **.flv** or another
+  format imagii converts to play is converted again, into a new working copy) and it is still that video: a re-opened
+  converted video keeps its running jobs and their results - the export's rows, and a transcript or a scan that finishes
+  afterwards - and no "Started on another video" line is drawn for it. Open a different file and those jobs are
+  another video's, as above. A Reframe is the one job that can also
   outlast its panel with a video open: if the video you open next is vertical, so there is nothing to reframe, the card
   stays above it with the Reframe's row and its **Cancel** until it ends or you cancel it.
   **Close** asks only when it would throw something away that took you time: more than one clip, a changed
@@ -730,7 +737,9 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
 4. **Export** as PNG or JPG. **Scale** sets how many pixels each pixel of your
    design becomes: 0.5×, 1×, 2×, or 3×, and **Output** beside it shows the size
    of the file in pixels (it adds a note when a 16:9 export is bigger than
-   YouTube's 1280×720 thumbnail size). The export is the design itself, not
+   YouTube's 1280×720 thumbnail size; the YouTube channel banner template is the same
+   2560×1440 but is channel art, not a thumbnail, so it gets no note, and keeps that
+   when you save and open the project). The export is the design itself, not
    your window, so 1× is the size you laid out. The scale starts at 2× on a
    high-DPI screen (3× on the densest ones) and at 1× otherwise. JPG adds a
    quality setting. An emote canvas exported as PNG writes the three-file Twitch

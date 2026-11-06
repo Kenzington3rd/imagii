@@ -179,7 +179,7 @@ describe('reconcileDeviceId — a pick survives only while the device does', () 
 describe('noDeviceHint — names the real recoveries', () => {
   it('microphone: plug in, close the app that has it, or allow access in Windows privacy settings, then Refresh sources', () => {
     expect(noDeviceHint('microphone')).toBe(
-      'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources. To record without one, untick Record microphone.'
+      'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources. To record without one, uncheck Record microphone.'
     )
   })
 
@@ -209,13 +209,13 @@ describe('noDeviceHint — names the real recoveries', () => {
 
 describe('noDeviceHint - the microphone has a remedy of its own (T-171 (5))', () => {
   it('the microphone hint ends with the way to record without one', () => {
-    expect(noDeviceHint('microphone').endsWith(' To record without one, untick Record microphone.')).toBe(true)
+    expect(noDeviceHint('microphone').endsWith(' To record without one, uncheck Record microphone.')).toBe(true)
   })
 
-  it('the camera hint is unchanged: a missing camera already records screen-only, so it names no tick box', () => {
+  it('the camera hint is unchanged: a missing camera already records screen-only, so it names no check box', () => {
     expect(noDeviceHint('camera')).toBe(
       'No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources.'
     )
-    expect(noDeviceHint('camera')).not.toMatch(/untick/)
+    expect(noDeviceHint('camera')).not.toMatch(/uncheck/)
   })
 })

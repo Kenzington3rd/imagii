@@ -3981,3 +3981,58 @@ test.describe('T-171 Track A (2): Rename opens with the whole name selected, eve
     }
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// T-172 Track B (item 6): the Asset Library card is the shared SpecCard, with its license line.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('T-172 Track B - the Asset Library card is the shared SpecCard', () => {
+  test('every asset card shows its thumbnail (a checkerboard for a clear one, the fill for a filled one), name, description, size and license line', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t172-speccard')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      await expect(window.locator('button.card').first()).toBeVisible({ timeout: 15_000 })
+
+      const cards = await window.evaluate(() => {
+        return Array.from(document.querySelectorAll('button.card')).map((b) => {
+          const thumb = b.children[0] as HTMLElement
+          return {
+            name: b.children[1]?.textContent ?? '',
+            description: b.children[2]?.textContent ?? '',
+            size: b.children[3]?.textContent ?? '',
+            license: b.children[4]?.textContent ?? '',
+            licenseClass: b.children[4]?.className ?? '',
+            childCount: b.children.length,
+            aspect: thumb.style.aspectRatio,
+            background: thumb.style.background,
+            checker: thumb.style.background.includes('repeating-conic-gradient')
+          }
+        })
+      })
+      expect(cards).toHaveLength(ASSET_CATALOG.length)
+      let checkers = 0
+      for (const a of ASSET_CATALOG) {
+        const c = cards.find((x) => x.name === a.name)
+        expect(c, `a card for ${a.name}`).toBeTruthy()
+        if (!c) continue
+        expect(c.description).toBe(a.description)
+        expect(c.size).toBe(`${a.doc.width} × ${a.doc.height}`)
+        expect(c.license, `${a.name}: the license line`).toBe(a.license)
+        expect(c.licenseClass).toContain('italic')
+        expect(c.childCount, 'thumbnail, name, description, size, license').toBe(5)
+        expect(c.aspect).toBe(`${a.doc.width} / ${a.doc.height}`)
+        expect(c.checker, `${a.name}: checkerboard exactly when the document is transparent`).toBe(a.doc.background === 'transparent')
+        if (c.checker) checkers++
+        else expect(c.background, `${a.name}: a filled document shows its fill`).not.toBe('')
+      }
+      expect(checkers, 'the catalog has transparent assets, so the checkerboard is exercised').toBeGreaterThan(0)
+      expect(checkers).toBeLessThan(ASSET_CATALOG.length)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

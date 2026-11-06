@@ -95,9 +95,10 @@ corporation, not a hype machine.
 The rules a sentence on screen is held to. The voice above says how imagii
 sounds; this section says what each thing is CALLED and how a label is
 written, so two panels never name one idea two ways. `tests/unit/copyConventions.test.ts`
-scans the renderer's rendered strings for the mechanical half of it, and every string in main,
-shared and preload for the two rules about words alone (US spelling, never "tick" a box: T-116 -
-"untick" sat in a main-process sentence for a round because nothing read there).
+scans the renderer's rendered strings for the mechanical half of it, and every string literal in the renderer,
+main, shared and preload for the two rules about words alone (US spelling, never "tick" a box: T-116 -
+"untick" sat in a main-process sentence for a round because nothing read there; T-172 - and in a renderer
+helper's returned string and a constant a toast interpolates, which the rendered-strings scan does not read).
 
 ### One name per concept
 

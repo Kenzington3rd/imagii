@@ -603,3 +603,31 @@ describe('an edit that changes nothing is not an edit (T-169 (2), the class of T
     expect(store().chain.gainDb).toBe(0)
   })
 })
+
+const { soundKey } = await import('./audioStore')
+
+/**
+ * T-172 Track C (7): "is this the same sound" is the file the person OPENED. A video's sound and an AIFF / WMA are played from a fresh
+ * `<nanoid10>.wav` extracted on every open, so `filePath` names the open, not the sound; re-opening the same file made a new "sound".
+ */
+describe('soundKey - the file the person opened is the sound\'s identity (T-172 Track C)', () => {
+  it.each([
+    ['a plain file is its own path', { filePath: '/a/voice.wav', fromVideo: null, extractedFrom: null }, '/a/voice.wav'],
+    ['a video\'s sound is the video, not the scratch WAV', { filePath: '/tmp/imagii-audio/aB3dE5fG7h.wav', fromVideo: { videoPath: '/v/stream.mp4' }, extractedFrom: null }, '/v/stream.mp4'],
+    [
+      'a converted video\'s sound is the ORIGINAL, not the working copy',
+      { filePath: '/tmp/imagii-audio/aB3dE5fG7h.wav', fromVideo: { videoPath: '/tmp/imagii-import/stream-aB3dE5fG.mp4', convertedFrom: '/v/stream.flv' }, extractedFrom: null },
+      '/v/stream.flv'
+    ],
+    ['an AIFF / WMA is the file it was taken from', { filePath: '/tmp/imagii-audio/aB3dE5fG7h.wav', fromVideo: null, extractedFrom: '/m/take one.wma' }, '/m/take one.wma']
+  ])('%s', (_name, source, key) => {
+    expect(soundKey(source)).toBe(key)
+  })
+
+  it('two opens of the same file (two scratch WAVs) have one key; two different files have two', () => {
+    const open = (scratch: string, from: string) => ({ filePath: scratch, fromVideo: { videoPath: from }, extractedFrom: null })
+    expect(soundKey(open('/tmp/a.wav', '/v/x.mp4'))).toBe(soundKey(open('/tmp/b.wav', '/v/x.mp4')))
+    expect(soundKey(open('/tmp/a.wav', '/v/x.mp4'))).not.toBe(soundKey(open('/tmp/a.wav', '/v/y.mp4')))
+  })
+})
+

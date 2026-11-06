@@ -11,7 +11,7 @@ import {
 } from './assetCatalog'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
-import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
+import { SpecCard } from '../../components/SpecCard'
 import { ACTION_TOAST_MS } from '../../lib/savedToast'
 import { countOf } from '@shared/plural'
 
@@ -89,28 +89,14 @@ export function AssetLibraryPanel(): JSX.Element {
             </PanelHeader>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {items.map((asset) => (
-                <button
+                <SpecCard
                   key={asset.id}
+                  name={asset.name}
+                  description={asset.description}
+                  doc={asset.doc}
                   onClick={() => dropToCanvas(asset)}
-                  className="card p-3 flex flex-col justify-start items-stretch text-left hover:border-accent transition-colors"
-                >
-                  <div
-                    className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"
-                    style={{
-                      aspectRatio: `${asset.doc.width} / ${asset.doc.height}`,
-                      background:
-                        asset.doc.background === 'transparent'
-                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
-                          : asset.doc.background
-                    }}
-                  />
-                  <div className="text-sm font-medium">{asset.name}</div>
-                  <div className="text-xs text-ink-muted mt-1">{asset.description}</div>
-                  <div className="text-xs text-ink-dim mt-1 font-mono">
-                    {asset.doc.width} × {asset.doc.height}
-                  </div>
-                  <div className="text-xs text-ink-dim mt-1 italic">{asset.license}</div>
-                </button>
+                  extra={asset.license}
+                />
               ))}
             </div>
           </section>

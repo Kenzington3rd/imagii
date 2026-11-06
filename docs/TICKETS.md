@@ -8690,7 +8690,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 121)
+- **Status:** done (round 121 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9266,6 +9266,52 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 121 — T-172, all seven counted items, landed in the commit that
+carries this entry. Three Sonnet workers in fresh clones, disjoint
+source files, merged by the expediter (A and B from 579fc44; C, added
+at Track A's hand-back, from 4b3c038). Track A: "the same video" is
+the original the person opened — one `videoKey` (`convertedFrom ??
+filePath`) used by every job's other-video line, the Export rows and
+the three per-video result guards — so a converted import (a new
+`<base>-<nanoid8>.mp4` working copy on every open) re-opened while its
+jobs run keeps their rows, gets no "Started on another video" line,
+and receives its late transcript and scan; main still reads the real
+working copy; the Clip Kit's other-video caption is left-aligned like
+its siblings, so its clamp shows the ellipsis. Track B: a camera that
+opens but sends no picture ends the start at 10 s ("The camera sent no
+picture for 10 seconds. Recording screen only.") — `play()` is raced
+against the limit, which it was not, so Start sat on "Starting…" for
+good — and a screen that sends none stops the start with its own
+sentence; the YouTube channel banner carries `kind: 'channel-art'` in
+its document (saved with the project), so its Export card and Variants
+no longer say it is bigger than a YouTube thumbnail; T-171's
+microphone remedy says "uncheck", and the copy word rules now read
+every string literal in the renderer; the template / asset card is one
+`SpecCard` (TemplatesDialog's unread hover state deleted). Track C:
+Audio Studio's "same sound" is the file the person opened — one
+`soundKey` — so a video's sound or an AIFF re-opened while its export
+runs keeps its row and is not named as another sound. Deviations,
+accepted: A keeps `sourcePath` beside the new `sourceKey` in the
+export queue (the job card reads it as a path) and also routed
+Transcribe's press guard and Clear transcripts through the key; B's
+SpecCard cases are characterization (the three copies were identical)
+and are held by the SpecCard mutations; C renamed the audio export
+store's `sourcePath` to `sourceKey` (only ExportDialog read it).
+Ledgers: A 27 mutations, B 17 (one survivor, the word-scan scope,
+strengthened and killed), C 8, all killed. Expedited personally: one
+independent mutation per track at a seam no ledger row names — A: the
+late transcript stored by the working copy's path → the
+late-transcript case red; B: Variants passing the background without
+`kind` → the banner case red; C: `soundKey` without the converted
+original → the soundKey table and its pin red — each restored
+byte-identical, sha256 verified; Track A's first expediter verify had
+one load timeout in src/main/autosave.test.ts (untouched; 5 of 5
+standalone), runs 2 and 3 green; on the MERGED tree: verify x2 (210
+files, 6608 tests each), test:media 495 passed and 17 skipped of 512
+on 7.0.2, FULL Playwright 779 of 779 (54.4 min; no failures). Applied
+to 4b3c038 by `git apply` with every file byte-identical to the
+expedited merge.
 
 Round 120 — T-171, all six counted items, landed in the commit that
 carries this entry. Two Sonnet workers in fresh clones of c326815,

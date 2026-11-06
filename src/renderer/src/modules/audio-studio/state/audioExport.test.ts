@@ -9,7 +9,7 @@ import { cancelAudioExport, useAudioExport } from './audioExport'
  */
 describe('useAudioExport - an export the dialog does not have to be mounted for (T-135 (1))', () => {
   beforeEach(() => {
-    useAudioExport.setState({ job: null, running: false, sourcePath: null, sourceName: null })
+    useAudioExport.setState({ job: null, running: false, sourceKey: null, sourceName: null })
   })
 
   const start = (jobId = 'a'): boolean =>
@@ -19,7 +19,7 @@ describe('useAudioExport - an export the dialog does not have to be mounted for 
     expect(start()).toBe(true)
     expect(useAudioExport.getState().running).toBe(true)
     expect(useAudioExport.getState().job).toEqual({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 })
-    expect(useAudioExport.getState().sourcePath).toBe('/s/voice.wav')
+    expect(useAudioExport.getState().sourceKey).toBe('/s/voice.wav')
     expect(useAudioExport.getState().sourceName, 'and the name the person knows it by, for the closed-sound card').toBe('voice.wav')
   })
 
@@ -85,7 +85,7 @@ describe('useAudioExport - an export the dialog does not have to be mounted for 
 describe('cancelAudioExport - the one Cancel the dialog and the closed-sound card share (T-146)', () => {
   const cancel = vi.fn()
   beforeEach(() => {
-    useAudioExport.setState({ job: null, running: false, sourcePath: null, sourceName: null })
+    useAudioExport.setState({ job: null, running: false, sourceKey: null, sourceName: null })
     cancel.mockReset()
     cancel.mockResolvedValue(undefined)
     vi.stubGlobal('window', { api: { audio: { cancel } } })
@@ -119,5 +119,26 @@ describe('cancelAudioExport - the one Cancel the dialog and the closed-sound car
     cancel.mockRejectedValue(new Error('no such job'))
     useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/s/voice.wav', 'voice.wav')
     await expect(cancelAudioExport()).resolves.toBeUndefined()
+  })
+})
+
+describe('useAudioExport - the export remembers the sound\'s identity, not the scratch file it read (T-172 Track C)', () => {
+  beforeEach(() => {
+    useAudioExport.setState({ job: null, running: false, sourceKey: null, sourceName: null })
+  })
+
+  it('begin keeps the key it is given (the file the person opened), and a later begin replaces it', () => {
+    useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/v/stream.mp4', 'stream.mp4')
+    expect(useAudioExport.getState().sourceKey).toBe('/v/stream.mp4')
+    useAudioExport.getState().finish()
+    useAudioExport.getState().begin({ jobId: 'b', pass: 'render', plan: ['render'], percent: 0 }, '/m/take.wma', 'take.wma')
+    expect(useAudioExport.getState().sourceKey).toBe('/m/take.wma')
+    expect(useAudioExport.getState().sourceName).toBe('take.wma')
+  })
+
+  it('a refused begin (one is running) leaves the first export\'s key alone', () => {
+    useAudioExport.getState().begin({ jobId: 'a', pass: 'render', plan: ['render'], percent: 0 }, '/v/stream.mp4', 'stream.mp4')
+    expect(useAudioExport.getState().begin({ jobId: 'b', pass: 'render', plan: ['render'], percent: 0 }, '/v/other.mp4', 'other.mp4')).toBe(false)
+    expect(useAudioExport.getState().sourceKey).toBe('/v/stream.mp4')
   })
 })

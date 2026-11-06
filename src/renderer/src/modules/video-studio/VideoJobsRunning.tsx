@@ -24,7 +24,7 @@ import {
   useReframeRun,
   useScanRun
 } from './store/runs'
-import { useVideoStore } from './store/videoStore'
+import { useVideoStore, videoKey } from './store/videoStore'
 
 /**
  * The long jobs of Video Studio that outlive the video they were started on (T-144).
@@ -228,7 +228,7 @@ export function VideoJobsRunning(): JSX.Element {
   // T-171 (4): and a Reframe started on ANOTHER video than the open one says whose it is - the clip and the file in its label, and the sentence under the rows
   // says it was started on another video - since its "Clip 1" would be read as the open video's. (One started on the open video, its clip since deselected,
   // keeps the plain label: it is the open video's.)
-  const reframeElsewhere = videoOpen && snap.reframe !== null && snap.reframe.videoPath !== source.filePath
+  const reframeElsewhere = videoOpen && snap.reframe !== null && snap.reframe.videoPath !== videoKey(source)
   const rows = (!videoOpen ? allRows : reframePanelShows(source, selectedClip) ? [] : allRows.filter((r) => r.kind === 'reframe')).map((r) =>
     r.kind === 'reframe' && reframeElsewhere && snap.reframe
       ? { ...r, label: named('Reframe', `${snap.reframe.name} from ${snap.reframe.fileName}`) }

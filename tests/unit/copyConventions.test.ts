@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import ts from 'typescript'
 import { RENDERER_ROOT } from './routeSources'
@@ -730,5 +731,50 @@ describe('the Asset Library footer count goes through countOf (T-168 fold)', () 
     const text = parseSource(path.join(RENDERER_ROOT, 'modules/references/AssetLibraryPanel.tsx')).text
     expect(text).toMatch(/countOf\(ASSET_CATALOG\.length, 'asset'\)/)
     expect(text).not.toMatch(/\{ASSET_CATALOG\.length\} assets/)
+  })
+})
+
+/**
+ * T-172 (4): the word rules over EVERY string literal under src/renderer, as T-116 does for main, shared and preload.
+ *
+ * The renderer scan above reads what `renderedStrings.ts` calls rendered (JSX text, copy attributes, copy-named properties, toast arguments): a
+ * sentence a helper RETURNS (`noDeviceHint`) or a constant a toast interpolates (`MIC_START_REMEDY`) is not one of those, so "untick" shipped in both
+ * (T-171) with this scan green. The two word rules (US spelling, never "tick" a box) read words alone, so they can read every literal.
+ */
+describe('the word rules read every string literal in the renderer (T-172 (4))', () => {
+  /** The ONE scan of a renderer file's literals: the per-file cases and the discrimination cases both go through it, so narrowing it fails the second. */
+  const literalHits = (file: string, text?: string): string[] => describeAll(mainWordViolations(parseSource(file, text), file))
+  const TICK = '"tick" a box \u2014 check it'
+
+  it('finds the sources (the scan is not vacuously empty) and reads the two files that shipped "untick"', () => {
+    const rels = FILES.map((f) => path.relative(RENDERER_ROOT, f).replace(/\\/g, '/'))
+    expect(rels).toContain('modules/record-studio/devices.ts')
+    expect(rels).toContain('modules/record-studio/RecordStudio.tsx')
+    expect(FILES.flatMap((f) => allLiterals(parseSource(f))).length).toBeGreaterThan(3000)
+  })
+
+  for (const file of FILES) {
+    it(`${path.relative(RENDERER_ROOT, file)}: no literal says "untick" or spells a word the British way`, () => {
+      expect(literalHits(file)).toEqual([])
+    })
+  }
+
+  it('discriminates: "untick" in a helper\'s returned string and in a const a toast interpolates both fail; the fixed words do not', () => {
+    const rules = (src: string): string[] => literalHits('x.ts', src).map((h) => h.match(/\[(.*?)\]/)?.[1] ?? h)
+    expect(rules(`export function hint(k: string): string { return 'No mic.' + (k === 'microphone' ? ' To record without one, untick Record microphone.' : '') }`)).toEqual([TICK])
+    expect(rules(`const REMEDY = 'To record without it, untick Record microphone.'\ntoast.error(\`\${message} \${REMEDY}\`)`)).toEqual([TICK])
+    expect(rules(`const REMEDY = 'To record without it, uncheck Record microphone.'`)).toEqual([])
+  })
+
+  it('discriminates on the real files: "untick" put back into devices.ts and into RecordStudio.tsx is found by the same scan that reads them', () => {
+    for (const [rel, uncheck] of [
+      ['modules/record-studio/devices.ts', 'uncheck Record microphone'],
+      ['modules/record-studio/RecordStudio.tsx', 'uncheck Record microphone']
+    ] as const) {
+      const file = FILES.find((f) => f.replace(/\\/g, '/').endsWith(rel))!
+      const text = readFileSync(file, 'utf8')
+      expect(text, `${rel} says "${uncheck}" now`).toContain(uncheck)
+      expect(literalHits(file, text.replace(uncheck, 'untick Record microphone')), rel).toHaveLength(1)
+    }
   })
 })

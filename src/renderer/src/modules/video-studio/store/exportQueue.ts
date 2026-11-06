@@ -74,13 +74,16 @@ interface ExportQueueState {
   /** The last batch's rows. They stay after the batch ends (they carry "Show in folder", "Failed", "Canceled") until the next batch replaces them. */
   jobs: JobStatus[]
   running: boolean
-  /** The video the batch was made from: the panel shows these rows for that video (or while the batch runs), not under another one. */
+  /** The file the batch reads (the working copy, for a converted import): where its inputs went. Not an identity - see `sourceKey`. */
   sourcePath: string | null
+  /** T-172 (2): the video the batch was made from, as `videoKey(source)` (the original the person opened): the panel shows these rows for that video
+   *  (or while the batch runs), not under another one. A converted import re-opened has a new `sourcePath` and the same key. */
+  sourceKey: string | null
   /** The name the person knows that video by (`source.fileName`, "stream.flv"), for the closed-video card (T-164 (5)): a converted import is played
    *  from `<base>-<nanoid8>.mp4`, which `sourcePath` is and the person never saw. The model is `useAudioExport.sourceName` (T-146). */
   sourceName: string | null
   /** Claim the queue with the batch's rows. False, and nothing changes, if a batch is already running. */
-  begin: (statuses: JobStatus[], sourcePath: string, sourceName: string) => boolean
+  begin: (statuses: JobStatus[], sourcePath: string, sourceName: string, sourceKey: string) => boolean
   progress: (jobId: string, percent: number) => void
   complete: (jobId: string, outputPath: string) => void
   settle: (end: { cancelled: boolean; message: string }) => void
@@ -91,10 +94,11 @@ export const useExportQueue = create<ExportQueueState>((set, get) => ({
   jobs: [],
   running: false,
   sourcePath: null,
+  sourceKey: null,
   sourceName: null,
-  begin: (statuses, sourcePath, sourceName) => {
+  begin: (statuses, sourcePath, sourceName, sourceKey) => {
     if (get().running) return false
-    set({ jobs: statuses, running: true, sourcePath, sourceName })
+    set({ jobs: statuses, running: true, sourcePath, sourceName, sourceKey })
     return true
   },
   progress: (jobId, percent) =>
@@ -123,10 +127,12 @@ export async function runExportBatch(opts: {
   dir: string
   sourcePath: string
   sourceName: string
+  /** `videoKey(source)`: which video the rows are for. */
+  sourceKey: string
 }): Promise<void> {
-  const { queue, statuses, dir, sourcePath, sourceName } = opts
+  const { queue, statuses, dir, sourcePath, sourceName, sourceKey } = opts
   const store = useExportQueue.getState()
-  if (!store.begin(statuses, sourcePath, sourceName)) return
+  if (!store.begin(statuses, sourcePath, sourceName, sourceKey)) return
   const offProgress = window.api.video.onProgress((p) => useExportQueue.getState().progress(p.jobId, p.percent))
   const offDone = window.api.video.onJobComplete(({ jobId, outputPath }) => useExportQueue.getState().complete(jobId, outputPath))
   try {

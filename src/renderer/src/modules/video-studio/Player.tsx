@@ -4,7 +4,7 @@ import toast from 'react-hot-toast'
 import { computeCropBox, type CropBox } from '@shared/safeZone'
 import { formatFps } from '@shared/units'
 import { PREVIEW_UNAVAILABLE_MESSAGE, previewCopySkippedMessage } from '@shared/mediaFormats'
-import { playableDuration, playheadNow, useVideoStore } from './store/videoStore'
+import { playableDuration, playheadNow, useVideoStore, videoKey } from './store/videoStore'
 import { usePreviewCopyRun } from './store/runs'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
@@ -266,6 +266,8 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     await claimFirst(copyingRef, async () => {
       if (!source) return
       const startedFor = source.filePath
+      // T-172 (2): the copy is for the video the person opened (a converted import re-opened meanwhile is still it); `startedFor` is what main converts.
+      const startedKey = videoKey(source)
       const startedName = source.fileName
       // T-136 (2): the run is claimed here and given back in the finally, in a module store: the closure outlives this component.
       if (!usePreviewCopyRun.getState().begin({ sourcePath: startedFor })) return
@@ -276,7 +278,7 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
         // Where the picture is NOW (it may have played on, or the person may have been away): the mounted Player's element when there is one, else
         // the store's last reading.
         const resumeAt = playheadNow(useVideoStore.getState())
-        if (!useVideoStore.getState().setPreviewCopyFor(startedFor, copyPath, resumeAt)) {
+        if (!useVideoStore.getState().setPreviewCopyFor(startedKey, copyPath, resumeAt)) {
           // The video was closed or replaced while the copy was made: it is for a video that is gone. T-137 (5): which of the two is not known
           // here (the store holds the open video or none), so the sentence is true of both.
           toast(previewCopySkippedMessage(startedName), { icon: <Icon name="warning" size={18} />, duration: 8000 })

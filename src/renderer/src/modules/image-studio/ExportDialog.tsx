@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { HINT_NODE_NAME } from '@shared/canvas'
+import { HINT_NODE_NAME, type CanvasDocument } from '@shared/canvas'
 import { ThumbnailVariants } from './ThumbnailVariants'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -56,18 +56,19 @@ const YOUTUBE_THUMB = { width: 1280, height: 720 } as const
 
 /**
  * The soft note under the size readout when a thumbnail-shaped export is bigger
- * than YouTube's thumbnail size, or null. "Thumbnail-shaped" is 16:9 and not
- * transparent: a document does not know it is a thumbnail, and a transparent
- * 1920x1080 PNG is a stream overlay, not something that goes to YouTube. A
- * 16:9 scene card will see the note too; it is a statement of fact about the
+ * than YouTube's thumbnail size, or null. "Thumbnail-shaped" is 16:9, not
+ * transparent and not channel art: a document does not know it is a thumbnail, and a transparent
+ * 1920x1080 PNG is a stream overlay, not something that goes to YouTube. The channel banner is the
+ * same 2560x1440 as the 2K thumbnail template, so size cannot tell them apart: its doc says
+ * `kind: 'channel-art'` (T-172 (3)). A 16:9 scene card will see the note too; it is a statement of fact about the
  * size, not a warning that the export is wrong.
  */
 export function thumbnailSizeNote(
   width: number,
   height: number,
-  transparent: boolean
+  doc: Pick<CanvasDocument, 'background' | 'kind'>
 ): string | null {
-  if (transparent || width <= 0 || height <= 0) return null
+  if (doc.background === 'transparent' || doc.kind === 'channel-art' || width <= 0 || height <= 0) return null
   const sixteenNine = Math.abs(width / height - 16 / 9) < 0.01
   const bigger = width > YOUTUBE_THUMB.width || height > YOUTUBE_THUMB.height
   return sixteenNine && bigger
@@ -211,7 +212,7 @@ export function ExportDialog(): JSX.Element {
   const out = outputPixels(doc.width, doc.height, scale)
   // T-160 (4): the variants are files of the card's format, quality and scale; the emote pack's fixed sizes stay the Export button's, so with Scale disabled they are 1x.
   const variantScale = emotePack ? 1 : scale
-  const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
+  const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc)
   const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
 
   async function exportImage(): Promise<void> {

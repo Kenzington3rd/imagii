@@ -18,7 +18,7 @@ import { claimFirst } from '../../lib/claimFirst'
 import { inputTypeOf, isTextEntryTarget } from '../../lib/keyOwnership'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
-import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
+import { SpecCard } from '../../components/SpecCard'
 
 import { placementFor, storedImageMaxDim } from '@shared/imageBounds'
 import { isImageFilename } from '@shared/mediaFormats'
@@ -257,27 +257,13 @@ export function ImportPanel(): JSX.Element {
             </PanelHeader>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
               {items.map((t) => (
-                <button
+                <SpecCard
                   key={t.id}
+                  name={t.name}
+                  description={t.description}
+                  doc={t.doc}
                   onClick={() => applyTemplate(t)}
-                  className="card p-3 flex flex-col justify-start items-stretch text-left hover:border-accent transition-colors"
-                >
-                  <div
-                    className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"
-                    style={{
-                      aspectRatio: `${t.doc.width} / ${t.doc.height}`,
-                      background:
-                        t.doc.background === 'transparent'
-                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
-                          : t.doc.background
-                    }}
-                  />
-                  <div className="text-sm font-medium">{t.name}</div>
-                  <div className="text-xs text-ink-muted mt-1">{t.description}</div>
-                  <div className="text-xs text-ink-dim mt-1 font-mono">
-                    {t.doc.width} × {t.doc.height}
-                  </div>
-                </button>
+                />
               ))}
             </div>
           </section>

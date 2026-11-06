@@ -16,6 +16,9 @@ import { createRunStore } from '../../../lib/runStore'
 /**
  * Every run below that is a job of a VIDEO carries `name`, the words its row says it is for (T-144): the clip or the file. The panels draw their own
  * row from the open video; `VideoJobsRunning` draws it when the video is closed, and a closed video has nobody to ask.
+ * The GIF, Reframe, Clip Kit and Captions runs also carry `videoPath`: NOT a path to read but the video's identity, `videoKey(source)` (T-172 (2): the
+ * original the person opened, so a converted import re-opened is the same video). The panels compare it with `videoKey(source)` to say "started on
+ * another video"; a job's input path (the working copy) is read from `source.filePath` where the job starts.
  */
 /** The GIF export: its job id is what its Cancel is aimed at. */
 export const useGifRun = createRunStore<{ jobId: string; name: string; videoPath: string; fileName: string }>()
@@ -24,8 +27,8 @@ export const useCompileRun = createRunStore<{ jobId: string; name: string }>()
 /** The picture-in-picture composite. */
 export const usePipRun = createRunStore<{ jobId: string; name: string }>()
 /**
- * The vertical reframe: its progress is a measurement or absent (`percent` null until main has one). `videoPath` and `fileName` are the video it was started on
- * (T-170 (2)): the panel names them when another video is open, as Export's queue does (T-168 (4)).
+ * The vertical reframe: its progress is a measurement or absent (`percent` null until main has one). `videoPath` (the original the person opened, `videoKey`)
+ * and `fileName` are the video it was started on (T-170 (2)): the panel names them when another video is open, as Export's queue does (T-168 (4)).
  */
 export const useReframeRun = createRunStore<{
   jobId: string

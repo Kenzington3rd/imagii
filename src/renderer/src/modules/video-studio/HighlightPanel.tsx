@@ -13,7 +13,8 @@ import {
   NO_SOUND_MESSAGE,
   WHOLE_VIDEO_DROPPED_MESSAGE,
   useVideoStore,
-  videoHasNoSound
+  videoHasNoSound,
+  videoKey
 } from './store/videoStore'
 import { cancelScan, useScanRun } from './store/runs'
 import { Icon } from '../../components/Icon'
@@ -110,6 +111,8 @@ export function HighlightPanel(): JSX.Element | null {
   async function scan(): Promise<void> {
     if (!source || noSound) return
     const startedFor = source.filePath
+    // T-172 (2): the video this scan is FOR is the original the person opened; `startedFor` (the working copy) is what main reads.
+    const startedKey = videoKey(source)
     // T-167 (3): the file's name is read now - by the time a late scan ends the open video is another one or none.
     const startedName = source.fileName
     // The claim is the store's: one scan at a time however many times this panel has been mounted (main has ONE scan slot).
@@ -118,7 +121,7 @@ export function HighlightPanel(): JSX.Element | null {
       const candidates = await window.api.video.findHighlights(startedFor)
       // The result is for the video the scan started on (T-131 (3)): if it was replaced or closed while the scan ran, its candidates are for
       // one that is gone. Stored in the video store, so they are there when the person comes back, and no toast is raised to a panel that is not.
-      const stored = (found: AudioCandidate[]): boolean => useVideoStore.getState().setDerivedFor(startedFor, { scanCandidates: found })
+      const stored = (found: AudioCandidate[]): boolean => useVideoStore.getState().setDerivedFor(startedKey, { scanCandidates: found })
       // The IPC layer's signature returns reason as `string` but in
       // practice it's our union type — narrow defensively.
       const narrowed: AudioCandidate[] = candidates.map((c) => ({

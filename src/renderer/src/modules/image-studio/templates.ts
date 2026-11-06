@@ -272,6 +272,7 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       width: 2560,
       height: 1440,
       background: '#120c0c',
+      kind: 'channel-art',
       layers: [
         // All-device safe area: 1546×423 centered on 2560×1440 → offset
         // ((2560-1546)/2, (1440-423)/2) = (507, 508).

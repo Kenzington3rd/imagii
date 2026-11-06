@@ -815,11 +815,11 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
   const restore = read('components/AutosaveRestore.tsx')
 
   it('a finished transcription is attached through the source guard — never with the bare setter', () => {
-    expect(captions).toMatch(/setSrtPathFor\(startedFor, result\.srtPath\)/)
+    expect(captions).toMatch(/setSrtPathFor\(startedKey, result\.srtPath\)/)
     expect(captions).not.toMatch(/\bsetSrtPath\(/)
     // ...and the words and segments of a refused result are not applied either.
     // T-135 (4): the preview is the video store's, set for the video the job started on - after the guard has said that video is still open.
-    expect(captions.indexOf('setSrtPathFor(')).toBeLessThan(captions.indexOf('setDerivedFor(startedFor, { transcript: result.segments })'))
+    expect(captions.indexOf('setSrtPathFor(')).toBeLessThan(captions.indexOf('setDerivedFor(startedKey, { transcript: result.segments })'))
   })
 
   it('Clean audio asks Audio Studio\'s own question before it extracts, and is off for a video with no sound', () => {
@@ -891,7 +891,7 @@ describe('T-112 — the fixes are wired where the person reaches them', () => {
     expect(exportPanel).not.toMatch(/Choose an output folder first/)
     expect(exportPanel).toMatch(/dir = await window\.api\.video\.pickOutputDir\(\)/)
     // T-135 (1): the settling moved with the batch into the queue's store (the panel can be gone when the batch ends); the panel hands the batch over.
-    expect(exportPanel).toMatch(/await runExportBatch\(\{ queue, statuses, dir, sourcePath: source\.filePath, sourceName: source\.fileName \}\)/)
+    expect(exportPanel).toMatch(/await runExportBatch\(\{ queue, statuses, dir, sourcePath: source\.filePath, sourceName: source\.fileName, sourceKey: videoKey\(source\) \}\)/)
     const queueStore = read('modules/video-studio/store/exportQueue.ts')
     expect(queueStore).toMatch(/set\(\{ jobs: settleJobs\(get\(\)\.jobs, end\) \}\)/)
     expect(queueStore).toMatch(/useExportQueue\.getState\(\)\.settle\(\{ cancelled, message \}\)/)
@@ -1612,11 +1612,11 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
 describe('T-121 — the round-71 fixes are wired where the person reaches them', () => {
   const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-  it('a camera that fails is let go: the catch asks whether the studio is gone and stops the stream (3; T-171 (1): the thumbnail and camInTake are gone)', () => {
+  it('a camera that fails is let go: the catch asks whether the studio is gone, rethrows a stalled SCREEN (T-172 (1)) and stops the stream (3; T-171 (1): the thumbnail and camInTake are gone)', () => {
     const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
     // The catch opens with the same teardown the awaits above it have, then lets the camera go BEFORE the toast.
     expect(studio).toMatch(
-      /\} catch \(err\) \{\s*if \(leftWhileStarting\(micStream\)\) return\s*camStream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)\s*camStreamRef\.current = null\s*const \{ message \} = userFacingError\(err, 'Webcam failed\.'\)\s*toast\.error\(`\$\{message\} Recording screen only\.`/
+      /\} catch \(err\) \{\s*if \(leftWhileStarting\(micStream\)\) return\s*if \(err instanceof NoPictureError && err\.source === 'screen'\) throw err\s*camStream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)\s*camStreamRef\.current = null\s*const \{ message \} = userFacingError\(err, 'Webcam failed\.'\)\s*toast\.error\(`\$\{message\} Recording screen only\.`/
     )
     // T-171 (1): the recording view has the one <video> (the composite); no second element, no flag that drew it.
     expect(studio).toMatch(/compositorRef\.current = compositor\s*if \(leftWhileStarting\(micStream\)\) return\s*videoTrackSource = compositor\.outputStream/)
@@ -2219,7 +2219,8 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
     const scan = highlight.slice(highlight.indexOf('async function scan()'), highlight.indexOf('function addAsClip'))
     expect(scan).toMatch(/const startedFor = source\.filePath/)
     expect(scan).toMatch(/await window\.api\.video\.findHighlights\(startedFor\)/)
-    expect(scan).toMatch(/setDerivedFor\(startedFor, \{ scanCandidates: found \}\)/)
+    expect(scan).toMatch(/const startedKey = videoKey\(source\)/)
+    expect(scan).toMatch(/setDerivedFor\(startedKey, \{ scanCandidates: found \}\)/)
     // T-167 (3): ...and says so, with the file name read at the scan's start, before it returns (it was a bare `return`).
     expect(scan).toMatch(/const startedName = source\.fileName/)
     expect(scan).toMatch(/if \(!stored\(narrowed\)\) \{\s*toast\(lateScanMessage\(startedName\)[^)]*\)[^\n]*\n\s*return\s*\}/)
@@ -2696,7 +2697,7 @@ describe('T-135 — the twenty-first sweep', () => {
     expect(copy).toMatch(/await claimFirst\(copyingRef,/)
     expect(copy).toMatch(/await window\.api\.video\.convertForImport\(startedFor\)/)
     // T-136 (2): the playhead travels with the copy into the store (it was the unmounted instance's ref), read AFTER the wait.
-    expect(copy).toMatch(/useVideoStore\.getState\(\)\.setPreviewCopyFor\(startedFor, copyPath, resumeAt\)/)
+    expect(copy).toMatch(/useVideoStore\.getState\(\)\.setPreviewCopyFor\(startedKey, copyPath, resumeAt\)/)
     expect(copy).toMatch(/reportFailure\(err, \{ failed: "Couldn't make a preview copy\.", canceled: 'Preview copy canceled\.' \}\)/)
     expect(player).toMatch(/\{PREVIEW_UNAVAILABLE_MESSAGE\}/)
     // The README promises only what the preview decodes.
@@ -2733,7 +2734,7 @@ describe('T-135 — the twenty-first sweep', () => {
     expect(panel).toMatch(/useExportQueue\(\(s\) => s\.jobs\)/)
     expect(panel).toMatch(/useExportQueue\(\(s\) => s\.running\)/)
     expect(panel).not.toMatch(/\bset(Jobs|Running)\(/)
-    expect(panel, 'its rows are drawn while a batch runs or for the video they were made from, never under another one').toMatch(/\(running \|\| queueSource === source\?\.filePath\)/)
+    expect(panel, 'its rows are drawn while a batch runs or for the video they were made from, never under another one').toMatch(/\(running \|\| \(source !== null && queueSourceKey === videoKey\(source\)\)\)/)
     expect(panel, 'the progress and completion listeners are the batch\'s').not.toMatch(/window\.api\.video\.on(Progress|JobComplete)/)
     const queue = strip(read('modules/video-studio/store/exportQueue.ts'))
     expect(queue).toMatch(/const offProgress = window\.api\.video\.onProgress\(/)
@@ -2764,7 +2765,7 @@ describe('T-135 — the twenty-first sweep', () => {
     expect(kit, 'the clip-keyed reading is gone').not.toMatch(/kitRun\.clipId === clip\.id|kitRun\.clipId !== clip\.id|otherKitRunning/)
     expect(kit, 'the button is off, and shows the running label, for ANY run').toMatch(/disabled=\{kitRun !== null \|\| exportRunning\}/)
     expect(kit).toMatch(/\{kitRun !== null \? kitRun\.phase \|\| 'Working…' : `Clip Kit/)
-    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, videoPath: source\.filePath, fileName: source\.fileName, phase: '', canceled: false \}\)/)
+    expect(kit).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, videoPath: videoKey\(source\), fileName: source\.fileName, phase: '', canceled: false \}\)/)
     // The cancel latch is the run's field, set by the confirm and read by every step.
     expect(kit).toMatch(/useKitRun\.getState\(\)\.patch\(\{ canceled: true \}\)/)
     expect(kit).toMatch(/if \(useKitRun\.getState\(\)\.run\?\.canceled\) throw new CancelledError\(\)/)
@@ -3609,7 +3610,7 @@ describe('T-147 - Audio Studio: the sliders name their undo step, the cards clos
   it('the Export dialog\'s row names a running export that is another sound\'s, by the card\'s own words', () => {
     const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
     expect(dialog).toMatch(/import \{ audioJobRow \} from '\.\/AudioJobRunning'/)
-    expect(dialog).toMatch(/running && exportSource !== source\?\.filePath \? \(audioJobRow\(\{ running, job: exportJob, sourceName: exportName \}\)\?\.label \?\? null\) : null/)
+    expect(dialog).toMatch(/running && \(source === null \|\| exportKey !== soundKey\(source\)\) \? \(audioJobRow\(\{ running, job: exportJob, sourceName: exportName \}\)\?\.label \?\? null\) : null/)
     expect(dialog).toMatch(/<span className="min-w-0 flex-1 truncate text-xs" title=\{otherSoundLabel\}>/)
   })
 })
@@ -4282,7 +4283,7 @@ describe('T-161 - the Variants dialog says what the card says; Delete board coun
   it('(7) the dialog shows the card\'s size note beside the JPG note, in the one block both states render', () => {
     const variants = strip(read('modules/image-studio/ThumbnailVariants.tsx'))
     expect(variants).toMatch(/import \{[^}]*\bthumbnailSizeNote\b[^}]*\} from '\.\/ExportDialog'/)
-    expect(variants).toMatch(/const sizeNote = thumbnailSizeNote\(out\.width, out\.height, doc\.background === 'transparent'\)/)
+    expect(variants).toMatch(/const sizeNote = thumbnailSizeNote\(out\.width, out\.height, doc\)/)
     expect(variants).toMatch(/\{sizeNote \? <p>\{sizeNote\}<\/p> : null\}\s*\{jpgNote \? <p>\{jpgNote\}<\/p> : null\}/)
     expect(variants.match(/\{outputLine\}/g), 'shown before and after Generate').toHaveLength(2)
   })
@@ -4402,8 +4403,8 @@ describe('T-163: the captions panel reads [] apart from null; the chat "+ Clip" 
   const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
   it('a no-speech run stores [] (not null) with no path, and the panel branches on it', () => {
     const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
-    expect(panel).toMatch(/setDerivedFor\(startedFor, \{ transcript: \[\] \}\)/)
-    expect(panel).not.toMatch(/setDerivedFor\(startedFor, \{ transcript: null \}\)/)
+    expect(panel).toMatch(/setDerivedFor\(startedKey, \{ transcript: \[\] \}\)/)
+    expect(panel).not.toMatch(/setDerivedFor\(startedKey, \{ transcript: null \}\)/)
     expect(panel).toMatch(/segments && segments\.length > 0/)
     expect(panel).toMatch(/segments === null && !srtPath && status\?\.ready/)
     expect(panel).toMatch(/segments !== null && segments\.length === 0 && !srtPath && job !== 'transcribe'/)
@@ -4468,8 +4469,8 @@ describe('T-164 (4)-(6): the Reframe row, the Export row\'s name and the Compile
   it('(5) the batch is begun with the person\'s file name, from the panel to the card', () => {
     expect(strip(read('modules/video-studio/ExportPanel.tsx'))).toMatch(/sourceName: source\.fileName/)
     const queue = strip(read('modules/video-studio/store/exportQueue.ts'))
-    expect(queue).toMatch(/begin: \(statuses, sourcePath, sourceName\) =>/)
-    expect(queue).toMatch(/set\(\{ jobs: statuses, running: true, sourcePath, sourceName \}\)/)
+    expect(queue).toMatch(/begin: \(statuses, sourcePath, sourceName, sourceKey\) =>/)
+    expect(queue).toMatch(/set\(\{ jobs: statuses, running: true, sourcePath, sourceName, sourceKey \}\)/)
     expect(strip(read('modules/video-studio/VideoJobsRunning.tsx'))).toMatch(/q\.sourceName/)
   })
 
@@ -4497,14 +4498,16 @@ describe('T-164 (7), (9), (10) - the paste listener stands down for a text field
     expect(body.indexOf('preventDefault'), 'before any preventDefault (the field gets its text)').toBeGreaterThan(guard)
   })
 
-  it('each tile button (the empty state, the Templates dialog, the Asset Library) lays its content from the top', () => {
+  it('each tile button (the empty state, the Templates dialog, the Asset Library) lays its content from the top: all three draw SpecCard, whose button does (T-172 (6))', () => {
     for (const file of ['modules/image-studio/ImportPanel.tsx', 'modules/image-studio/TemplatesDialog.tsx', 'modules/references/AssetLibraryPanel.tsx']) {
       const src = strip(read(file))
-      const tile = src.match(/className="card p-3 [^"]*hover:border-accent[^"]*"/)
-      expect(tile, `${file}: the tile's className`).not.toBeNull()
-      expect(tile?.[0], file).toMatch(/\bflex flex-col justify-start items-stretch\b/)
-      expect(tile?.[0], `${file}: still left-aligned text`).toMatch(/\btext-left\b/)
+      expect(src, `${file}: draws the shared card`).toMatch(/<SpecCard\b/)
+      expect(src, `${file}: no hand-written tile left`).not.toMatch(/hover:border-accent/)
     }
+    const tile = strip(read('components/SpecCard.tsx')).match(/className="card p-3 [^"]*hover:border-accent[^"]*"/)
+    expect(tile, "SpecCard's tile className").not.toBeNull()
+    expect(tile?.[0]).toMatch(/\bflex flex-col justify-start items-stretch\b/)
+    expect(tile?.[0], 'still left-aligned text').toMatch(/\btext-left\b/)
   })
 
   it('the webcam hint is the plain sentence and the developer words are gone', () => {
@@ -4523,17 +4526,17 @@ describe('T-170 Track A: the other-video line and the always-fresh status', () =
     expect(runs).toMatch(/useReframeRun = createRunStore<\{ jobId: string;? name: string;? videoPath: string;? fileName: string;? percent: number \| null;? phase: ReframePhase;? \}>/)
     expect(runs).toMatch(/useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in'; name: string; videoPath: string \}>/)
     const captions = strip(read('modules/video-studio/CaptionsPanel.tsx'))
-    expect(captions).toMatch(/begin\(\{ job: 'transcribe', name: startedName, videoPath: startedFor \}\)/)
-    expect(captions).toMatch(/begin\(\{ job: 'burn-in', name: source\.fileName, videoPath: source\.filePath \}\)/)
-    expect(strip(read('modules/video-studio/ReframePanel.tsx'))).toMatch(/begin\(\{ jobId, name: clip\.name, videoPath: source\.filePath, fileName: source\.fileName, percent: null, phase: 'starting' \}\)/)
+    expect(captions).toMatch(/begin\(\{ job: 'transcribe', name: startedName, videoPath: startedKey \}\)/)
+    expect(captions).toMatch(/begin\(\{ job: 'burn-in', name: source\.fileName, videoPath: videoKey\(source\) \}\)/)
+    expect(strip(read('modules/video-studio/ReframePanel.tsx'))).toMatch(/begin\(\{ jobId, name: clip\.name, videoPath: videoKey\(source\), fileName: source\.fileName, percent: null, phase: 'starting' \}\)/)
   })
 
   it('(2) each panel draws one line, only while the run is another video\'s, whole as its title - and the sentences are the ticket\'s', () => {
     const captions = strip(read('modules/video-studio/CaptionsPanel.tsx')).replace(/\s+/g, ' ')
-    expect(captions).toMatch(/\{captionsRun && captionsRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title=\{otherVideoSentence\}>/)
+    expect(captions).toMatch(/\{captionsRun && captionsRun\.videoPath !== videoKey\(source\) \? \( <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title=\{otherVideoSentence\}>/)
     expect(captions).toContain("`Started on another video: ${captionsRun.job === 'burn-in' ? 'caption burn-in on' : 'transcription of'} ${captionsRun.name}.`")
     const reframe = strip(read('modules/video-studio/ReframePanel.tsx')).replace(/\s+/g, ' ')
-    expect(reframe).toMatch(/\{reframeRun && reframeRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title=\{otherVideoSentence\}>/)
+    expect(reframe).toMatch(/\{reframeRun && reframeRun\.videoPath !== videoKey\(source\) \? \( <p className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words" title=\{otherVideoSentence\}>/)
     expect(reframe).toContain('`Started on another video: reframe of ${reframeRun.name} from ${reframeRun.fileName}.`')
   })
 
@@ -4544,8 +4547,8 @@ describe('T-170 Track A: the other-video line and the always-fresh status', () =
     const fresh = body.indexOf('const fresh = await window.api.captions.status()')
     expect(fresh, 'the press reads main').toBeGreaterThan(-1)
     expect(body.indexOf('useCaptionsStatus.setState({ status: fresh })'), 'stores it').toBeGreaterThan(fresh)
-    expect(body.indexOf('!== pressedFor) return'), 'drops a press for a video that is gone').toBeGreaterThan(fresh)
-    expect(body.indexOf('if (!fresh.ready) {'), 'and only a fresh not-ready opens the setup').toBeGreaterThan(body.indexOf('!== pressedFor) return'))
+    expect(body.indexOf('videoKey(openNow) !== pressedKey) return'), 'drops a press for a video that is gone').toBeGreaterThan(fresh)
+    expect(body.indexOf('if (!fresh.ready) {'), 'and only a fresh not-ready opens the setup').toBeGreaterThan(body.indexOf('videoKey(openNow) !== pressedKey) return'))
     expect(body.indexOf('useCaptionsRun.getState().begin('), 'before the job is claimed').toBeGreaterThan(body.indexOf('if (!fresh.ready) {'))
   })
 })
@@ -4559,25 +4562,25 @@ describe('T-171 Track A: the other-video line and the rename selection are wired
     const runs = strip(read('modules/video-studio/store/runs.ts')).replace(/\s+/g, ' ')
     expect(runs).toContain('useGifRun = createRunStore<{ jobId: string; name: string; videoPath: string; fileName: string }>()')
     expect(runs).toContain('useKitRun = createRunStore<{ clipId: string; clipName: string; videoPath: string; fileName: string; phase: string; canceled: boolean }>()')
-    expect(strip(read('modules/video-studio/GifPanel.tsx'))).toMatch(/begin\(\{ jobId, name: clip\.name, videoPath: source\.filePath, fileName: source\.fileName \}\)/)
-    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, videoPath: source\.filePath, fileName: source\.fileName, phase: '', canceled: false \}\)/)
+    expect(strip(read('modules/video-studio/GifPanel.tsx'))).toMatch(/begin\(\{ jobId, name: clip\.name, videoPath: videoKey\(source\), fileName: source\.fileName \}\)/)
+    expect(strip(read('modules/video-studio/ClipKitButton.tsx'))).toMatch(/begin\(\{ clipId: clip\.id, clipName: clip\.name, videoPath: videoKey\(source\), fileName: source\.fileName, phase: '', canceled: false \}\)/)
   })
 
   it('(4)(6) every panel draws its line with the clause first, two lines at most, the whole sentence as its title - and only for another video\'s run', () => {
     const gif = strip(read('modules/video-studio/GifPanel.tsx')).replace(/\s+/g, ' ')
-    expect(gif).toContain('{gifRun && gifRun.videoPath !== source.filePath ? ( <p className="' + OTHER_LINE + '" title={`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}')
-    expect(gif.indexOf('gifRun.videoPath !== source.filePath'), 'above the busy row').toBeLessThan(gif.indexOf('{busy ? ('))
+    expect(gif).toContain('{gifRun && gifRun.videoPath !== videoKey(source) ? ( <p className="' + OTHER_LINE + '" title={`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}')
+    expect(gif.indexOf('gifRun.videoPath !== videoKey(source)'), 'above the busy row').toBeLessThan(gif.indexOf('{busy ? ('))
     const exp = strip(read('modules/video-studio/ExportPanel.tsx')).replace(/\s+/g, ' ')
-    expect(exp).toContain('{running && queueSource !== source.filePath && queueSourceName ? ( <p className="' + OTHER_LINE + '" title={`Started on another video: export of ${queueSourceName}.`} > Started on another video: export of {queueSourceName}. </p>')
+    expect(exp).toContain('{running && queueSourceKey !== videoKey(source) && queueSourceName ? ( <p className="' + OTHER_LINE + '" title={`Started on another video: export of ${queueSourceName}.`} > Started on another video: export of {queueSourceName}. </p>')
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx')).replace(/\s+/g, ' ')
-    expect(kit).toContain('kitRun.videoPath !== source.filePath ? ( <p className="max-w-full min-w-0 line-clamp-2 break-words text-right text-xs text-ink-dim" title={kitOtherVideoCaption(kitRun.clipName, kitRun.fileName)} >')
+    expect(kit).toContain('kitRun.videoPath !== videoKey(source) ? ( <p className="max-w-full min-w-0 line-clamp-2 break-words text-xs text-ink-dim" title={kitOtherVideoCaption(kitRun.clipName, kitRun.fileName)} >')
     expect(kit, 'on its own video the caption is still the clip\'s').toContain('<span className="max-w-full truncate text-xs text-ink-muted" title={kitRunCaption(kitRun.clipName)}>')
     expect(kit).not.toMatch(/Export of \{queueSourceName\}/)
   })
 
   it('(4) the job card names a Reframe started on another video, and says so under the rows', () => {
     const card = strip(read('modules/video-studio/VideoJobsRunning.tsx')).replace(/\s+/g, ' ')
-    expect(card).toContain('const reframeElsewhere = videoOpen && snap.reframe !== null && snap.reframe.videoPath !== source.filePath')
+    expect(card).toContain('const reframeElsewhere = videoOpen && snap.reframe !== null && snap.reframe.videoPath !== videoKey(source)')
     expect(card).toContain("named('Reframe', `${snap.reframe.name} from ${snap.reframe.fileName}`)")
     expect(card).toContain("'Started on another video; the reframe keeps going until it finishes or you cancel it.'")
   })
@@ -4612,6 +4615,97 @@ describe('T-171 Track B - Record and Audio say and show what is so', () => {
     expect(start).toMatch(
       /abandonStart\(\)\s*if \(err instanceof MicStartFailure\) \{\s*const \{ message \} = userFacingError\(err\.original, "Couldn't start recording\."\)\s*toast\.error\(`\$\{message\} \$\{MIC_START_REMEDY\}`, \{ duration: ERROR_TOAST_MS \}\)/
     )
-    expect(studio).toContain("const MIC_START_REMEDY = 'To record without it, untick Record microphone.'")
+    expect(studio).toContain("const MIC_START_REMEDY = 'To record without it, uncheck Record microphone.'")
+  })
+})
+
+// T-172 Track A (2), (5): one identity for "the same video" - `videoKey(source)`, the original the person opened - in every same-video comparison and in the three `set*For` guards, while a job's input stays
+// the real working copy. E2E: video-pipelines.spec.ts "T-172 Track A" (an .flv re-opened after a Close keeps its running jobs, rows and late results; a different file still gets the line and the refusal).
+describe('T-172 Track A: the same video is the original the person opened', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const flat = (rel: string): string => strip(read(rel)).replace(/\s+/g, ' ')
+  const PANELS = ['CaptionsPanel', 'HighlightPanel', 'ReframePanel', 'GifPanel', 'ClipKitButton', 'ExportPanel', 'VideoJobsRunning', 'Player'].map((f) => `modules/video-studio/${f}.tsx`)
+
+  it('videoKey is `convertedFrom ?? filePath`, and the three guards compare it with the open video\'s key', () => {
+    const store = flat('modules/video-studio/store/videoStore.ts')
+    expect(store).toContain("export function videoKey(source: Pick<VideoSource, 'filePath' | 'convertedFrom'>): string { return source.convertedFrom ?? source.filePath }")
+    for (const setter of ['setSrtPathFor', 'setDerivedFor', 'setPreviewCopyFor']) {
+      expect(store, setter).toMatch(new RegExp(`${setter}: \\(key, [^)]*\\) => \\{ const open = get\\(\\)\\.source if \\(open === null \\|\\| videoKey\\(open\\) !== key\\) return false`))
+    }
+    expect(store, 'no guard asks for the working copy any more').not.toMatch(/get\(\)\.source\?\.filePath !== /)
+  })
+
+  it('no panel asks "is this job\'s video the open one" with the working copy\'s path', () => {
+    for (const rel of PANELS) {
+      const src = strip(read(rel))
+      expect(src, rel).not.toMatch(/(videoPath|queueSource\w*|sourcePath)\s*[!=]==\s*source\??\.filePath/)
+      expect(src, rel).not.toMatch(/source\??\.filePath\s*[!=]==\s*(pressedFor|startedFor|queueSource\w*|\w+Run\??\.videoPath)/)
+    }
+  })
+
+  it('every caller passes the key it took at the start, and main still gets the working copy', () => {
+    const captions = flat('modules/video-studio/CaptionsPanel.tsx')
+    expect(captions).toContain('const startedKey = videoKey(source)')
+    expect(captions).toMatch(/sourcePath: startedFor \}\)/)
+    expect(captions).toContain('const pressedKey = videoKey(source)')
+    expect(captions).toContain('const openNow = useVideoStore.getState().source if (openNow === null || videoKey(openNow) !== pressedKey) return')
+    expect(captions, 'Clear transcripts forgets the open video\'s transcript by the key too').toMatch(/const startedKey = source \? videoKey\(source\) : undefined/)
+    expect(captions).toContain('if (startedKey) setSrtPathFor(startedKey, null)')
+    const scan = flat('modules/video-studio/HighlightPanel.tsx')
+    expect(scan).toContain('const startedKey = videoKey(source)')
+    expect(scan).toContain('findHighlights(startedFor)')
+    const player = flat('modules/video-studio/Player.tsx')
+    expect(player).toContain('const startedKey = videoKey(source)')
+    expect(player).toContain('convertForImport(startedFor)')
+  })
+
+  it('every video run is begun with the key and compared with the key; Export\'s queue holds both the working copy and the key', () => {
+    expect(flat('modules/video-studio/GifPanel.tsx')).toContain('{gifRun && gifRun.videoPath !== videoKey(source) ? (')
+    expect(flat('modules/video-studio/ReframePanel.tsx')).toContain('{reframeRun && reframeRun.videoPath !== videoKey(source) ? (')
+    expect(flat('modules/video-studio/ClipKitButton.tsx')).toContain('kitRun.videoPath !== videoKey(source) ? (')
+    expect(flat('modules/video-studio/CaptionsPanel.tsx')).toContain('{captionsRun && captionsRun.videoPath !== videoKey(source) ? (')
+    expect(flat('modules/video-studio/VideoJobsRunning.tsx')).toContain('snap.reframe.videoPath !== videoKey(source)')
+    const exp = flat('modules/video-studio/ExportPanel.tsx')
+    expect(exp).toContain('const queueSourceKey = useExportQueue((s) => s.sourceKey)')
+    expect(exp).toContain('(running || (source !== null && queueSourceKey === videoKey(source))) ? queueJobs : []')
+    expect(exp).toContain('{running && queueSourceKey !== videoKey(source) && queueSourceName ? (')
+    expect(exp, 'the batch\'s inputs are still the working copy').toContain('sourcePath: source.filePath,')
+    const queue = flat('modules/video-studio/store/exportQueue.ts')
+    expect(queue).toContain('begin: (statuses, sourcePath, sourceName, sourceKey) => {')
+    expect(flat('modules/video-studio/VideoJobsRunning.tsx'), 'the closed-video card still falls back to the path\'s basename').toContain('q.sourcePath ? basename(q.sourcePath)')
+  })
+
+  it('(5) the Clip Kit\'s other-video caption is not right-aligned: the clamp\'s ellipsis is drawn at the end of a left-aligned line', () => {
+    const kit = flat('modules/video-studio/ClipKitButton.tsx')
+    expect(kit).toContain('className="max-w-full min-w-0 line-clamp-2 break-words text-xs text-ink-dim" title={kitOtherVideoCaption(kitRun.clipName, kitRun.fileName)}')
+    expect(kit).not.toMatch(/line-clamp-2[^"]*text-right/)
+  })
+})
+
+describe('T-172 Track C - the same sound is the same sound (Audio Studio)', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(7) soundKey is the file the person opened, in that order', () => {
+    const store = strip(read('modules/audio-studio/state/audioStore.ts')).replace(/\s+/g, ' ')
+    expect(store).toContain(
+      "export function soundKey(source: Pick<AudioSource, 'filePath' | 'fromVideo' | 'extractedFrom'>): string { return source.fromVideo?.convertedFrom ?? source.fromVideo?.videoPath ?? source.extractedFrom ?? source.filePath }"
+    )
+  })
+
+  it('(7) the export row and the other-sound label compare soundKey; the export records it at begin; the default name reads it', () => {
+    const dialog = strip(read('modules/audio-studio/ExportDialog.tsx')).replace(/\s+/g, ' ')
+    expect(dialog).toContain('const exportKey = useAudioExport((s) => s.sourceKey)')
+    expect(dialog).toContain('(running || (source !== null && exportKey === soundKey(source)))')
+    expect(dialog).toContain('running && (source === null || exportKey !== soundKey(source))')
+    expect(dialog).toContain('.begin({ jobId, pass: plan[0] ?? \'render\', plan, percent: 0 }, soundKey(source), source.fileName)')
+    expect(dialog).toContain('suggestOutputName(soundKey(source), saveFormat)')
+    expect(dialog, 'no comparison against the scratch path is left').not.toMatch(/(===|!==) source\??\.filePath/)
+  })
+
+  it('(7) the export store holds the key, not a path', () => {
+    const exp = strip(read('modules/audio-studio/state/audioExport.ts')).replace(/\s+/g, ' ')
+    expect(exp).toContain('sourceKey: string | null')
+    expect(exp).toContain('set({ job, running: true, sourceKey, sourceName })')
+    expect(exp).not.toContain('sourcePath')
   })
 })

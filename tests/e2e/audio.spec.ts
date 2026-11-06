@@ -5859,3 +5859,127 @@ test.describe('T-171 Track B (3): the Platform list offers Custom only while the
     }
   })
 })
+
+// ── T-172 Track C (7): the same sound is the same sound ───────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// A video's sound and an AIFF / WMA are played from a fresh `<nanoid10>.wav` extracted on EVERY open, and the export row and its "Export — <name>" label compared that scratch
+// path: re-open the same file while its export ran and the panel named the open sound as another's, and the row (the "Show in folder" of the finished file) vanished
+// when the export ended. The identity is the file the person opened (`soundKey`). The render is slowed (`-readrate` in main's `spawn`, as T-146 / T-147 do) so it is
+// mid-run while the sound is closed and opened again.
+test.describe('T-172 Track C (7): a sound re-opened from the same file is the same sound', () => {
+  const closeButton = (window: Page) => window.locator('header').getByRole('button', { name: 'Close', exact: true })
+
+  async function slowEveryRender(app: ElectronApplication, rate: number): Promise<void> {
+    await app.evaluate((_e, r) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const cp = getBuiltin('node:child_process') as { spawn: (...a: unknown[]) => unknown }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const real = cp.spawn
+      cp.spawn = (cmd: unknown, args: unknown, opts: unknown) => {
+        const argv = Array.isArray(args) ? (args as string[]) : []
+        const input = argv.indexOf('-i')
+        if (!/ffmpeg/i.test(String(cmd)) || input < 0 || !argv.includes('-progress')) return real(cmd, args, opts)
+        return real(cmd, [...argv.slice(0, input), '-readrate', String(r), ...argv.slice(input)], opts)
+      }
+      mod.syncBuiltinESMExports()
+    }, rate)
+  }
+
+  /** Start the export, close the sound (the export goes on), and open `reopen` in the importer. Returns the Export panel, with the running export drawn in it. */
+  async function holdCloseReopen(
+    studio: Studio,
+    first: { file: string; name: string; target: string; running: string },
+    reopen: { file: string; name: string }
+  ): Promise<ReturnType<Page['locator']>> {
+    const { app, window } = studio
+    await stubSaveDialog(app, first.target)
+    await slowEveryRender(app, 0.25)
+    const panel = window.locator(EXPORT)
+    await panel.getByRole('button', { name: 'Export', exact: true }).click()
+    await expect(panel, 'the export is under way').toContainText(first.running, { timeout: 60_000 })
+    await closeButton(window).click()
+    await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 10_000 })
+    await dropOnImporter(window, reopen.file, reopen.name)
+    await expect(playButton(window)).toBeEnabled({ timeout: 120_000 })
+    await expect(window.locator('header').getByText(reopen.name, { exact: true })).toBeVisible()
+    return panel
+  }
+
+  test('a VIDEO\'s sound re-opened while its re-attach export runs: no other-sound label, and the finished row (Show in folder) is still drawn', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t172c-video')
+    const { window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't172c-clip-cleaned.mp4')
+      const panel = await holdCloseReopen(studio, { file: video, name: 'e2e-clip.mp4', target, running: 'Step 1 of 2' }, { file: video, name: 'e2e-clip.mp4' })
+
+      // The same video, a NEW scratch WAV: the running export is THIS sound's, so the row carries no name.
+      await expect(panel, 'the export is still drawn here').toContainText('Step ')
+      await expect(panel.getByText(/^Export — /), 'the same video is not "another sound"').toHaveCount(0)
+
+      // Released and ended: the finished row stays under the same video.
+      const show = panel.getByRole('button', { name: 'Show in folder', exact: true })
+      await expect(show, 'the row outlives the export under the same video').toBeVisible({ timeout: 150_000 })
+      await expect(panel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled()
+      expect((await probeFile(target)).codecs.sort(), 'and the file is a real video with sound').toEqual(['aac', 'h264'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an AIFF re-opened while its export runs: the same, for a sound taken from an audio file', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t172c-aiff')
+    const { window } = studio
+    try {
+      const aiff = path.join(studio.root, 'source', 'take two.aiff')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=3', '-ar', '44100', '-ac', '2', aiff])
+      if (made.code !== 0) throw new Error(`fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-800)}`)
+      await dropOnImporter(window, aiff, 'take two.aiff')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't172c-take-cleaned.mp3')
+      const panel = await holdCloseReopen(studio, { file: aiff, name: 'take two.aiff', target, running: 'Rendering' }, { file: aiff, name: 'take two.aiff' })
+
+      await expect(panel, 'the export is still drawn here').toContainText('Rendering')
+      await expect(panel.getByText(/^Export — /), 'the same AIFF is not "another sound"').toHaveCount(0)
+      await expect(panel.getByRole('button', { name: 'Show in folder', exact: true }), 'the row outlives the export').toBeVisible({ timeout: 150_000 })
+      expect((await probeFile(target)).codecs, 'and the file is a real mp3').toEqual(['mp3'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: a DIFFERENT file opened while the export runs keeps the label naming the export\'s file', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t172c-other')
+    const { window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      const other = path.join(studio.root, 'source', 'other-clip.mp4')
+      await makeFixtureMp4(video)
+      copyFileSync(video, other)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const outDir = path.join(studio.root, 'out')
+      mkdirSync(outDir, { recursive: true })
+      const target = path.join(outDir, 't172c-control-cleaned.mp4')
+      const panel = await holdCloseReopen(studio, { file: video, name: 'e2e-clip.mp4', target, running: 'Step 1 of 2' }, { file: other, name: 'other-clip.mp4' })
+
+      await expect(panel.getByText('Export — e2e-clip.mp4', { exact: true }), 'another file is another sound: the row names the export\'s file').toBeVisible()
+      await panel.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Audio export canceled.')
+      await expect(panel.getByText(/^Export — /), 'the name goes with the running export').toHaveCount(0)
+      expect(existsSync(target), 'no file at the target').toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

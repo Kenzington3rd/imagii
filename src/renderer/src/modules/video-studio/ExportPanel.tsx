@@ -12,7 +12,7 @@ import { countOf } from '@shared/plural'
 import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/safeZone'
 import { assertDefined } from '@shared/assert'
 import { WATERMARK_POSITIONS, buildWatermark, isWatermarkPosition } from '@shared/watermark'
-import { useVideoStore } from './store/videoStore'
+import { useVideoStore, videoKey } from './store/videoStore'
 import { useKitRun } from './store/runs'
 import {
   cancelExportBatch,
@@ -180,11 +180,11 @@ export function ExportPanel(): JSX.Element | null {
   // T-155 (4): Clip Kit runs its exports as a batch of its own, and main runs one batch at a time: a press while the kit works was refused
   // after the fact and replaced the last batch's rows with Failed / Not run. Export waits for the kit, and says so.
   const kitRunning = useKitRun((s) => s.run) !== null
-  const queueSource = useExportQueue((s) => s.sourcePath)
+  const queueSourceKey = useExportQueue((s) => s.sourceKey)
   // T-168 (4): the name the person knows the batch's video by, for the line that says whose the running rows are when ANOTHER video is open (Audio's
   // `otherSoundLabel`, T-147 (2)).
   const queueSourceName = useExportQueue((s) => s.sourceName)
-  const jobs = queueJobs.length > 0 && (running || queueSource === source?.filePath) ? queueJobs : []
+  const jobs = queueJobs.length > 0 && (running || (source !== null && queueSourceKey === videoKey(source))) ? queueJobs : []
   // T-125 (18): one start at a time, claimed the instant the function runs. `running` is state, set only after the awaits in
   // `startExport` (the chooser, then `runExportQueue`'s settings writes), so a fast double-click ran a second start in that gap: main's
   // gate (T-111) refused the second batch and its catch settled the rows - Failed, Not run - while the first one ran. The ref is the
@@ -383,7 +383,7 @@ export function ExportPanel(): JSX.Element | null {
     // copy nobody notices going wrong.
     // T-135 (1): the batch runs in the queue's store (its listeners, its toast, its settling of the rows), not in this component: the person can
     // leave this studio while it runs, and it still ends where it should.
-    await runExportBatch({ queue, statuses, dir, sourcePath: source.filePath, sourceName: source.fileName })
+    await runExportBatch({ queue, statuses, dir, sourcePath: source.filePath, sourceName: source.fileName, sourceKey: videoKey(source) })
   }
 
   // Counts custom targets too, so the button's number is the number of files
@@ -597,7 +597,7 @@ export function ExportPanel(): JSX.Element | null {
           {/* T-168 (4): a batch keeps its rows while it runs, whatever video is open now - B's Export read "Exporting…" over A's rows and a Cancel nobody could
               attribute. The line names the video the batch is for; it is only said when it is not the open one (there the rows speak for themselves).
               T-171 (6): the clause first and two lines, so "started on another video" and the whole file name are on screen. */}
-          {running && queueSource !== source.filePath && queueSourceName ? (
+          {running && queueSourceKey !== videoKey(source) && queueSourceName ? (
             <p
               className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words"
               title={`Started on another video: export of ${queueSourceName}.`}

@@ -4,7 +4,7 @@ import type { AudioOutputFormat } from '@shared/audio'
 import { AUDIO_FORMAT_LABELS, audioPassLabel, audioPassPlan } from '@shared/audio'
 import { assertDefined } from '@shared/assert'
 import { landedBesideNote } from '@shared/landedPath'
-import { useAudioStore } from './state/audioStore'
+import { soundKey, useAudioStore } from './state/audioStore'
 import { cancelAudioExport, useAudioExport } from './state/audioExport'
 import { audioJobRow } from './AudioJobRunning'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -26,13 +26,13 @@ export function ExportDialog(): JSX.Element | null {
   // back idle (Export enabled, no Cancel) over an export main was still rendering. The row is drawn for the file it was made from (or while it runs).
   const exportJob = useAudioExport((s) => s.job)
   const running = useAudioExport((s) => s.running)
-  const exportSource = useAudioExport((s) => s.sourcePath)
+  const exportKey = useAudioExport((s) => s.sourceKey)
   const exportName = useAudioExport((s) => s.sourceName)
-  const job = exportJob !== null && (running || exportSource === source?.filePath) ? exportJob : null
+  const job = exportJob !== null && (running || (source !== null && exportKey === soundKey(source))) ? exportJob : null
   // T-147 (2): "Export — voice.wav", the card's own words (`audioJobRow`), for a running export that belongs to ANOTHER sound than the one open here.
   // T-149 (fold): while this name is drawn, the pass label beside it sizes to its text (the fixed `w-56` slot only keeps the bar in one place when there is no name):
   // at 1024 px the name was cut to ~146 px beside a 224 px slot holding ~70 px of text.
-  const otherSoundLabel = running && exportSource !== source?.filePath ? (audioJobRow({ running, job: exportJob, sourceName: exportName })?.label ?? null) : null
+  const otherSoundLabel = running && (source === null || exportKey !== soundKey(source)) ? (audioJobRow({ running, job: exportJob, sourceName: exportName })?.label ?? null) : null
   // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
   // `busy` state is set only after the awaits in the start (the save dialog), so a double-click ran a second start
   // in that gap: two save dialogs, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
@@ -54,10 +54,7 @@ export function ExportDialog(): JSX.Element | null {
       try {
         // T-125 (7, 22): the name is the person's file's, never the scratch's: the ORIGINAL of a converted import (the video's working copy
         // is `stream-aB3dE5fG.mp4`), a video as it is, or the AIFF / WMA a sound was taken from, before the scratch WAV it is played from.
-        const defaultName = await window.api.audio.suggestOutputName(
-          source.fromVideo?.convertedFrom ?? source.fromVideo?.videoPath ?? source.extractedFrom ?? source.filePath,
-          saveFormat
-        )
+        const defaultName = await window.api.audio.suggestOutputName(soundKey(source), saveFormat)
         outputPath = await window.api.audio.pickOutputFile({ defaultName, format: saveFormat })
       } catch (err) {
         // Before the first await this was outside any catch: a rejection here
@@ -76,7 +73,7 @@ export function ExportDialog(): JSX.Element | null {
         reattach: Boolean(source.fromVideo && muxBack),
         matchLoudness: Boolean(chain.secondaryTrack?.matchLoudness)
       })
-      if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, source.filePath, source.fileName)) return
+      if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, soundKey(source), source.fileName)) return
       // The progress listener is this export's own, for as long as it runs (the store holds the row, so it works with this dialog gone).
       const offProgress = window.api.audio.onProgress((p) => useAudioExport.getState().progress(p))
       try {

@@ -68,6 +68,12 @@ strokes, `currentColor`.
 Repeated UI is a component, not copy-paste:
 
 - **`HomeLink`** — the "back to Home" link in every studio header.
+- **`SpecCard`** (`components/SpecCard.tsx`, T-172) — the card for a ready-made canvas: a button with the
+  document's thumbnail (its background at its aspect ratio, the `CHECKER_A` / `CHECKER_B` checkerboard when
+  it is transparent), the name, the description and "W × H", plus an optional `extra` line under the size (the
+  Asset Library's license, in italics). The Import panel's template grid, the Streamer templates dialog and
+  the Asset Library draw it, so the three cannot drift (image.spec.ts and references.spec.ts read the same
+  structure at every site).
 - **`OutputDirLabel`** — the folder-icon + basename chip in export
   panels. Its `basename()` helper is pure and unit-tested. The chip draws an icon
   and a folder's name, so the button's accessible name used to be just "Videos"; a

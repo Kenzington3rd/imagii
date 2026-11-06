@@ -26,12 +26,12 @@ export interface AudioExportJob {
 interface AudioExportState {
   job: AudioExportJob | null
   running: boolean
-  /** The file the export was made from: the row is drawn for that file (or while it runs), not under another one. */
-  sourcePath: string | null
+  /** The sound the export was made from, as `soundKey` names it (the file the person opened, never a scratch WAV that is new on every open): the row is drawn for that sound (or while it runs), not under another one. */
+  sourceKey: string | null
   /** That file as the person knows it (the studio header's name: a video's own, never the scratch copy the sound is read from); the closed-sound card names it (T-146). */
   sourceName: string | null
   /** Claim the export with its first row. False, and nothing changes, if one is already running. */
-  begin: (job: AudioExportJob, sourcePath: string, sourceName: string) => boolean
+  begin: (job: AudioExportJob, sourceKey: string, sourceName: string) => boolean
   progress: (p: AudioJobProgress) => void
   done: (outputPath: string) => void
   fail: (end: { error: string; canceled: boolean }) => void
@@ -41,11 +41,11 @@ interface AudioExportState {
 export const useAudioExport = create<AudioExportState>((set, get) => ({
   job: null,
   running: false,
-  sourcePath: null,
+  sourceKey: null,
   sourceName: null,
-  begin: (job, sourcePath, sourceName) => {
+  begin: (job, sourceKey, sourceName) => {
     if (get().running) return false
-    set({ job, running: true, sourcePath, sourceName })
+    set({ job, running: true, sourceKey, sourceName })
     return true
   },
   progress: (p) => {

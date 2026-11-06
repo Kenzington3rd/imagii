@@ -14927,3 +14927,308 @@ test.describe('T-171 Track A: a job started on another video says so, in words t
     })
   }
 })
+
+// ── T-172 Track A: a converted import re-opened is the same video ───────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// convert.ts names each working copy `<base>-<nanoid8>.mp4`, new on every open, so stream.flv closed and opened again was "another video" to every panel: "Started on another video: export of stream.flv." under
+// stream.flv, Export's rows gone when the batch ended, and a transcription or scan that finished afterwards refused. The identity is now the original the person opened (`videoKey`). The jobs are held in main
+// (the suite's pattern) so each is still running when the same file is opened again; the conversions themselves are real ffmpeg. (5) The Clip Kit's other-video caption was `text-right` on a two-line clamp, which
+// hid the ellipsis; it is aligned as the GIF, Export, Captions and Reframe lines are.
+test.describe('T-172 Track A: a converted import re-opened is the same video; the kit caption is aligned like its siblings', () => {
+  const OTHER = /Started on another video/
+  const STALE = /finished after that video was closed or replaced/
+  /** Replace main's handler for `channel` with one that waits for `releaseHeld(channel)`, then answers with `answer`. */
+  async function hold(app: ElectronApplication, channel: string, answer: unknown): Promise<void> {
+    await app.evaluate(
+      ({ ipcMain }, arg) => {
+        const g = globalThis as unknown as { __t172?: Record<string, () => void> }
+        g.__t172 = g.__t172 ?? {}
+        const gate = new Promise<void>((resolve) => {
+          ;(g.__t172 as Record<string, () => void>)[arg.channel] = resolve
+        })
+        ipcMain.removeHandler(arg.channel)
+        ipcMain.handle(arg.channel, async () => {
+          await gate
+          return arg.answer
+        })
+      },
+      { channel, answer }
+    )
+  }
+  const releaseHeld = (app: ElectronApplication, channel: string): Promise<void> =>
+    app.evaluate((_electron, ch) => (globalThis as unknown as { __t172: Record<string, () => void> }).__t172[ch]?.(), channel)
+  const READY = { exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }
+  const gifCard = (window: Page): Locator => window.locator('.card').filter({ hasText: 'Export as GIF' })
+  const staleToasts = (window: Page): Locator => window.locator('[data-rht-toaster] [role="status"]').filter({ hasText: STALE })
+
+  async function closeVideo(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+  /** Drop `file` on the importer and wait for it to be the open video (a converted container is converted first: real ffmpeg, a NEW working copy each time). */
+  async function openVideo(window: Page, file: string): Promise<void> {
+    await dropOnVideoImporter(window, file, path.basename(file))
+    await expect(window.locator('header').getByText(path.basename(file), { exact: true })).toBeVisible({ timeout: 120_000 })
+    await expect(window.locator('video')).toHaveCount(1)
+    await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+  }
+  /** Launch on Home with Export's folder remembered, go to Video Studio and open `file`. */
+  async function launchOn(name: string, file: string): Promise<Studio & { seeded: string }> {
+    const seeded = path.join(root, `t172-${name}-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const studio = await launchHome(name, { export: { lastOutputDir: seeded } })
+    await gotoVideoStudio(studio.window)
+    await installToastLog(studio.window)
+    await openVideo(studio.window, file)
+    return { ...studio, seeded }
+  }
+  /** A copy of `from` under `name` in the source folder (a different file to the person, the same picture). */
+  function twin(from: string, name: string): string {
+    const to = path.join(root, 'source', name)
+    copyFileSync(from, to)
+    return to
+  }
+  /** GIF, Reframe and an Export batch started and held in main, on the open video. */
+  async function startHeldJobs(app: ElectronApplication, window: Page, outDir: string): Promise<void> {
+    await stubDialogs(app, { open: [outDir] })
+    await hold(app, 'video:exportGif', { outputPath: path.join(outDir, 'held.gif') })
+    await hold(app, 'video:reframe', { outputPath: path.join(outDir, 'held-reframe.mp4') })
+    await hold(app, 'video:exportBatch', [])
+    await gifCard(window).getByRole('button', { name: 'Export GIF' }).click()
+    await expect(gifCard(window).getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+    await reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' }).click()
+    await expect(reframeCard(window).getByRole('button', { name: 'Reframing…' })).toBeDisabled()
+    await exportCard(window).getByRole('button', { name: /^Export 1/ }).click()
+    await expect(exportCard(window).getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+    await expect(exportCard(window).getByRole('progressbar', { name: 'Clip 1 · YouTube' }), 'the rows are on screen on the video the batch is for').toBeVisible()
+  }
+  async function releaseHeldJobs(app: ElectronApplication): Promise<void> {
+    await releaseHeld(app, 'video:exportGif')
+    await releaseHeld(app, 'video:reframe')
+    await releaseHeld(app, 'video:exportBatch')
+  }
+  async function expectJobsEnded(window: Page): Promise<void> {
+    await expect(gifCard(window).getByRole('button', { name: 'Export GIF' })).toBeEnabled({ timeout: 15_000 })
+    await expect(reframeCard(window).getByRole('button', { name: 'Reframe to 9:16' })).toBeEnabled({ timeout: 15_000 })
+    await expect(exportCard(window).getByRole('button', { name: /^Export 1/ })).toBeEnabled({ timeout: 15_000 })
+  }
+
+  for (const [what, file, shown] of [
+    ['an .flv (a converted import: a NEW working copy on every open)', 'flv', 'stream.flv'],
+    ['an .mp4 (the control: its path never changed)', 'mp4', 't172-same.mp4']
+  ] as const) {
+    test(`(2) ${what}: GIF, Reframe and an export held, Close, the SAME file opened again - no "Started on another video" line anywhere, and Export's rows are still drawn after the batch ends`, async () => {
+      test.setTimeout(420_000)
+      const target = file === 'mp4' ? twin(clipSrc, shown) : flvSrc
+      const { app, window, outDir } = await launchOn('t172same', target)
+      try {
+        await startHeldJobs(app, window, outDir)
+        await window.waitForTimeout(300)
+        for (const card of [gifCard(window), reframeCard(window), exportCard(window)]) {
+          await expect(card.getByText(OTHER), 'control: on the video the jobs are for there is nothing to explain').toHaveCount(0)
+        }
+
+        await closeVideo(window)
+        await openVideo(window, target)
+        await expect(gifCard(window).getByRole('button', { name: 'Exporting…' }), 'the GIF still runs').toBeDisabled()
+        await expect(reframeCard(window).getByRole('button', { name: 'Reframing…' }), 'the Reframe still runs').toBeDisabled()
+        await expect(exportCard(window).getByRole('button', { name: 'Exporting…' }), 'the batch still runs').toBeDisabled()
+        await window.waitForTimeout(300)
+        await expect(gifCard(window).getByText(OTHER), `the GIF is ${shown}'s, and ${shown} is open`).toHaveCount(0)
+        await expect(reframeCard(window).getByText(OTHER), `the Reframe is ${shown}'s`).toHaveCount(0)
+        await expect(exportCard(window).getByText(OTHER), `the batch is ${shown}'s`).toHaveCount(0)
+        await expect(exportCard(window).getByRole('progressbar', { name: 'Clip 1 · YouTube' }), 'its rows are still drawn').toBeVisible()
+
+        await releaseHeldJobs(app)
+        await expectJobsEnded(window)
+        await expect(exportCard(window).getByRole('progressbar', { name: 'Clip 1 · YouTube' }), `a finished batch keeps its rows under ${shown}`).toBeVisible()
+        await expect(exportCard(window).getByRole('heading', { name: 'Queue' })).toBeVisible()
+      } finally {
+        await app.close().catch(() => undefined)
+      }
+    })
+
+    test(`(2) ${what}: a scan and a transcription held, Close, the SAME file opened again, both released - the late candidates and the late transcript LAND, with no "finished after that video was closed or replaced" toast`, async () => {
+      test.setTimeout(420_000)
+      const target = file === 'mp4' ? twin(clipSrc, shown) : flvSrc
+      const { app, window, seeded } = await launchOn('t172late', target)
+      try {
+        const srt = path.join(seeded, 't172.srt')
+        writeFileSync(srt, '1\n00:00:00,000 --> 00:00:01,000\nwords from the held transcription\n')
+        await app.evaluate(({ ipcMain }, ready) => {
+          ipcMain.removeHandler('captions:status')
+          ipcMain.handle('captions:status', () => ready)
+        }, READY)
+        await hold(app, 'video:findHighlights', [{ startSec: 1, endSec: 1.9, peakDb: -10, reason: 'loud' }])
+        await hold(app, 'captions:transcribe', { jobId: 'x', srtPath: srt, segments: [{ startSec: 0, endSec: 1, text: 'words from the held transcription' }], durationMs: 5 })
+        await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+        await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeVisible()
+        await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+        await expect(captionsCard(window).getByRole('button', { name: 'Transcribing…' })).toBeVisible({ timeout: 15_000 })
+
+        await closeVideo(window)
+        await openVideo(window, target)
+        await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' }), 'the scan still runs').toBeVisible()
+        await expect(captionsCard(window).getByRole('button', { name: 'Transcribing…' }), 'the transcription still runs').toBeVisible()
+        await expect(captionsCard(window).getByText(OTHER), `it is ${shown}'s`).toHaveCount(0)
+
+        await releaseHeld(app, 'video:findHighlights')
+        await releaseHeld(app, 'captions:transcribe')
+        await expect(highlightCard(window).getByRole('button', { name: 'Re-scan' }), 'the late scan is stored for the same video').toBeVisible({ timeout: 30_000 })
+        await expect(highlightCard(window).getByRole('button', { name: 'Go to 0:01', exact: true }), 'with its candidate').toBeVisible()
+        await expect(captionsCard(window).getByText('words from the held transcription'), 'the late transcript is shown for the same video').toBeVisible({ timeout: 30_000 })
+        await expect(captionsCard(window).getByRole('button', { name: 'Burn into video' })).toBeEnabled()
+        await expect(staleToasts(window), 'no refusal on screen').toHaveCount(0)
+        expect((await readToastLog(window)).join(' | '), 'and none was raised').not.toMatch(STALE)
+      } finally {
+        await app.close().catch(() => undefined)
+      }
+    })
+  }
+
+  test('(2) controls: a DIFFERENT converted file opened after the Close keeps the line, the vanishing rows and the refusal, as before', async () => {
+    test.setTimeout(420_000)
+    const other = twin(flvSrc, 't172-other.flv')
+    const { app, window, outDir, seeded } = await launchOn('t172diff', flvSrc)
+    try {
+      const srt = path.join(seeded, 't172diff.srt')
+      writeFileSync(srt, '1\n00:00:00,000 --> 00:00:01,000\nwords\n')
+      await app.evaluate(({ ipcMain }, ready) => {
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', () => ready)
+      }, READY)
+      await startHeldJobs(app, window, outDir)
+      await hold(app, 'video:findHighlights', [{ startSec: 1, endSec: 1.9, peakDb: -10, reason: 'loud' }])
+      await hold(app, 'captions:transcribe', { jobId: 'x', srtPath: srt, segments: [{ startSec: 0, endSec: 1, text: 'words' }], durationMs: 5 })
+      await highlightCard(window).getByRole('button', { name: 'Scan VOD' }).click()
+      await expect(highlightCard(window).getByRole('button', { name: 'Scanning…' })).toBeVisible()
+      await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(captionsCard(window).getByRole('button', { name: 'Transcribing…' })).toBeVisible({ timeout: 15_000 })
+
+      await closeVideo(window)
+      await openVideo(window, other)
+      await expect(gifCard(window).getByText('Started on another video: GIF of Clip 1 from stream.flv.', { exact: true })).toBeVisible()
+      await expect(reframeCard(window).getByText('Started on another video: reframe of Clip 1 from stream.flv.', { exact: true })).toBeVisible()
+      await expect(exportCard(window).getByText('Started on another video: export of stream.flv.', { exact: true })).toBeVisible()
+      await expect(captionsCard(window).getByText('Started on another video: transcription of stream.flv.', { exact: true })).toBeVisible()
+
+      await releaseHeldJobs(app)
+      await expectJobsEnded(window)
+      await expect(exportCard(window).getByRole('progressbar', { name: 'Clip 1 · YouTube' }), 'another video\'s finished batch has no rows here').toHaveCount(0)
+      await releaseHeld(app, 'video:findHighlights')
+      await releaseHeld(app, 'captions:transcribe')
+      await expectToast(window, 'The scan of stream.flv finished after that video was closed or replaced')
+      await expectToast(window, 'Captions for stream.flv finished after that video was closed or replaced')
+      await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' }), 'nothing was stored for t172-other.flv').toBeVisible()
+      await expect(captionsCard(window).getByText('words', { exact: true })).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(2) a Transcribe pressed on an .flv whose status answer is still out, the .flv closed and opened again meanwhile: the press is for the same video, so the job starts', async () => {
+    test.setTimeout(300_000)
+    const { app, window, seeded } = await launchOn('t172press', flvSrc)
+    try {
+      const srt = path.join(seeded, 't172press.srt')
+      writeFileSync(srt, '1\n00:00:00,000 --> 00:00:01,000\nwords from the pressed transcription\n')
+      await app.evaluate(({ ipcMain }, arg) => {
+        const g = globalThis as unknown as { __t172calls: number }
+        g.__t172calls = 0
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', () => arg.ready)
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', () => {
+          g.__t172calls += 1
+          return { jobId: 'x', srtPath: arg.srt, segments: [{ startSec: 0, endSec: 1, text: 'words from the pressed transcription' }], durationMs: 5 }
+        })
+      }, { ready: READY, srt })
+      await expect(captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true })).toBeEnabled()
+      // From here main's answer to the press is held.
+      await hold(app, 'captions:status', READY)
+      await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await window.waitForTimeout(300)
+      await closeVideo(window)
+      await openVideo(window, flvSrc)
+      await releaseHeld(app, 'captions:status')
+      await expect(captionsCard(window).getByText('words from the pressed transcription'), 'the press was for stream.flv, and stream.flv is open').toBeVisible({ timeout: 30_000 })
+      expect(await app.evaluate(() => (globalThis as unknown as { __t172calls: number }).__t172calls), 'one job reached main').toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(2) a Clip Kit held on an .flv, Close, the SAME .flv opened again: the caption is the clip\'s (control: a different file opened gets the other-video sentence)', async () => {
+    test.setTimeout(420_000)
+    const other = twin(flvSrc, 't172-kit-other.flv')
+    const { app, window, outDir } = await launchOn('t172kitflv', flvSrc)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await hold(app, 'video:exportBatch', [])
+      const list = clipListCard(window)
+      await kitButton(window).click()
+      await expect(kitButton(window)).toHaveText('Exporting platform version 1 of 5…', { timeout: 60_000 })
+      await expect(list.getByText('Clip Kit for "Clip 1"', { exact: true })).toBeVisible()
+
+      await closeVideo(window)
+      await openVideo(window, flvSrc)
+      await expect(kitButton(window), 'the kit still runs under the same video').toHaveText('Exporting platform version 1 of 5…')
+      await expect(list.getByText('Clip Kit for "Clip 1"', { exact: true }), 'its caption is the clip\'s').toBeVisible()
+      await expect(list.getByText(OTHER), 'and says nothing about another video').toHaveCount(0)
+
+      // Control: with a DIFFERENT file open the same kit is named as another video's.
+      await closeVideo(window)
+      await openVideo(window, other)
+      await expect(list.getByText('Started on another video: Clip Kit for "Clip 1" from stream.flv.', { exact: true })).toBeVisible()
+
+      await list.getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await releaseHeld(app, 'video:exportBatch')
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(5) the Clip Kit\'s other-video caption for a 130-character file name is aligned as the GIF\'s other-video line is, not right-aligned', async () => {
+    test.setTimeout(300_000)
+    const name130 = `LONG_Season_Finale_${'x'.repeat(130 - 'LONG_Season_Finale_'.length - '.mp4'.length)}.mp4`
+    expect(name130).toHaveLength(130)
+    const fileA = twin(clipSrc, name130)
+    const fileB = twin(clipSrc, 't172-kit-b.mp4')
+    const { app, window, outDir } = await launchWithVideo('t172kit', fileA)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await hold(app, 'video:exportBatch', [])
+      await hold(app, 'video:exportGif', { outputPath: path.join(outDir, 'held.gif') })
+      await gifCard(window).getByRole('button', { name: 'Export GIF' }).click()
+      await expect(gifCard(window).getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await kitButton(window).click()
+      await expect(kitButton(window)).toHaveText('Exporting platform version 1 of 5…', { timeout: 60_000 })
+
+      await closeVideo(window)
+      await dropOnVideoImporter(window, fileB, path.basename(fileB))
+      await expect(window.locator('header').getByText(path.basename(fileB), { exact: true })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('video')).toHaveCount(1)
+      const kitLine = clipListCard(window).getByText(/Started on another video: Clip Kit/)
+      const gifLine = gifCard(window).getByText(/Started on another video: GIF/)
+      await expect(kitLine).toHaveCount(1)
+      await expect(gifLine).toHaveCount(1)
+      await kitLine.scrollIntoViewIfNeeded()
+      await expect(kitLine).toHaveAttribute('title', `Started on another video: Clip Kit for "Clip 1" from ${name130}.`)
+      const align = (l: Locator): Promise<string> => l.evaluate((el) => getComputedStyle(el).textAlign)
+      const gifAlign = await align(gifLine)
+      expect(gifAlign, 'the sibling line is not right-aligned').not.toBe('right')
+      expect(await align(kitLine), 'the kit caption is aligned as its sibling is').toBe(gifAlign)
+
+      await releaseHeld(app, 'video:exportGif')
+      await clipListCard(window).getByRole('button', { name: 'Cancel', exact: true }).click()
+      await window.getByRole('dialog').getByRole('button', { name: 'Cancel jobs' }).click()
+      await releaseHeld(app, 'video:exportBatch')
+      await expect(kitButton(window)).toHaveText('Clip Kit (5 + thumbs)', { timeout: 60_000 })
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})

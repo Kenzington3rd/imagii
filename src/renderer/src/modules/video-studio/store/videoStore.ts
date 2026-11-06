@@ -24,6 +24,16 @@ export interface VideoSource {
 }
 
 /**
+ * T-172 (2): ONE identity for "the same video" - the original file the person opened (`convertedFrom ?? filePath`), the name `fileName` shows and the
+ * path a saved project stores. NOT `filePath`: a converted import's working copy is `<base>-<nanoid8>.mp4`, new on every open, so stream.flv closed and
+ * opened again is a different `filePath` and the same video. Every "is this job's video the open one" question asks this; `filePath` stays for what
+ * goes to main (a job reads the working copy).
+ */
+export function videoKey(source: Pick<VideoSource, 'filePath' | 'convertedFrom'>): string {
+  return source.convertedFrom ?? source.filePath
+}
+
+/**
  * What the panels derive from the open video (T-135 (4)): the loud moments a scan found, the chat logs pasted into the two finders and the spikes
  * found in one, and the transcript the Captions panel previews. They were each panel's `useState`, so leaving the studio - or pressing Clean audio,
  * which navigates - threw away a scan that took minutes. They belong to the open video: `loadSource` and `clearSource` empty them, which is exactly
@@ -143,14 +153,14 @@ interface VideoStudioState {
   requestSeek: (seconds: number) => void
   setSrtPath: (p: string | null) => void
   /** T-112 — apply a transcription's SRT to the video it was made from, and only
-   *  to it. `sourcePath` is the file the job started on; if the studio holds
-   *  anything else by the time the job finishes (another video opened, or none)
+   *  to it. `videoKey` is the `videoKey(source)` the job started on (T-172 (2): the original the person opened, so a converted import re-opened
+   *  meanwhile is still that video); if the studio holds anything else by the time the job finishes (another video opened, or none)
    *  nothing is stored and the answer is false. `null` forgets the transcript (T-128 (3): "Clear
    *  saved transcripts" deleted the file), under the same rule. */
-  setSrtPathFor: (sourcePath: string, srtPath: string | null) => boolean
+  setSrtPathFor: (videoKey: string, srtPath: string | null) => boolean
   /** T-135 (2) - play a converted copy of the open video in the preview. Like `setSrtPathFor`, the copy belongs to the video it was made for: if
    *  that file is no longer the open one nothing is stored and the answer is false. `source` is not replaced (see `previewUrl`). */
-  setPreviewCopyFor: (sourcePath: string, copyPath: string, resumeAt?: number) => boolean
+  setPreviewCopyFor: (videoKey: string, copyPath: string, resumeAt?: number) => boolean
   /** T-136 (6): the Player reports whether the element can draw the picture. */
   setNoPicture: (noPicture: boolean) => void
   /** T-136 (2): the playhead to put the new preview element back at - once. Null when nothing is waiting. */
@@ -158,8 +168,8 @@ interface VideoStudioState {
   /** T-135 (4) - patch the derived results of the open video (typing in a chat box). */
   setDerived: (patch: Partial<DerivedResults>) => void
   /** T-135 (4) - patch them with a RESULT, for the video the job started on and only that one (T-112's rule): false, and nothing stored, when it is no
-   *  longer the open video. A scan that finishes after the video was replaced is for a video that is gone. */
-  setDerivedFor: (sourcePath: string, patch: Partial<DerivedResults>) => boolean
+   *  longer the open video (`videoKey`, as `setSrtPathFor`: the same original re-opened is still it). A scan that finishes after the video was replaced is for a video that is gone. */
+  setDerivedFor: (videoKey: string, patch: Partial<DerivedResults>) => boolean
 
   addClip: () => void
   /** The ONE add-a-clip-from-a-range action (T-101 deleted its manual twin,
@@ -565,19 +575,22 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({ currentTime: target, seekRequest: { seconds: target } })
     },
     setSrtPath: (p: string | null) => set({ srtPath: p }),
-    setSrtPathFor: (sourcePath, srtPath) => {
-      if (get().source?.filePath !== sourcePath) return false
+    setSrtPathFor: (key, srtPath) => {
+      const open = get().source
+      if (open === null || videoKey(open) !== key) return false
       set({ srtPath })
       return true
     },
     setDerived: (patch) => set({ derived: { ...get().derived, ...patch } }),
-    setDerivedFor: (sourcePath, patch) => {
-      if (get().source?.filePath !== sourcePath) return false
+    setDerivedFor: (key, patch) => {
+      const open = get().source
+      if (open === null || videoKey(open) !== key) return false
       set({ derived: { ...get().derived, ...patch } })
       return true
     },
-    setPreviewCopyFor: (sourcePath, copyPath, resumeAt) => {
-      if (get().source?.filePath !== sourcePath) return false
+    setPreviewCopyFor: (key, copyPath, resumeAt) => {
+      const open = get().source
+      if (open === null || videoKey(open) !== key) return false
       set({
         previewUrl: window.api.video.fileUrl(copyPath),
         previewResumeAt: resumeAt !== undefined && Number.isFinite(resumeAt) && resumeAt > 0 ? resumeAt : null

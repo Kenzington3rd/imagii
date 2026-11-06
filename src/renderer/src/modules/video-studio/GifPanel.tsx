@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import { useVideoStore } from './store/videoStore'
+import { useVideoStore, videoKey } from './store/videoStore'
 import { cancelGif, useGifRun } from './store/runs'
 import { outputDurationSec } from './presets'
 import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
@@ -50,7 +50,7 @@ export function GifPanel(): JSX.Element | null {
       const dir = await resolveOutDir()
       if (!dir) return
       const jobId = nanoid(10)
-      if (!useGifRun.getState().begin({ jobId, name: clip.name, videoPath: source.filePath, fileName: source.fileName })) return
+      if (!useGifRun.getState().begin({ jobId, name: clip.name, videoPath: videoKey(source), fileName: source.fileName })) return
       try {
         const result = await window.api.video.exportGif({
           jobId,
@@ -167,7 +167,7 @@ export function GifPanel(): JSX.Element | null {
           (measured: the idle button spans 1093-1205, Cancel 1147-1205). Where the second press lands now is the disabled primary. */}
       {/* Round 17 B2 */}
       {/* T-171 (4): named only when it is not the open video (T-168 (4)'s Export rule); the row below stays as it is. */}
-      {gifRun && gifRun.videoPath !== source.filePath ? (
+      {gifRun && gifRun.videoPath !== videoKey(source) ? (
         <p
           className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words"
           title={`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}
