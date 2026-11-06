@@ -8356,6 +8356,93 @@ IMG-PREC.
 
 ---
 
+## T-169 — sweep-55 fixes (round 118)
+
+- **Spec:** the fifty-fifth sweep's three verified findings (candidate clean pass #1 on 641c2ba), each confirmed by the
+  expediter against source (and, for item 3, against the reviewer's element shot from the built app). QA main and both
+  renderer readers, ffmpeg (executed on 7.0.2 and 6.1.1), Electron (the swallow driven on real input in Electron
+  31.7.7), audio, privacy, a11y, design reader 1, and all three streamer readers clean on their lens. Item 3 is a new
+  consequence of T-168 (2); item 2 is the T-166 (3) / T-167 (2) class in the two stores those tickets did not reach.
+  Not counted: Save on a search result appears on hover and focus (the conventional reveal; folded as a hint line);
+  "Click a mark to put it back" (BRANDING's "mark" includes the chip, T-121; folded as a rewording, below); a held Enter
+  in the search box re-sends the same query after it settles (no wrong state; folded); Record sets no capture frame
+  rate and prefers VP9 (owner item, measure at release); a custom Export template that renders exactly a Windows
+  device name (T-110 (bx)). Two tracks, disjoint source files.
+
+  **Track A — Video Studio says what it is doing and does what was pressed (items 1 and 3).**
+  1. **[LOW] Transcribe never re-reads whether the captions files are now there** (video-studio/CaptionsPanel.tsx:145-150).
+     `transcribe()` tests the CACHED `status?.ready` and, when false, only `setShowSetup(true)`; `captions.status()` is
+     re-read on mount (:91), after a model download (:284) and by "Refresh status" at the bottom of the expanded card
+     (:437-442), and no sentence says to press it after copying the engine. On the path the card itself invites (the
+     model download runs while the person fetches the engine, :401-403): the download ends (its refresh still says not
+     ready), the person copies whisper-cli.exe and its .dll files, presses Transcribe — and nothing visible happens (the
+     card is already open). Fix: when the cached status is not ready (or not answered yet), `transcribe()` re-reads
+     `window.api.captions.status()`, stores it in `useCaptionsStatus` (as `refreshStatus` does), and goes on to the
+     transcribe when the fresh answer is ready; only a fresh not-ready opens the setup card as today. The begin() claim
+     after it still makes a double press one job.
+  3. **[LOW-MED] The T-168 (2) scan line is cut to "Scanning strea…" for the guide's own example name at every window up
+     to ~2000 px** (video-studio/HighlightPanel.tsx:219-230). The name span, the `flex-1 min-w-[3rem]` bar, the w-10
+     percent and Cancel share one row of a ~276 px card, so the name takes all the shrink (105 px at 1024 and the
+     default 1632, 133 px at 1920; the bar pinned at 48 px). USER_GUIDE:329-331 quotes "Scanning stream.mp4 for
+     highlights" and the line is the only on-screen name of the scanned file. Fix: the line on its OWN row above the
+     bar row (`flex flex-col gap-1` wrapper: the `min-w-0 truncate` line with its `title`, then the existing row of
+     bar, percent and Cancel; the ProgressTrack goes back to the default `flex-1` width, the `min-w-[3rem]` no longer
+     needed). Only a name longer than the card is cut.
+
+  **Track B — an edit that changes nothing is not an edit, and the References and Audio words match the screen (item 2,
+  folds).**
+  2. **[LOW] Audio Studio and References record an undo step for an edit that changes nothing, and wipe Redo.**
+     (a) audio-studio/state/audioStore.ts:214-217 `patchChain` snapshots unconditionally (`snapshot()` :144-147 pushes
+     for any key null): a click on the already-pressed "Off" under Quieter background (CleanupPanel.tsx:63) or Compressor
+     preset (LevelsPanel.tsx:122), or a preset / Fix wizard Apply that sets what is already set, lights Undo with a step
+     that changes nothing and empties `future`. (b) references/state/referencesStore.ts:250-256 `renameCollection`
+     pushes history on a same-name rename (the dialog is pre-filled; Enter without typing). Fix: (a) `patchChain`
+     returns before `set` when every patched field equals the chain's (by value: `Object.is` for primitives, a
+     structural compare for `denoiseParams`, `cutRegions` and `secondaryTrack` — canvasStore's T-167 `sameValue` is the
+     model; move it to a shared helper only if both stores then import it, else a local twin with its own test);
+     (b) `renameCollection` returns before the IPC and the history when the trimmed name equals the board's current
+     name (main already keeps the name for an empty one, so an empty or same name is a no-op) — the dialog still
+     closes.
+  Folds (not counted): (i) the Reference Search grid gets one line above its results — "Hover a picture and click Save
+  to add it to a mood board." (text-xs text-ink-dim, shown only with results); (ii) the search input's Enter takes the
+  held-key rule: `if (e.key === 'Enter' && !e.repeat) submit()` (ReferencePanel.tsx:119); (iii) the cut copy names
+  the control: the shading is pointer-transparent (WaveformView.tsx:186, T-61), the chip is what puts a part back — the
+  hint (WaveformView.tsx:260-261) "Drag across the waveform to mark a part to remove — it comes out when you export.
+  Click its chip below to put it back."; the tour (audioTutorial.ts:25) "...It comes out when you export; click its
+  chip under the waveform to put it back."; the shortcut overlay (HotkeyOverlay.tsx:33) `{ keys: "Click a cut's chip",
+  description: 'Put a cut back' }`; the damaged-cut refusal (main/ipc/audio.ts:53) "...Click its chip under the
+  waveform to put it back, then cut that part again."; `EVERYTHING_CUT_MESSAGE` (shared/audio.ts:64) "Everything is cut
+  out. Click a chip under the waveform to put a part back."; BRANDING's "mark" row says the chip is the control (was
+  T-121's "Click a mark"); every pin moved in place (audio.test.ts, exportProgress.test.ts, audioChainValidation.test.ts,
+  hotkeyTable.test.ts, interactionWiring.test.ts, audio.spec.ts, and the Layer 5 string in media.spec.ts — a sentence,
+  no command change); (iv) main/ffmpeg/presets.ts:68-71's comment says X Premium 4 h (the value already is).
+
+  Covering tests: unit (NEW describes at the end of the files they touch), each red on 641c2ba: patchChain with a
+  patch equal to the chain leaves `history` and `future` as they were (after an undo, so Redo is held), a real change
+  still pushes, a coalesced key still coalesces; renameCollection with the current name (and with it padded by spaces)
+  calls no IPC and pushes nothing. e2e (NEW describes at the end of video-pipelines.spec.ts, audio.spec.ts and
+  references.spec.ts), each red on 641c2ba: with the model installed and the engine missing, the engine placed in the
+  bin folder after the panel mounted, one press of Transcribe starts the transcribe (control: still missing — the
+  setup card, no job); a scan held on `stream.mp4` at the suite's default window shows "Scanning stream.mp4 for
+  highlights" whole (scrollWidth <= clientWidth) on its own row above the bar, the bar at least 120 px (the long-name
+  case updated in place: cut with an ellipsis and a title, the bar, percent and Cancel on one row below it); a click on
+  the already-pressed "Off" leaves Undo disabled, and after an Undo it leaves Redo enabled; a same-name rename leaves
+  the Mood Boards Undo as it was; a held Enter in the search box (a second keydown with `repeat`) sends one search,
+  counted at a stubbed handler; the hint line shows with results and not without.
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or new (A: the captions setup's Transcribe re-check, "A line above the bar"; B: the
+  chip wording, the hover hint); BRANDING (B: the "mark" row).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; Track B's
+  Layer 5 edit is one expected sentence, and `test:media` is run by the expediter on the merge) —
+  a hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile
+  edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 118)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
@@ -8894,6 +8981,11 @@ IMG-PREC.
   (measured -26.9 vs -22.0 LUFS) — the music branch's own single-pass
   behaviour, the class of the standing mix-bus tolerance; candidate: a
   two-pass (measured, linear) loudnorm on the second track.
+  From sweep 55 (not gate-holding): (bx) a custom Export filename template that renders to exactly a
+  Windows device name (a template of just `{clip}` or `{source}` and a clip or source named con, aux, nul,
+  prn, com1-9 or lpt1-9): `expandFilenameTemplate` and `assertPlainMp4Name` refuse path characters, not
+  device names, so the export fails with its error (nothing lost; the default template and every kit name
+  carry a suffix) — a device-name suffix rule in `safeNamePart` is the upgrade.
   From sweep 43 (not gate-holding): (bw) panel SETTINGS reset when Video Studio unmounts (the caption
   style and its "selected clip range only" box, the crop aspect lock, GIF / Reframe / Compile settings,
   the guides box) — the T-135 (4) rule "settings, not results, stay with the panel"; the sharpest
