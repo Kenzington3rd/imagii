@@ -8695,7 +8695,7 @@ IMG-PREC.
 ## T-173 — sweep-59 fixes (round 122)
 
 - **Spec:** the fifty-ninth sweep's four verified findings (candidate clean pass #1 on ed82afb), each confirmed by the
-  expediter against source (item 2 measured by the expediter on ffmpeg 7.0.2; item 1 also by the Electron reader in a
+  expediter against source (item 2 re-measured through the real mix graph by the Track B worker, correcting the expediter's ffmpeg 7.0.2 figure; item 1 also by the Electron reader in a
   scratch Electron). QA main, ffmpeg (real-binary runs on 7.0.2 and 6.1.1), privacy, a11y, both design readers, UX
   reader 2 and streamer main clean on their lens; item 1 was found by five readers. Item 1 is a consequence of T-172 (1).
   Not counted: a held Enter on an Asset Library card reaching the native replace question (OS dialog behaviour, needs
@@ -8722,19 +8722,20 @@ IMG-PREC.
      flag, false until the first scan has written its lists; the two no-device hints are drawn only once it is true
      (before that, nothing is claimed).
 
-  **Track B — a surround voice keeps its level in a mix (item 2).**
-  2. **[LOW] With a second track, a 5.1 primary is folded at swresample's normalised matrix, ~7.6 dB down**
-     (audio/process.ts:216-224 `foldToStereo`, the mix graph's `primaryNormalize` / `secondaryNormalize`
-     `aresample=48000,aformat=channel_layouts=stereo`). T-164 (1) folds a surround primary in float as the player's own
-     matrix (`SURROUND_TO_STEREO_FILTER`) — but only for MP3 with no second track; its comment says "with a second track
-     the mix folds both sides itself", and that fold is the normalised one. Measured on 7.0.2: a 5.1 front tone through
-     the mix's normalise -28.7 dB against -21.1 dB through `SURROUND_TO_STEREO_FILTER`; a centre tone -31.7 against
-     -24.1. Even volume and Match measure and target the primary BEFORE that fold, on six channels, and the bed on
-     stereo, so a directly opened 5.1 voice (WAV, FLAC, …) lands ~7.6 dB under the balance the mix means. Fix: with a
-     second track, a primary of more than two channels is folded by `SURROUND_TO_STEREO_FILTER` as the FIRST stage of
-     both passes (the T-164 `folded()` path, for any format), and a second track of more than two channels has
-     `SURROUND_TO_STEREO_FILTER` ahead of its normalise (its channel count read the way the primary's is); mono and
-     stereo inputs are unchanged. The T-164 comment is corrected.
+  **Track B — a surround voice is measured as it is written (item 2).**
+  2. **[LOW] With a second track, Even volume and Match measure a surround voice on six channels and write it on two**
+     (audio/process.ts:216-224 `foldToStereo`, the measure passes, Match's voice measure). T-164 (1) folds a surround
+     primary in float as the player's own matrix (`SURROUND_TO_STEREO_FILTER`) as the FIRST stage of both passes — but
+     only for MP3 with no second track. With a second track the voice is measured (BS.1770, surround channels weighted
+     +1.5 dB) before the mix folds it at 0.7071, so a voice carried in the surround channels lands ~4.5 dB off the balance
+     its stereo twin gets (measured by the Track B worker on 7.0.2 and 6.1.1: a back-left voice 4.1-4.5 dB off in Even
+     volume, Match and both). As ticketed this item said "~7.6 dB down in any mix": that was the EXPEDITER'S measurement
+     error — `volumedetect` forces s16, and the s16 conversion is where swresample normalises the matrix; the mix itself
+     runs float (amix, loudnorm), which does not normalise, so a gain-mode mix and a front or centre voice were never off.
+     Fix (as landed): with a second track, a primary of more than two channels is folded by `SURROUND_TO_STEREO_FILTER` as
+     the FIRST stage of both passes (the T-164 `folded()` path, for any format), and Match's voice measure goes through
+     it too; mono and stereo inputs keep today's graph; a surround second track needs no fold of its own (its fold is the
+     mix's own float conversion). The T-164 comment is corrected.
 
   **Track C — a transcript comes back with its video (item 4).**
   4. **[MED] A finished transcript is never read back, though Close skips it because it is** (video-studio/store/
@@ -8757,8 +8758,9 @@ IMG-PREC.
   holds) checked and the webcam on, a silent screen ends the start and the microphone's track is `ended` (red: live); a
   silent camera's screen-only take keeps the microphone live while it records (control) and ends it at Stop; with the
   device scan held, neither no-device hint is drawn, and once it settles with no microphone the hint is (red: drawn
-  while held); a 5.1 voice mixed with a stereo bed (gain mode, and Even volume on) comes out within 0.5 dB of the same
-  voice as stereo (red: ~7.6 dB under), a 5.1 bed likewise, and a mono and a stereo primary are unchanged (controls);
+  while held); a back-left 5.1 voice mixed with a stereo bed under Even volume, Match and both keeps
+  its stereo twin's voice-to-bed balance within 1 dB (red: 4.1-4.5 dB off); gain mode, front and centre voices and a
+  5.1 bed match their stereo twins (green pins of the float mix), and a mono and a stereo primary are unchanged (controls);
   Transcribe (stubbed), Close, the same video opened again: the transcript and Save .srt are back, and a different
   video, a duration that differs and Clear transcripts give none (controls, the last red-first on the clear).
 
