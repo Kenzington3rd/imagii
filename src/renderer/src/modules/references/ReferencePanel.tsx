@@ -36,6 +36,9 @@ export function ReferencePanel(): JSX.Element {
     void refreshCollections()
   }, [refreshCollections])
 
+  // The board a Save goes to: the one selected on the Mood Boards tab, if it still exists.
+  const targetBoard = collections.find((c) => c.id === selectedCollectionId)
+
   function submit(): void {
     if (!query.trim()) return
     void search(query)
@@ -64,8 +67,8 @@ export function ReferencePanel(): JSX.Element {
   }
 
   function saveResult(result: SearchResult): void {
-    const board = collections.find((c) => c.id === selectedCollectionId)
-    if (!selectedCollectionId || !board) {
+    const board = targetBoard
+    if (!board) {
       setPendingResult(result)
       return
     }
@@ -163,7 +166,16 @@ export function ReferencePanel(): JSX.Element {
       </div>
 
       {/* T-169 (i): Save appears on hover and focus (the conventional reveal), which nothing on the page said. */}
-      {foundCount > 0 ? <p className="text-xs text-ink-dim">Hover a picture and click Save to add it to a mood board.</p> : null}
+      {/* T-170 (4): the line says where Save goes - the board selected on the Mood Boards tab - and with none the first Save starts one. */}
+      {foundCount > 0 ? (
+        targetBoard ? (
+          <p className="text-xs text-ink-dim min-w-0 truncate" title={`Hover a picture and click Save to add it to "${targetBoard.name}".`}>
+            Hover a picture and click Save to add it to &quot;{targetBoard.name}&quot;.
+          </p>
+        ) : (
+          <p className="text-xs text-ink-dim">Hover a picture and click Save to start a new mood board.</p>
+        )
+      ) : null}
 
       {response && response.results.length > 0 ? (
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">

@@ -404,7 +404,10 @@ that names the file being converted.)
   line above the queue's rows names the one the batch belongs to (**Export of stream.mp4, started on another video.**),
   so the rows and **Cancel** are never anonymous. The **GIF**, **Compile** and **Picture-in-picture** cards do the
   same beside their **Cancel** (**Exporting Clip 1…**, **Stitching stream.mp4…**, **Compositing stream.mp4…**: the clip,
-  the video, the base file). Clip Kit
+  the video, the base file). The same goes for a transcription, a caption burn-in and a Reframe: with another video open,
+  one line above the progress row of **Auto-captions** or **Reframe to 9:16** says whose it is (**Transcription of stream.mp4,
+  started on another video.**, **Caption burn-in on stream.mp4, started on another video.**, **Reframe of Clip 1 from
+  stream.mp4, started on another video.**), and it goes when the job ends. Clip Kit
   is one run for the whole studio: whichever clip is selected, the kit button shows where the running kit is,
   names the clip it was started on (**Clip Kit for "Clip 1"**) and offers **Cancel** on a row under the button (the
   running label stays on one line), and no second kit starts until it ends. **Export** and Clip Kit take turns: while a kit runs, **Export** is off and its tooltip says "Clip Kit is running. Export when it is done.", and while an export runs the kit button is off with "An export is running. Start Clip Kit when it is done." (the kit does not start by itself; press it once the export ends). If you remove that clip the kit keeps running and stays cancelable; if you close the video,
@@ -479,8 +482,9 @@ steps are one-time:
    path the panel shows. The **Show models folder** button opens that folder, and
    imagii makes the folder first if it is not there yet.
 
-If you copy the engine in while the card is open, **Transcribe** checks for the files again when you press it and starts, so you
-do not need **Refresh status** first (only a check that still finds a file missing leaves you on the card).
+**Transcribe** checks for the files every time you press it, so you do not need **Refresh status** first: copy the engine in
+while the card is open and it starts; delete the model to replace it and it opens these instructions instead of starting
+(only a check that still finds a file missing leaves you on the card).
 
 Once both are in place the setup card goes away, and **Captions setup** stays under
 the panel, closed until you open it: it shows the same two folders and the same
@@ -488,7 +492,7 @@ the panel, closed until you open it: it shows the same two folders and the same
 that are there: with the model installed, step 2 says it is installed at the path shown
 (and, with the engine still missing, the card asks only for the engine); to replace the model,
 delete that file (**Show models folder** opens its folder) and press **Refresh status**,
-and the download is offered again. A transcription that fails says
+and the download is offered again (pressing **Transcribe** before that also brings you here). A transcription that fails says
 "The captions engine stopped before it finished. Open Captions setup to check its
 files and the model" and that is where it sends you. If Windows reports that the
 engine could not start because a file it needs is missing, the `.dll` files from the
@@ -751,7 +755,7 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   Change the words and press Enter or click **Search** and the new search goes out at once; its results are the ones you
   see, even if the first search answers later. The box always says which search the results on screen
   are for, including after a visit to another tab. Hover a result and click **Save** to add it to the
-  mood board you have selected (a line above the results says so); the notice names the board. A picture that is already on that board is not
+  mood board you have selected (the line above the results names it, for example *Hover a picture and click Save to add it to "Colors".*; pick another on the **Mood Boards** tab, and with none the line says the first **Save** starts a new one); the notice names the board. A picture that is already on that board is not
   added twice: the notice says **Already on "the board"** and there is nothing new to undo. A double-click on **Save**
   saves once, with one notice, and one **Undo** takes it back. If a picture's thumbnail will not download (the site is not answering, within 10 seconds, or the file is over 8 MB), it is still saved, and its tile draws the picture from where it came from. If you have no board yet, imagii asks you to
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.

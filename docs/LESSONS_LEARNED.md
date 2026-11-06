@@ -14,6 +14,48 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-06 - T-170 (round 119), Track A: a running caption or Reframe job says whose it is, and Transcribe always asks
+
+The fifty-sixth sweep, Track A (items 2 and 3; Track B has items 1 and 4).
+
+### (2) [LOW-MED] - A transcription, burn-in or Reframe started on A was drawn in B's panel with nothing naming A
+
+- **Bug.** Transcribe on A, Close (the question says the job keeps going), open B: B's Captions header read "Transcribing…", its phase row and Cancel were A's, Burn into video and Re-transcribe were off, and B could not start its own with no word why. Reframe the same.
+- **Root cause.** The runs are module stores (T-135 (1)), so a job outlives its video's panel; both carried `name` (T-144) for the closed-video card, and neither panel drew it. Scan, Export, GIF, Compile and PiP had been given their line one by one (T-167 (3), T-168 (2), (4)); these two were the siblings left.
+- **Fix.** The captions run also carries `videoPath`, the reframe run `videoPath` and `fileName`, set at each `begin` from the open source. While `run.videoPath !== source.filePath` the panel draws one line above its progress row (`text-xs text-ink-dim min-w-0 truncate`, the whole sentence as its `title`): "Transcription of <name>, started on another video." / "Caption burn-in on <name>, started on another video." / "Reframe of <clip> from <file>, started on another video." Nothing is said on the job's own video. The job card is unchanged.
+- **Test.** video-pipelines.spec.ts "T-170 Track A": a transcription, a caption burn-in and a Reframe each held in main across a Close and a second video (the line, its title, its place above the phase row; the control on the first video; the line gone when the job is released); interactionWiring.test.ts "T-170 Track A" (the payloads and the two lines). Red on 48242ad.
+- **Lesson.** **When a fix gives one panel a line, grep every run store for the others.** Five panels got the line over three rounds; the two that did not were found by a reader, not by a rule. A run store that is drawn under another video needs the video it is for the day it is made.
+
+### (3) [LOW] - A cached READY over a deleted engine or model ended in a bare "Transcription failed."
+
+- **Bug.** The panel tells a person to delete the model file to replace it. Pressing Transcribe before "Refresh status" reached main, which threw "Whisper not installed (see Captions setup)", and the toast read "Transcription failed."
+- **Root cause.** Two. T-169 (1) re-read the status only when the cached answer said not ready, so a stale READY went through; and main's refusal had no closing period, so `isFinishedSentence` dropped it and no known cause matched.
+- **Fix.** `transcribe()` re-reads `captions.status()` on EVERY press (the fresh read, the store, the same-video guard, then a fresh not-ready opens the setup). Main's refusal is a finished sentence: "The captions engine or the English model is missing. Captions setup in the Captions panel says what to add."
+- **Test.** video-pipelines.spec.ts "T-170 Track A" (3): `captions:status` READY at mount and NOT ready at the press, one press, the setup instructions open and main's transcribe called 0 times; each press asks main once and one press is one job. transcribeMissing.test.ts: the refusal is the finished sentence, shown whole by `userFacingError`, for a missing model, a missing engine and both. Red on 48242ad (the press reached main; "Whisper not installed...").
+- **Lesson.** **T-169's lesson ran one direction.** "A button that gates on a cached fact should ask again before it refuses" was applied to the refusal; the cache is wrong the other way too, and the press that goes ahead on it is the expensive one. Ask on every press, and write the refusal main can still give as a sentence a person can read: a message with no period is a message that is thrown away.
+
+## 2026-11-06 - T-170 (round 119), Track B: a meter that reads the sound that is there, and a Save that says where it goes
+
+The fifty-sixth sweep, Track B (items 1 and 4).
+
+### (1) [LOW] - The Audio Studio meter kept the old sound's bars and dB under "Drawing the waveform..."
+
+- **Bug.** A sound plays in Audio Studio, Clean audio from Video Studio finishes and loads its extraction over it, and for the seconds the new waveform draws the meter still shows the old sound's last reading - a red "0 dB" is possible - beside a Play that is off.
+- **Root cause.** The meter is mounted across sources and holds `levels` and `peakDb` in state. Its `[audioElement]` effect cleanup cancelled the loop and closed the graph but wrote nothing, and WaveformView hands the meter no element while a replacing sound's waveform draws (T-157 (2) cleared Play and the readout in WaveformView and left the sibling's state alone).
+- **Fix.** The cleanup also sets `levels` to twelve zeros and `peakDb` to -60, so a meter with no element reads silent.
+- **Test.** audio.spec.ts "T-170 (1)": a 30 s tone at -0.33 dBFS plays (the label reads "0 dB", bars up), Clean audio on a video with every ffmpeg held 8 s lands over it, and while "Drawing the waveform" shows the label reads "-60 dB" and every bar's height is the 2% floor, still so 600 ms later. Red on 48242ad ("0 dB"). Mutations: both resets removed, only the bars reset, only the dB reset each fail it (at the label, the label, the bars).
+- **Lesson.** **State a component holds for something that has gone away goes with it.** A loop that stops is not a reading that is cleared; every piece of state a teardown leaves behind is a value the screen keeps showing.
+
+### (4) [LOW] - The Reference Search hint said "a mood board" while the guide promised it named which
+
+- **Bug.** The line above the results read "Hover a picture and click Save to add it to a mood board." Save goes to the board selected on the Mood Boards tab, which was named only afterwards in a 2 s toast.
+- **Root cause.** T-169 (i) wrote a line true of any state; the target was already chosen in the panel (`collections.find(selectedCollectionId)`), it was just not drawn.
+- **Fix.** The line names the board - `Hover a picture and click Save to add it to "Colors".`, truncated with the whole sentence as its title - and with no board says `Hover a picture and click Save to start a new mood board.` (the first Save asks for a name). The Save and the line read one `targetBoard`.
+- **Test.** references.spec.ts "T-170 (4)": two boards, the older "Colors" selected (the store's default is the newest, so a hint that names the first board is caught), the line and its title, a Save lands on "Colors", another board picked and the line follows; control with no board. The T-169 hint case moved in place to the new-board sentence. Red on 48242ad. Mutations: the first board named, and the new-board sentence always, each fail it.
+- **Lesson.** **Copy that describes a target should be drawn from the value the action uses.** A sentence written to be true of every state is the sentence that tells the person nothing; one derived from the same variable as the click cannot drift from it.
+
+---
+
 ## 2026-11-06 - T-169 (round 118), Track A: Transcribe re-reads whether the captions files are there, and the scan's name has a row of its own
 
 The fifty-fifth sweep, Track A (items 1 and 3; item 2 is Track B's).

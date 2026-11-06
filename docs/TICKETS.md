@@ -8510,7 +8510,7 @@ IMG-PREC.
   sentence; `test:media` is run by the expediter on the merge) — a hand-back with an unrun gate is
   not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit
   PID only.
-- **Status:** in progress (round 119)
+- **Status:** done (round 119 — see the Done entry)
 
 ---
 
@@ -9088,6 +9088,36 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 119 — T-170, all four counted items, landed in the commit that
+carries this entry. Two Sonnet workers in fresh clones of 48242ad,
+disjoint source files, merged by the expediter. Track A: a
+transcription, caption burn-in or Reframe that is running for another
+video says so in that video's panel ("Transcription of A.mp4, started on
+another video.", "Caption burn-in on …", "Reframe of <clip> from <file>,
+…") — the captions and reframe runs now carry the video they are for,
+T-168 (4)'s Export rule; Transcribe asks main for the captions status on
+every press, so a cached ready over a deleted engine or model opens the
+setup instead of failing, and main's refusal is a finished sentence that
+says what is missing. Track B: the Audio Studio meter reads silent (-60
+dB, empty bars) when its sound goes away, so a replacing sound's
+waveform no longer draws under the old sound's frozen reading (the class
+of T-157 (2)); the Reference Search line names the board a Save goes to,
+or says the first Save starts one, as USER_GUIDE says it does.
+Deviations, accepted: A's refusal test lives in a new
+transcribeMissing.test.ts (the real paths.ts needs Electron's `app`),
+its stale-ready e2e installs the stubs before the studio mounts, and it
+added three structural wiring pins; B moved one IC line citation its new
+lines shifted, and Save reads the same `targetBoard` as the line.
+Ledgers: A 14 mutations, B 5, all killed. Expedited personally: one
+independent mutation per track at a seam no ledger row names — A: the
+Reframe line naming the open video's file instead of the run's → the
+held-Reframe case red; B: Save going to the first board while the line
+names the selected one → the T-170 (4) save case red — each restored
+byte-identical, sha256 verified; on the MERGED tree: verify x2 (210
+files / 6436 tests), test:media 495 passed | 17 skipped of 512 on 7.0.2,
+FULL Playwright 747 of 747 (53.1 min). Applied to 48242ad by `git apply`
+with every file byte-identical to the expedited merge.
 
 Round 118 — T-169, all three counted items and the four folds, landed in
 the commit that carries this entry. Two Sonnet workers in fresh clones

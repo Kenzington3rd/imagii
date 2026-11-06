@@ -14464,3 +14464,255 @@ test.describe('T-169 Track A: Transcribe re-checks the captions files; the scan 
     }
   })
 })
+
+// ── T-170 Track A: a running caption or Reframe job says whose it is, and Transcribe always asks ───────────────────────────────────────────────────────────────────────────────────────────
+//
+// (2) The captions and Reframe runs are module stores, so a job started on A is drawn in B's panel after A is closed - "Transcribing…", A's phase row and Cancel, Burn into video off - with nothing
+// naming A (Export, Scan, GIF, Compile and PiP do since T-167 (3) / T-168). Main's handlers are replaced by ones that answer when the test says (T-168 (4)'s approach), so each job is still
+// running when it is read; the control is the video the job is for, where the rows speak for themselves.
+// (3) `transcribe()` read the CACHED status when it said ready: the person deletes the model file the panel tells them to delete to replace it, presses Transcribe before "Refresh status", and main
+// refused with a sentence that is not finished, so the toast was a bare "Transcription failed.". The press now asks main every time; `captions:status` here answers READY at mount and NOT ready at the press.
+test.describe('T-170 Track A: a running caption or Reframe job says whose it is; Transcribe always checks', () => {
+  interface Counters {
+    statusCalls: number
+    transcribeCalls: number
+    burnCalls: number
+    reframeCalls: number
+  }
+  type Held = Counters & { ready: boolean; releaseTranscribe: () => void; releaseBurn: () => void; releaseReframe: () => void }
+  /**
+   * `captions:status` answers from `ready`. `captions:transcribe` counts its calls and either holds until released (`holdTranscribe`) or answers at once with the transcript at `srt`.
+   * `captions:burnIn` and `video:reframe` count their calls and hold until released.
+   */
+  async function stubMain(app: ElectronApplication, opts: { ready: boolean; holdTranscribe: boolean; srt: string; outputPath: string }): Promise<void> {
+    await app.evaluate(({ ipcMain }, o) => {
+      const g = globalThis as unknown as { __t170: Held }
+      const gate = (): { wait: Promise<void>; release: () => void } => {
+        let release: () => void = () => undefined
+        const wait = new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return { wait, release }
+      }
+      const tx = gate()
+      const burn = gate()
+      const reframe = gate()
+      g.__t170 = {
+        ready: o.ready,
+        statusCalls: 0,
+        transcribeCalls: 0,
+        burnCalls: 0,
+        reframeCalls: 0,
+        releaseTranscribe: tx.release,
+        releaseBurn: burn.release,
+        releaseReframe: reframe.release
+      }
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => {
+        g.__t170.statusCalls += 1
+        const ready = g.__t170.ready
+        return { exeInstalled: ready, exePath: 'whisper-cli.exe', modelInstalled: ready, modelPath: 'model.bin', modelsDir: 'models', ready }
+      })
+      ipcMain.removeHandler('captions:transcribe')
+      ipcMain.handle('captions:transcribe', async (_e, req: { jobId: string }) => {
+        g.__t170.transcribeCalls += 1
+        if (o.holdTranscribe) await tx.wait
+        return { jobId: req.jobId, srtPath: o.srt, segments: [{ startSec: 0, endSec: 1, text: 'words from video A' }], durationMs: 5 }
+      })
+      ipcMain.removeHandler('captions:burnIn')
+      ipcMain.handle('captions:burnIn', async () => {
+        g.__t170.burnCalls += 1
+        await burn.wait
+        return { outputPath: o.outputPath, captioned: true }
+      })
+      ipcMain.removeHandler('video:reframe')
+      ipcMain.handle('video:reframe', async () => {
+        g.__t170.reframeCalls += 1
+        await reframe.wait
+        return { outputPath: o.outputPath }
+      })
+    }, opts)
+  }
+  const counters = (app: ElectronApplication): Promise<Counters> => app.evaluate(() => (globalThis as unknown as { __t170: Counters }).__t170)
+  const release = (app: ElectronApplication, which: 'releaseTranscribe' | 'releaseBurn' | 'releaseReframe'): Promise<void> =>
+    app.evaluate((_electron, k) => (globalThis as unknown as { __t170: Held }).__t170[k](), which)
+
+  function twoVideos(tag: string): { fileA: string; fileB: string } {
+    const fileA = path.join(root, 'source', `${tag}-a.mp4`)
+    const fileB = path.join(root, 'source', `${tag}-b.mp4`)
+    copyFileSync(clipSrc, fileA)
+    copyFileSync(clipSrc, fileB)
+    return { fileA, fileB }
+  }
+  /** Close the open video (the question is accepted) and open `fileB`. */
+  async function closeThenOpen(window: Page, fileB: string): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+    await dropOnVideoImporter(window, fileB, path.basename(fileB))
+    await expect(window.locator('video')).toHaveCount(1)
+    await expect(window.locator('header').getByText(path.basename(fileB), { exact: true })).toBeVisible({ timeout: 30_000 })
+  }
+  /** Launch on Home and install the main stubs (status READY) BEFORE the studio mounts, so the panel's first answer - its cached one - is "ready"; then open `clipSrc`. */
+  async function launchHomeWithVideo(name: string): Promise<Studio> {
+    const studio = await launchHome(name)
+    await stubMain(studio.app, { ready: true, holdTranscribe: true, srt: '', outputPath: '' })
+    await gotoVideoStudio(studio.window)
+    await installToastLog(studio.window)
+    await dropOnVideoImporter(studio.window, clipSrc, path.basename(clipSrc))
+    await expect(exportCard(studio.window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+    await expect(studio.window.locator('video')).toHaveCount(1)
+    return studio
+  }
+  const anyOtherVideoLine = (card: Locator): Locator => card.getByText(/started on another video/)
+
+  test('(2) a transcription held on A, A closed, B opened: B\'s Captions panel names A above the phase row, the title holds it, and the line goes with the job (control: on A there is none)', async () => {
+    test.setTimeout(240_000)
+    const { fileA, fileB } = twoVideos('t170tx')
+    const { app, window } = await launchWithVideo('t170tx', fileA)
+    try {
+      await stubMain(app, { ready: true, holdTranscribe: true, srt: '', outputPath: '' })
+      const card = captionsCard(window)
+      const SENTENCE = 'Transcription of t170tx-a.mp4, started on another video.'
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect.poll(async () => (await counters(app)).transcribeCalls, { timeout: 15_000 }).toBe(1)
+      await expect(card.getByRole('button', { name: 'Transcribing…' })).toBeVisible()
+      await window.waitForTimeout(300)
+      await expect(anyOtherVideoLine(card), 'control: on the video the job is for there is nothing to explain').toHaveCount(0)
+
+      await closeThenOpen(window, fileB)
+      await expect(card.getByRole('button', { name: 'Transcribing…' }), 'the job still runs under B').toBeVisible()
+      const line = card.getByText(SENTENCE, { exact: true })
+      await expect(line, 'the running job is named, with the file it is for').toBeVisible()
+      await expect(line).toHaveAttribute('title', SENTENCE)
+
+      // The phase row is main's progress line: send one, and the line is above it.
+      await app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.send('captions:progress', { phase: 'transcribing', percent: 40 })
+      })
+      const bar = card.getByRole('progressbar')
+      await expect(bar).toBeVisible()
+      const lineBox = await line.boundingBox()
+      const barBox = await bar.boundingBox()
+      expect(lineBox && barBox && lineBox.y + lineBox.height <= barBox.y, 'the line is above the phase row').toBe(true)
+
+      await release(app, 'releaseTranscribe')
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }), 'the job ends').toBeEnabled({ timeout: 15_000 })
+      await expect(line, 'and so does the line').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(2) a caption burn-in held on A, A closed, B opened: B\'s Captions panel says "Caption burn-in on <A>, started on another video." (control: on A there is none)', async () => {
+    test.setTimeout(240_000)
+    const { fileA, fileB } = twoVideos('t170burn')
+    const { app, window, outDir } = await launchWithVideo('t170burn', fileA)
+    try {
+      const burned = path.join(outDir, 'burned-t170.mp4')
+      await stubMain(app, { ready: true, holdTranscribe: false, srt: path.join(outDir, 't170burn.srt'), outputPath: burned })
+      await stubDialogs(app, { save: [burned] })
+      const card = captionsCard(window)
+      const SENTENCE = 'Caption burn-in on t170burn-a.mp4, started on another video.'
+      // A transcript first (answered at once), so Burn into video is there to press.
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 15_000 })
+      await burn.click()
+      await expect.poll(async () => (await counters(app)).burnCalls, { timeout: 15_000 }).toBe(1)
+      await expect(card.getByRole('button', { name: 'Burning in…' })).toBeVisible()
+      await window.waitForTimeout(300)
+      await expect(anyOtherVideoLine(card), 'control: on the video the burn-in is for there is nothing to explain').toHaveCount(0)
+
+      await closeThenOpen(window, fileB)
+      await expect(card.getByRole('button', { name: 'Burning in…' }), 'the burn-in still runs under B').toBeVisible()
+      const line = card.getByText(SENTENCE, { exact: true })
+      await expect(line).toBeVisible()
+      await expect(line).toHaveAttribute('title', SENTENCE)
+
+      await release(app, 'releaseBurn')
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }), 'the job ends').toBeEnabled({ timeout: 15_000 })
+      await expect(line, 'and so does the line').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(2) a Reframe held on A\'s clip, A closed, B opened with a clip: B\'s Reframe panel says "Reframe of <clip> from <A>, started on another video." (control: on A there is none)', async () => {
+    test.setTimeout(240_000)
+    const { fileA, fileB } = twoVideos('t170rf')
+    const { app, window, outDir } = await launchWithVideo('t170rf', fileA)
+    try {
+      await stubMain(app, { ready: true, holdTranscribe: false, srt: '', outputPath: path.join(outDir, 'held-reframe.mp4') })
+      await stubDialogs(app, { open: [outDir] })
+      const card = reframeCard(window)
+      const SENTENCE = 'Reframe of Clip 1 from t170rf-a.mp4, started on another video.'
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: 'Reframe to 9:16' }).click()
+      await expect.poll(async () => (await counters(app)).reframeCalls, { timeout: 15_000 }).toBe(1)
+      await expect(card.getByRole('button', { name: 'Reframing…' })).toBeDisabled()
+      await window.waitForTimeout(300)
+      await expect(anyOtherVideoLine(card), 'control: on the video the job is for there is nothing to explain').toHaveCount(0)
+
+      await closeThenOpen(window, fileB)
+      await expect(card, 'B has a clip, so B has a Reframe panel').toBeVisible({ timeout: 15_000 })
+      await expect(card.getByRole('button', { name: 'Reframing…' }), 'the job still runs under B').toBeDisabled()
+      const line = card.getByText(SENTENCE, { exact: true })
+      await expect(line, 'the running job is named: the clip and the file').toBeVisible()
+      await expect(line).toHaveAttribute('title', SENTENCE)
+      const lineBox = await line.boundingBox()
+      const barBox = await card.getByRole('progressbar').boundingBox()
+      expect(lineBox && barBox && lineBox.y + lineBox.height <= barBox.y, 'the line is above the phase row').toBe(true)
+
+      await release(app, 'releaseReframe')
+      await expect(card.getByRole('button', { name: 'Reframe to 9:16' }), 'the job ends').toBeEnabled({ timeout: 15_000 })
+      await expect(line, 'and so does the line').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(3) `captions:status` READY at mount and NOT ready at the press: one press shows the setup instructions and starts no job', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchHomeWithVideo('t170deleted')
+    try {
+      const card = captionsCard(window)
+      // The panel's cached answer is READY: main said so when the panel mounted.
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true })).toBeEnabled()
+      await expect(card.getByText('Captions need setup')).toHaveCount(0)
+      // The model file the panel told the person to delete is gone: main's next answer is "not ready", and nothing in the panel was told.
+      await app.evaluate(() => {
+        ;(globalThis as unknown as { __t170: Held }).__t170.ready = false
+      })
+      const before = (await counters(app)).statusCalls
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(card.getByRole('button', { name: 'Hide setup instructions' }), 'the setup instructions are open').toBeVisible({ timeout: 15_000 })
+      await expect(card.getByText('Captions need setup')).toBeVisible()
+      await window.waitForTimeout(500)
+      const after = await counters(app)
+      expect(after.statusCalls - before, 'the press asked main').toBe(1)
+      expect(after.transcribeCalls, 'and no job reached main').toBe(0)
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }), 'the button did not go to Transcribing').toBeEnabled()
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('(3) READY at the press too: each press asks main once, and one press is one job', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchHomeWithVideo('t170ready')
+    try {
+      const card = captionsCard(window)
+      const before = (await counters(app)).statusCalls
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(card.getByRole('button', { name: 'Transcribing…' })).toBeVisible({ timeout: 15_000 })
+      await expect.poll(async () => (await counters(app)).transcribeCalls).toBe(1)
+      expect((await counters(app)).statusCalls - before, 'the press asked main once').toBe(1)
+      await release(app, 'releaseTranscribe')
+      await expect(card.getByRole('button', { name: 'Transcribe', exact: true }).or(card.getByRole('button', { name: 'Re-transcribe', exact: true }))).toBeEnabled({ timeout: 15_000 })
+      expect((await counters(app)).transcribeCalls, 'one press, one job').toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})

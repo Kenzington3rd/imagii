@@ -154,6 +154,10 @@ export function VolumeMeter({ audioElement, channels = 2 }: VolumeMeterProps): J
     return () => {
       cancelled = true
       if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      // T-170 (1): a meter with no element under it reads silent. The loop stopped on its last reading, and WaveformView hands the meter no element for
+      // the seconds a replacing sound's waveform draws (T-157 (2)), so a red "0 dB" from the old sound stood under "Drawing the waveform...".
+      setLevels(Array(NUM_BARS).fill(0))
+      setPeakDb(-60)
       const g = graphRef.current
       try {
         g?.source.disconnect()

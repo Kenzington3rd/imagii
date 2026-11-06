@@ -54,7 +54,7 @@ describe('useVideoProgressFeeds (T-145)', () => {
   it('a reframe event patches the held run\'s percent and phase; an event with no measurement says null', () => {
     const feeds = install()
     useVideoProgressFeeds()
-    useReframeRun.getState().begin({ jobId: 'r1', name: 'Clip 1', percent: null, phase: 'starting' })
+    useReframeRun.getState().begin({ jobId: 'r1', name: 'Clip 1', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: null, phase: 'starting' })
     feeds.reframe[0]?.({ jobId: 'r1', phase: 'rendering', percent: 42 })
     expect(useReframeRun.getState().run).toMatchObject({ name: 'Clip 1', percent: 42, phase: 'rendering' })
     feeds.reframe[0]?.({ jobId: 'r1', phase: 'analyzing' })

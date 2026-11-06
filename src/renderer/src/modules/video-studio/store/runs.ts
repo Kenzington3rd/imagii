@@ -23,8 +23,18 @@ export const useGifRun = createRunStore<{ jobId: string; name: string }>()
 export const useCompileRun = createRunStore<{ jobId: string; name: string }>()
 /** The picture-in-picture composite. */
 export const usePipRun = createRunStore<{ jobId: string; name: string }>()
-/** The vertical reframe: its progress is a measurement or absent (`percent` null until main has one). */
-export const useReframeRun = createRunStore<{ jobId: string; name: string; percent: number | null; phase: ReframePhase }>()
+/**
+ * The vertical reframe: its progress is a measurement or absent (`percent` null until main has one). `videoPath` and `fileName` are the video it was started on
+ * (T-170 (2)): the panel names them when another video is open, as Export's queue does (T-168 (4)).
+ */
+export const useReframeRun = createRunStore<{
+  jobId: string
+  name: string
+  videoPath: string
+  fileName: string
+  percent: number | null
+  phase: ReframePhase
+}>()
 /** The highlight scan ("Scan VOD"): one at a time, however many times the panel is mounted. Cancel needs no id (main keeps a single slot). */
 export const useScanRun = createRunStore<{ name: string; percent: number }>()
 /** "Clean audio": the video whose sound is being extracted. */
@@ -37,8 +47,8 @@ export const useCleanAudioRun = createRunStore<{ videoPath: string }>()
  * another clip was selected, and for good when its clip was removed or the video closed).
  */
 export const useKitRun = createRunStore<{ clipId: string; clipName: string; phase: string; canceled: boolean }>()
-/** A transcription or a caption burn-in: which one is running. */
-export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in'; name: string }>()
+/** A transcription or a caption burn-in: which one is running, and (T-170 (2)) the video it was started on - `name` is that video's file name. */
+export const useCaptionsRun = createRunStore<{ job: 'transcribe' | 'burn-in'; name: string; videoPath: string }>()
 /**
  * The progress line main last sent for that job. It is NOT a field of the run: the row draws what main reports (the T-89 case sends the events
  * itself, with no engine behind them), and the job's closure clears it when the job ends so a finished job leaves no "Done 100%" behind.

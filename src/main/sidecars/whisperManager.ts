@@ -183,7 +183,8 @@ async function runTranscribeBody(
   onProgress: CaptionsProgressListener
 ): Promise<TranscribeResult> {
   const status = getCaptionsStatus()
-  if (!status.ready) throw new Error('Whisper not installed (see Captions setup)')
+  // T-170 (3): a FINISHED sentence (it ends in a period), so `userFacingError` shows it whole; the panel's cached "ready" can be stale over a file the person deleted.
+  if (!status.ready) throw new Error('The captions engine or the English model is missing. Captions setup in the Captions panel says what to add.')
   const run = transcribeLatch.begin(req.jobId)
   try {
     return await transcribeUnderRun(req, onProgress, status, run)

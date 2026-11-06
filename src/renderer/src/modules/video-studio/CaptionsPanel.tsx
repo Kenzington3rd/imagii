@@ -144,24 +144,23 @@ export function CaptionsPanel(): JSX.Element | null {
 
   async function transcribe(): Promise<void> {
     if (!source || noSound) return
-    if (!status?.ready) {
-      // T-169 (1): the cached answer is only as new as the last read (mount, a model download's end, "Refresh status"). The path the card itself invites: the model downloads while the
-      // person fetches the engine, the download ends with "engine missing", the engine and its .dll files are copied in, Transcribe is pressed - and the stale answer showed an already-open
-      // card. Ask main again; only a fresh "not ready" opens the setup. The begin() claim below still makes a double press one job.
-      const pressedFor = source.filePath
-      const fresh = await window.api.captions.status()
-      useCaptionsStatus.setState({ status: fresh })
-      if (useVideoStore.getState().source?.filePath !== pressedFor) return // closed or replaced while main answered: the press was for that video
-      if (!fresh.ready) {
-        setShowSetup(true)
-        return
-      }
+    // T-169 (1), T-170 (3): the cached answer is only as new as the last read (mount, a model download's end, "Refresh status"), and it is wrong in BOTH directions. Not ready over files that
+    // are there: the model downloads while the person fetches the engine, the engine and its .dll files are copied in, Transcribe is pressed - the stale answer showed an already-open card.
+    // Ready over files that are gone: the panel itself tells a person to delete the model file to replace it, and a press before "Refresh status" reached main and failed. So EVERY press asks
+    // main again, and only a fresh "not ready" opens the setup. The begin() claim below still makes a double press one job.
+    const pressedFor = source.filePath
+    const fresh = await window.api.captions.status()
+    useCaptionsStatus.setState({ status: fresh })
+    if (useVideoStore.getState().source?.filePath !== pressedFor) return // closed or replaced while main answered: the press was for that video
+    if (!fresh.ready) {
+      setShowSetup(true)
+      return
     }
     // T-112: the video this job is FOR. It takes minutes and nothing locks the app: close
     // it, drop another, and the result arrived to attach itself to whatever was open.
     const startedFor = source.filePath
     const startedName = source.fileName
-    if (!useCaptionsRun.getState().begin({ job: 'transcribe', name: startedName })) return
+    if (!useCaptionsRun.getState().begin({ job: 'transcribe', name: startedName, videoPath: startedFor })) return
     useCaptionsProgress.setState({ progress: null })
     try {
       const result = await window.api.captions.transcribe({
@@ -236,7 +235,7 @@ export function CaptionsPanel(): JSX.Element | null {
         return
       }
       const ranged = selectedClip !== null
-      if (!useCaptionsRun.getState().begin({ job: 'burn-in', name: source.fileName })) return
+      if (!useCaptionsRun.getState().begin({ job: 'burn-in', name: source.fileName, videoPath: source.filePath })) return
       useCaptionsProgress.setState({ progress: null })
       try {
         const result = await window.api.captions.burnIn({
@@ -323,6 +322,9 @@ export function CaptionsPanel(): JSX.Element | null {
         : segments !== null || srtPath
           ? 'Re-transcribe'
           : 'Transcribe'
+  const otherVideoSentence = captionsRun
+    ? `${captionsRun.job === 'burn-in' ? 'Caption burn-in on' : 'Transcription of'} ${captionsRun.name}, started on another video.`
+    : ''
   // T-89: a phase main cannot measure sends no percent, and gets an
   // indeterminate bar rather than a number that means nothing.
   const percent = progress?.percent
@@ -487,6 +489,14 @@ export function CaptionsPanel(): JSX.Element | null {
           </button>
           {showSetup ? setupDetails : null}
         </div>
+      ) : null}
+
+      {/* T-170 (2): the run is a module store, so a job started on A is drawn here after A is closed and B is open - the header, the phase row and Cancel are A's, Burn into video is off,
+          and nothing said whose. Named only when it is not the open video (there the panel speaks for itself): T-168 (4)'s Export rule. */}
+      {captionsRun && captionsRun.videoPath !== source.filePath ? (
+        <p className="text-xs text-ink-dim min-w-0 truncate" title={otherVideoSentence}>
+          {otherVideoSentence}
+        </p>
       ) : null}
 
       {progress ? (

@@ -2750,7 +2750,7 @@ describe('T-135 — the twenty-first sweep', () => {
     // (Its listener is the studio's since T-145: see `useVideoProgressFeeds` and the T-145 describe below.)
     expect(strip(read('modules/video-studio/store/useVideoProgressFeeds.ts'))).toMatch(/window\.api\.captions\.onProgress\(\(p\) => useCaptionsProgress\.setState\(\{ progress: p \}\)\)/)
     expect(src.match(/useCaptionsProgress\.setState\(\{ progress: null \}\)/g) ?? [], 'cleared at the start and at the end of both jobs').toHaveLength(4)
-    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/export const useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in'; name: string \}>\(\)/)
+    expect(strip(read('modules/video-studio/store/runs.ts'))).toMatch(/export const useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in'; name: string; videoPath: string \}>\(\)/)
   })
 
   it('(1) the audio export dialog draws the audio export store and registers its progress listener for the length of its own export', () => {
@@ -4514,5 +4514,41 @@ describe('T-164 (7), (9), (10) - the paste listener stands down for a text field
     const src = strip(read('modules/record-studio/RecordStudio.tsx')).replace(/\s+/g, ' ')
     expect(src).toContain('Your webcam is added to a corner of the recording. You can see it in the preview while you record.')
     expect(src).not.toMatch(/composited|preview overlay|chosen corner/)
+  })
+})
+
+// T-170 Track A: a running caption or Reframe job says whose it is, and Transcribe always asks main whether the captions files are there.
+describe('T-170 Track A: the other-video line and the always-fresh status', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  // E2E: video-pipelines.spec.ts "T-170 Track A" (a transcription, a burn-in and a Reframe held in main across a Close and a second video; `captions:status` READY at mount and NOT ready at the press).
+  it('(2) the runs carry the video they were started on, set at every begin from the open source', () => {
+    const runs = strip(read('modules/video-studio/store/runs.ts')).replace(/\s+/g, ' ')
+    expect(runs).toMatch(/useReframeRun = createRunStore<\{ jobId: string;? name: string;? videoPath: string;? fileName: string;? percent: number \| null;? phase: ReframePhase;? \}>/)
+    expect(runs).toMatch(/useCaptionsRun = createRunStore<\{ job: 'transcribe' \| 'burn-in'; name: string; videoPath: string \}>/)
+    const captions = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    expect(captions).toMatch(/begin\(\{ job: 'transcribe', name: startedName, videoPath: startedFor \}\)/)
+    expect(captions).toMatch(/begin\(\{ job: 'burn-in', name: source\.fileName, videoPath: source\.filePath \}\)/)
+    expect(strip(read('modules/video-studio/ReframePanel.tsx'))).toMatch(/begin\(\{ jobId, name: clip\.name, videoPath: source\.filePath, fileName: source\.fileName, percent: null, phase: 'starting' \}\)/)
+  })
+
+  it('(2) each panel draws one line, only while the run is another video\'s, whole as its title - and the sentences are the ticket\'s', () => {
+    const captions = strip(read('modules/video-studio/CaptionsPanel.tsx')).replace(/\s+/g, ' ')
+    expect(captions).toMatch(/\{captionsRun && captionsRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 truncate" title=\{otherVideoSentence\}>/)
+    expect(captions).toContain("captionsRun.job === 'burn-in' ? 'Caption burn-in on' : 'Transcription of'} ${captionsRun.name}, started on another video.")
+    const reframe = strip(read('modules/video-studio/ReframePanel.tsx')).replace(/\s+/g, ' ')
+    expect(reframe).toMatch(/\{reframeRun && reframeRun\.videoPath !== source\.filePath \? \( <p className="text-xs text-ink-dim min-w-0 truncate" title=\{otherVideoSentence\}>/)
+    expect(reframe).toContain('`Reframe of ${reframeRun.name} from ${reframeRun.fileName}, started on another video.`')
+  })
+
+  it('(3) transcribe() asks main on every press: the fresh read is not inside a cached-ready test, and the same-video guard stays', () => {
+    const src = strip(read('modules/video-studio/CaptionsPanel.tsx'))
+    const body = src.slice(src.indexOf('async function transcribe('), src.indexOf('async function saveSrt('))
+    expect(body).not.toMatch(/status\?\.ready/)
+    const fresh = body.indexOf('const fresh = await window.api.captions.status()')
+    expect(fresh, 'the press reads main').toBeGreaterThan(-1)
+    expect(body.indexOf('useCaptionsStatus.setState({ status: fresh })'), 'stores it').toBeGreaterThan(fresh)
+    expect(body.indexOf('!== pressedFor) return'), 'drops a press for a video that is gone').toBeGreaterThan(fresh)
+    expect(body.indexOf('if (!fresh.ready) {'), 'and only a fresh not-ready opens the setup').toBeGreaterThan(body.indexOf('!== pressedFor) return'))
+    expect(body.indexOf('useCaptionsRun.getState().begin('), 'before the job is claimed').toBeGreaterThan(body.indexOf('if (!fresh.ready) {'))
   })
 })

@@ -56,6 +56,8 @@ export function ReframePanel(): JSX.Element | null {
   // are the compiler's - they narrow `source` and `clip` for the body - and the helper repeats them as part of the rule.
   if (!source || !clip || !reframePanelShows(source, clip)) return null
 
+  const otherVideoSentence = reframeRun ? `Reframe of ${reframeRun.name} from ${reframeRun.fileName}, started on another video.` : ''
+
   async function reframe(): Promise<void> {
     if (startingRef.current) return
     startingRef.current = true
@@ -68,7 +70,7 @@ export function ReframePanel(): JSX.Element | null {
       const resolvedOutDir = await resolveOutDir()
       if (!resolvedOutDir) return
       const jobId = nanoid(10)
-      if (!useReframeRun.getState().begin({ jobId, name: clip.name, percent: null, phase: 'starting' })) return
+      if (!useReframeRun.getState().begin({ jobId, name: clip.name, videoPath: source.filePath, fileName: source.fileName, percent: null, phase: 'starting' })) return
       try {
         const result = await window.api.video.reframe({
           jobId,
@@ -159,6 +161,13 @@ export function ReframePanel(): JSX.Element | null {
           {running ? 'Reframing…' : 'Reframe to 9:16'}
         </button>
       </div>
+      {/* T-170 (2): the run is a module store, so a Reframe started on A is drawn here after A is closed and B is open, with its phase row and Cancel, and nothing said whose.
+          Named only when it is not the open video (T-168 (4)'s Export rule). */}
+      {reframeRun && reframeRun.videoPath !== source.filePath ? (
+        <p className="text-xs text-ink-dim min-w-0 truncate" title={otherVideoSentence}>
+          {otherVideoSentence}
+        </p>
+      ) : null}
       {running ? (
         <div className="flex items-center gap-2 text-xs text-ink-muted">
           {/* T-100: the phase id, upper-cased, was the label ("ANALYZING"). */}

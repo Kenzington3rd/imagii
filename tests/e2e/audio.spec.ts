@@ -5757,3 +5757,68 @@ test.describe('T-169 (iii): the waveform hint names the chip that puts a cut bac
     }
   })
 })
+
+// ── T-170 (1): the meter reads the sound that is there ─────────────────────────────────────────────────────────────────────────────────────
+// The meter is mounted across sources and holds its bars and dB readout in state; its effect cleanup only stopped the loop, so when a replacing sound
+// took the element away (WaveformView sets it null while the new waveform draws) the meter froze at the last reading - a red "0 dB" is possible - under
+// "Drawing the waveform... N%". The app's own path is Clean audio from Video Studio finishing while a sound plays in Audio Studio.
+test.describe('T-170 (1): a meter with no sound under it reads silent', () => {
+  test('a loud sound plays, Clean audio replaces it, and while the new waveform draws the meter reads "-60 dB" with every bar at zero', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t170-meter-reset')
+    const { window, app } = studio
+    try {
+      const label = window.getByText('Meter', { exact: true }).locator('xpath=following-sibling::span')
+      const bars = window.locator('div.flex.items-end.h-6 > div')
+      const barHeights = (): Promise<string[]> => bars.evaluateAll((els) => els.map((b) => (b as HTMLElement).style.height))
+      // A 30 s tone at -0.33 dBFS: it is still playing when the extraction lands.
+      const loud = path.join(studio.root, 'source', 'loud-t170.wav')
+      const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=30', '-af', 'volume=7.7', '-ac', '1', '-ar', '44100', '-c:a', 'pcm_s16le', loud])
+      if (made.code !== 0) throw new Error(`tone ffmpeg exit ${made.code}: ${made.stderr.slice(-600)}`)
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+
+      await dropOnImporter(window, loud, 'loud-t170.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+
+      // To Video Studio, the clip in, and Clean audio, with every ffmpeg from here held 8 s: the extraction, and then the new sound's peaks.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await window.evaluate((filePath) => {
+        const zone = document.querySelector('[data-tutorial="video-import"] .card')
+        if (!zone) throw new Error('Video Studio drop zone not found')
+        const file = new File([new Uint8Array([0])], 'e2e-clip.mp4', { type: '' })
+        Object.defineProperty(file, 'path', { value: filePath })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
+        zone.dispatchEvent(event)
+      }, video)
+      const clean = window.getByRole('button', { name: 'Clean audio' })
+      await expect(clean).toBeEnabled({ timeout: 30_000 })
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 8_000 }])
+      await clean.click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+
+      // Back in Audio Studio, the loud sound is still the one open: it plays, and the meter shows it.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(playButton(window)).toBeEnabled({ timeout: 15_000 })
+      await playButton(window).click()
+      await expect(label).toHaveText('0 dB', { timeout: 10_000 })
+      expect((await barHeights()).some((h) => h !== '2%'), 'the bars are up while it plays').toBe(true)
+
+      // The extraction lands over it. While the new waveform draws there is no element under the meter, and it reads so.
+      await expect(window.getByRole('progressbar', { name: 'Drawing the waveform' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      await expect(label, 'no sound under the meter: it reads silence, not the old 0 dB').toHaveText('-60 dB')
+      expect(await barHeights(), 'every bar at zero (the 2% floor)').toEqual(Array(12).fill('2%'))
+      await window.waitForTimeout(600)
+      await expect(label).toHaveText('-60 dB')
+      await expect(window.getByRole('progressbar', { name: 'Drawing the waveform' }), 'still drawing: the reading was held while it drew').toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

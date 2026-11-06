@@ -75,13 +75,13 @@ describe('videoJobRows - one row per running job (T-144)', () => {
   })
 
   it('Reframe names its clip and the phase it is in, with its figure only when main has one', () => {
-    expect(videoJobRows(snap({ reframe: { jobId: 'r', name: 'Clip 3', percent: null, phase: 'analyzing' } }))[0]).toMatchObject({
+    expect(videoJobRows(snap({ reframe: { jobId: 'r', name: 'Clip 3', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: null, phase: 'analyzing' } }))[0]).toMatchObject({
       kind: 'reframe',
       label: 'Reframe — Clip 3',
       progress: 'Checking the video…',
       cancelTitle: 'Cancel reframe'
     })
-    expect(videoJobRows(snap({ reframe: { jobId: 'r', name: 'Clip 3', percent: 61.6, phase: 'rendering' } }))[0]?.progress).toBe('Rendering… 62%')
+    expect(videoJobRows(snap({ reframe: { jobId: 'r', name: 'Clip 3', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: 61.6, phase: 'rendering' } }))[0]?.progress).toBe('Rendering… 62%')
   })
 
   it('GIF, Compile and Picture-in-picture name what they are for and invent no progress', () => {
@@ -102,19 +102,19 @@ describe('videoJobRows - one row per running job (T-144)', () => {
   it('a transcription and a burn-in are told apart, with the phase main last reported (a figure only where it sent one)', () => {
     const transcribing: CaptionsProgress = { jobId: 'j', phase: 'transcribing' }
     const burning: CaptionsProgress = { jobId: 'j', phase: 'burning-in', percent: 30 }
-    expect(videoJobRows(snap({ captions: { job: 'transcribe', name: 'stream.mp4' }, captionsProgress: transcribing }))[0]).toMatchObject({
+    expect(videoJobRows(snap({ captions: { job: 'transcribe', name: 'stream.mp4', videoPath: '/v/stream.mp4' }, captionsProgress: transcribing }))[0]).toMatchObject({
       kind: 'transcribe',
       label: 'Transcribing — stream.mp4',
       progress: 'Transcribing…',
       cancelTitle: 'Cancel transcription'
     })
-    expect(videoJobRows(snap({ captions: { job: 'burn-in', name: 'stream.mp4' }, captionsProgress: burning }))[0]).toMatchObject({
+    expect(videoJobRows(snap({ captions: { job: 'burn-in', name: 'stream.mp4', videoPath: '/v/stream.mp4' }, captionsProgress: burning }))[0]).toMatchObject({
       kind: 'burn-in',
       label: 'Burning in captions — stream.mp4',
       progress: 'Burning in… 30%',
       cancelTitle: 'Cancel burn-in'
     })
-    expect(videoJobRows(snap({ captions: { job: 'burn-in', name: 'stream.mp4' } }))[0]?.progress, 'no report yet, no words').toBeNull()
+    expect(videoJobRows(snap({ captions: { job: 'burn-in', name: 'stream.mp4', videoPath: '/v/stream.mp4' } }))[0]?.progress, 'no report yet, no words').toBeNull()
   })
 
   it('the caption model\'s download is a row too (its Cancel is a panel\'s that is gone with the video)', () => {
@@ -137,7 +137,7 @@ describe('videoJobRows - one row per running job (T-144)', () => {
         snap({
           exportQueue: { running: true, jobs: [job('a')], sourcePath: '/v/a.mp4', sourceName: 'a.mp4' },
           scan: { name: 'a.mp4', percent: 1 },
-          reframe: { jobId: 'r', name: 'c', percent: null, phase: 'starting' },
+          reframe: { jobId: 'r', name: 'c', videoPath: '/v/a.mp4', fileName: 'a.mp4', percent: null, phase: 'starting' },
           pip: { jobId: 'p', name: 'x' }
         })
       )

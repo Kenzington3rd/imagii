@@ -3644,7 +3644,8 @@ test.describe('T-167 (5): the keyboard opens the context menu at the field', () 
 
 // ── T-169: an edit that changes nothing is not an edit; a held Enter is one search; the grid says how to Save ────────────────────────────────
 test.describe('T-169: References', () => {
-  const HOVER_HINT = 'Hover a picture and click Save to add it to a mood board.'
+  // T-170 (4): with no board yet (this fixture has none) the line says the first Save starts one.
+  const HOVER_HINT = 'Hover a picture and click Save to start a new mood board.'
   const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
 
   /** `search:images` answered in MAIN: counts every call, answers `nothing` with no results and anything else with one data: picture. */
@@ -3794,6 +3795,99 @@ test.describe('T-169: References', () => {
       await tile.hover()
       await expect(scrim).toHaveCSS('opacity', '1')
       await expect(save).toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-170 (4): the hint above the results says where Save goes ─────────────────────────────────────────────────────────────────────────────
+// The line said "a mood board" while Save goes to the board selected on the Mood Boards tab, named only afterwards in a 2 s toast. It names the board
+// now (truncated, with the whole sentence as its title), and with no board it says the first Save starts one.
+test.describe('T-170 (4): the Reference Search hint names the board Save goes to', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const NEW_BOARD = 'Hover a picture and click Save to start a new mood board.'
+  const sentence = (board: string): string => `Hover a picture and click Save to add it to "${board}".`
+
+  async function stubOnePicture(app: ElectronApplication): Promise<void> {
+    await app.evaluate(async ({ ipcMain }, pixel) => {
+      ipcMain.removeHandler('search:images')
+      ipcMain.handle('search:images', (_e, query: unknown) => ({
+        query: String(query),
+        provider: 'duckduckgo',
+        results: [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'local', title: 'A picture' }]
+      }))
+    }, PIXEL)
+  }
+
+  test('with two boards the hint names the selected one (not the first), follows a new selection, and a Save lands where it says', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t170-hint')
+    // "Layouts" is the newer board, so it is the one the store selects by default; "Colors" is older and has to be picked.
+    for (const [id, name, createdAt] of [['colorsboard', 'Colors', 1700000000000], ['layoutsboard', 'Layouts', 1700000100000]] as const) {
+      writeFileSync(path.join(fx.boardsDir, `${id}.json`), JSON.stringify({ id, name, createdAt, items: [] }), 'utf8')
+    }
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await stubOnePicture(app)
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Colors, 0 items' }).click()
+      await window.getByRole('button', { name: 'Reference Search', exact: true }).click()
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('anything')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible({ timeout: 10_000 })
+
+      const hint = window.getByText(sentence('Colors'), { exact: true })
+      await expect(hint).toBeVisible()
+      await expect(hint).toHaveAttribute('title', sentence('Colors'))
+      await expect(hint).toHaveClass(/truncate/)
+      await expect(window.getByText(NEW_BOARD)).toHaveCount(0)
+
+      // The Save lands on the board the line names.
+      const tile = window.locator('div.group', { has: window.locator('img[alt="A picture"]') })
+      await tile.hover()
+      await tile.getByRole('button', { name: 'Save' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Saved to "Colors"')
+      await expect
+        .poll(() => Object.fromEntries(readBoardsFromDisk(fx.boardsDir).map((b) => [b.name, b.items.length])))
+        .toEqual({ Colors: 1, Layouts: 0 })
+
+      // Another board picked on the Mood Boards tab: the line follows.
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Layouts, 0 items' }).click()
+      await window.getByRole('button', { name: 'Reference Search', exact: true }).click()
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible()
+      await expect(window.getByText(sentence('Layouts'), { exact: true })).toBeVisible()
+      await expect(window.getByText(sentence('Colors'), { exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('control: with no board the line says the first Save starts a new mood board, and the Save asks for its name', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t170-noboard')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await stubOnePicture(app)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('anything')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible({ timeout: 10_000 })
+      await expect(window.getByText(NEW_BOARD, { exact: true })).toBeVisible()
+      await expect(window.getByText('add it to "', { exact: false })).toHaveCount(0)
+      const tile = window.locator('div.group', { has: window.locator('img[alt="A picture"]') })
+      await tile.hover()
+      await tile.getByRole('button', { name: 'Save' }).click()
+      await expect(window.getByRole('dialog').getByText('Name your first mood board').first()).toBeVisible()
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
