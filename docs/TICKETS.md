@@ -8274,6 +8274,88 @@ IMG-PREC.
 
 ---
 
+## T-168 — sweep-54 fixes (round 117)
+
+- **Spec:** the fifty-fourth sweep's five verified findings (candidate clean pass #1 on 9f2178f), each confirmed by the
+  expediter against source, plus one expediter item: the home-chrome T-131 flake, root-caused by a Sonnet diagnoser
+  (instrumented runs in a scratch clone) as a PRODUCT bug. QA main and renderer a (both executed the T-167 helpers),
+  privacy, audio, Electron (after a second pass over its spawn ranges), a11y, UX reader 2, design reader 1 (432 pastes
+  on every template in the built app) and both streamer readers clean on their lens; ffmpeg executed every runner on 7.0.2 and 6.1.1 and the T-167 range fallback at each bound. Three are new
+  consequences of T-167 (items 1-3). Not counted: the coachmark covering Export-card targets at the 1024x640 floor (the
+  sweep-44 disposition); Record never says "no game or desktop sound" on its own screen (T-85 ruled the copy; owner); I
+  after Out collapsing to 0.1 s (T-152 (4)); the no-loudnorm limiter is sample-peak; Aggressive denoise on music; cookies
+  from image hosts (unverified). Two tracks, disjoint files.
+
+  **Track A — the Smart highlight finder and the crop box say and do what a person expects (items 1-3, 5).**
+  1. **[LOW] The late-scan toast fades in 4 s** (video-studio/HighlightPanel.tsx:125). `toast(lateScanMessage(...), {
+     icon: search })` sets no duration (react-hot-toast's 4 s), where every sibling dropped-result toast —
+     `staleCaptionsMessage` (CaptionsPanel.tsx:163-166), the preview copy skipped (Player.tsx:282), the importers,
+     VideoStudio — uses the warning icon and 8000 ms (BRANDING "Toasts": ACTION_TOAST_MS when the sentence is the only
+     place the fact is said); ~27 words that tell the person minutes of work were dropped fade before they are read.
+     Fix: `{ icon: <Icon name="warning" size={18} />, duration: ACTION_TOAST_MS }` (lib/savedToast's constant).
+  2. **[LOW] The scan bar names its video only to assistive tech** (HighlightPanel.tsx:209-217; ProgressTrack draws no
+     text). USER_GUIDE:329-330 promises "The bar names the video it is scanning (Scanning stream.mp4 for highlights)",
+     but a sighted person on another video sees an anonymous bar. Fix: a visible, truncated line above or beside the bar
+     — `Scanning <name> for highlights` (text-xs, `min-w-0 truncate`, `title` = the full name) — keeping the
+     ProgressTrack's label.
+  3. **[LOW] A plain click on a crop RESIZE handle re-stores the rectangle and pushes an undo step**
+     (video-studio/CropOverlay.tsx:218-226). re-resizable fires `onResizeStop` on any press and release of a handle
+     (lib/index.js:696-703), and the handler stores w/h from `ref.offsetWidth/offsetHeight` (whole pixels) while the box
+     is drawn at the fractional `cropRect.w x picture.w` (0.9 of 640.37 px reads 576 -> 0.89946), past setClipCrop's
+     exact guard; T-167's click-skip covered only `onDragStop`. Fix: `onResizeStop` returns after `endGesture()` when
+     its `delta` is `{ width: 0, height: 0 }` (the 4th argument react-rnd forwards).
+  5. **[LOW] The Smart highlight finder silently ignores a chat log it cannot parse** (HighlightPanel.tsx:92-97,
+     :198-206). A log in an unsupported shape (`[2024-05-01 12:34:56] user: msg`, `12:34 user: msg`) parses to `[]`,
+     scoring runs audio-only, the Chat bar stays 0, and nothing says why — while the sibling Chat spike finder prints
+     "No timestamped messages found. Each line should start like [12:34] username: message" (ChatHighlightPanel.tsx:46-48).
+     Fix: move that sentence into src/shared/chatLog.ts as `CHAT_LOG_FORMAT_MESSAGE` (both panels use it), and under the
+     finder's textarea show it (text-xs text-warn) when the debounced text is non-blank and parses to 0 messages.
+
+  **Track B — a running job says whose it is, and a double-click's second press reaches nothing (item 4, the
+  expediter item, folds).**
+  4. **[MED] With another video open, the Export panel shows the earlier video's running batch with nothing naming it**
+     (video-studio/ExportPanel.tsx:184, :592-664). `jobs` keeps the queue while `running` whatever the open source, and
+     the rows print only `clip · preset`: B's Export reads "Exporting…" over A's rows and a Cancel nobody can attribute,
+     though the queue store holds `sourceName` (exportQueue.ts:81, T-164) and Audio names it for the same shape
+     (ExportDialog `otherSoundLabel`, T-147). Fix: when `running && queueSource !== source.filePath`, one line above the
+     Queue — "Export of <sourceName>, started on another video." (text-xs text-ink-dim, truncated with a title).
+  Fold (not counted): the GIF, Compile and PiP busy states name what their run is for — each busy label reads the
+  run's own `name` (GifPanel's clip name, CompilationPanel's file, PipPanel's base) instead of a bare "Exporting…" /
+  "Stitching…" / "Compositing…" (truncated, with a title).
+  6. **[Expediter item, MED] A double-click on a dialog or tour button opens the control under it**
+     (lib/repeatPress.ts:116-130). `swallowRepeatClicks` swallows only `click` events with detail > 1; the repeat's
+     `mousedown`/`mouseup` still land, so a double-click on the tour's Done (the card closes on the first press) focuses
+     and opens the Video Studio's "Watermark position" `<select>` under it, and its native popup swallows the next key
+     (the home-chrome T-131 test's `?`; diagnosed with capture-phase logs: keydown never reached the page, `openModals`
+     0; pressing Escape first passes 5/5). T-131 (8)'s promise "its second press reaches nothing" is broken for a
+     person too. Fix: the same capture-phase swallow for `mousedown` and `mouseup` as for `click` (one handler, three
+     event types; preventDefault on the repeat mousedown keeps focus and the popup from opening).
+  Folds (not counted): LayerPanel.tsx:52's empty-state line can never show (ImageStudio mounts LayerPanel only with
+  layers) — delete it; AssetLibraryPanel.tsx:121's `${ASSET_CATALOG.length} assets` goes through `countOf`;
+  DESIGN_GUIDE's raw-colour exception list names compositor.ts's letterbox `'black'`.
+
+  Covering tests: unit (NEW describes at the end of the files they touch), each red on 9f2178f: `CHAT_LOG_FORMAT_MESSAGE`
+  and parseChatLog on the unsupported shapes; repeatPress: a detail-2 mousedown and mouseup inside the window are
+  stopped, outside it or with detail 1 are not. e2e (NEW describes at the end of video-pipelines.spec.ts,
+  video-core.spec.ts and home-chrome.spec.ts), each red on 9f2178f: the late-scan toast still on screen at 6 s with
+  the warning icon; the visible scan line names the scanned file on another video; a press and release on a crop
+  resize handle leaves Undo disabled; an unparseable chat log shows the format line; an export started on A, A
+  closed, B opened — the line names A; the GIF busy label names its clip; a double-click on the tour's Done with the
+  Watermark position select under it leaves no select focused or open, and `?` then opens the shortcuts (the T-131
+  case passes 10 of 10 standalone — state the runs).
+
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE
+  where a sentence is now wrong or new (A: the scan line, the chat-log format line; B: the export's other-video
+  line); DESIGN_GUIDE (B: the compositor exception).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify` twice
+  and the FULL Playwright suite green before handback (no ffmpeg command changes, so `test:media` is
+  run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 117)
+
+---
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
