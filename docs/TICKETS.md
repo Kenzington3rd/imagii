@@ -8929,6 +8929,45 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 124 — see the Done entry)
 
+## T-176 — sweep-62 fix (round 125)
+
+- **Spec:** the sixty-second sweep's one verified finding (candidate clean pass #1 on c4f6e3b), confirmed by the
+  expediter against source and found independently by design reader 2 and UX reader 1. Privacy, a11y, Electron, audio,
+  QA main and both renderer readers, design reader 1, UX reader 2 and all three streamer readers clean on their lens. A
+  new consequence of T-175 (3). Not counted: a kept video part holding only the default whole-video clip still being
+  asked about ("The 1 clip kept for …") — the T-147 (3) "nobody touched it" test needs the probed duration, which a file
+  that could not be opened cannot give, and a trimmed end would otherwise be lost silently (the safe side; UX reader 2
+  weighed it the same way); the Player ignoring error codes 1 and 2 when a drive is pulled mid-edit (unexecuted); a
+  waveform refusal not keeping a restored chain (not reproduced); a drive remounted under another letter asking the
+  kept question about the same file (speculative); the Recent toggle unmounting when a failed pick empties the list
+  (the dispositioned self-removing-control class). One track.
+
+  **Track A — Clean audio's kept-part question names what opens (item 1).**
+  1. **[LOW] Clean audio's question says "Open <video>?" about a video that is already open** (video-studio/
+     VideoStudio.tsx:98; project/ProjectIO.ts `keptPartQuestion`'s lead `Open ${openingName}?`). Pressing Clean audio on
+     an open stream.mp4 while a chain is kept for an unopenable rec.wav asks "Open stream.mp4? The changes kept for
+     rec.wav, which could not be opened, will be discarded." Nothing opens stream.mp4 — it is open; what opens is its
+     sound, in Audio Studio (BRANDING: copy promises only what the code does). Fix: Clean audio passes `the sound of
+     ${source.fileName}` as the opening name — "Open the sound of stream.mp4? The changes kept for rec.wav, which could
+     not be opened, will be discarded." (the app's own phrase: AudioImporter's "Skipped the sound of <file> …"). The two
+     importers and Edit in Video Studio are unchanged (they do open that file).
+
+  Covering tests: e2e (a NEW describe at the end of audio.spec.ts or video-core.spec.ts, as fits the existing kept-chain
+  fixture) — an autosave whose sound is missing restores the rest; a video opened in Video Studio; Clean audio → the
+  question's exact words are "Open the sound of <video name>? The changes kept for <sound name>, which could not be
+  opened, will be discarded." (red on the base: "Open <video name>? …"); Cancel extracts nothing and the kept chain
+  survives (control, T-175); the wiring pin on `cleanAudioFlow`'s question updated in place; the IC row's words updated.
+  LESSONS_LEARNED entry; INTERACTION_COVERAGE row (Clean audio with a kept chain: now driven end to end, or the
+  disposition kept and said why).
+
+  **Docs:** IC row; TESTING paragraph; LESSONS entry at the TOP; USER_GUIDE where it quotes the question.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open.
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
