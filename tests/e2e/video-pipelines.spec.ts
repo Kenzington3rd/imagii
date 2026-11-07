@@ -8339,10 +8339,8 @@ test.describe('T-112: review-gate fixes', () => {
       await app.evaluate(() =>
         (globalThis as unknown as { __tx: { release: () => void } }).__tx.release()
       )
-      await expectToast(
-        window,
-        'finished after that video was closed or replaced, so they weren\'t added. Transcribe again when you\'re ready.'
-      )
+      // T-174 (5): the late result is held for A (opening A again brings it back - the T-174 Track B describe), and the toast says so.
+      await expectToast(window, 'Captions for pipeline.mp4 are ready. Open it again to see them.')
       const card = captionsCard(window)
       // B has no captions: no style subtree, no Burn into video, none of A's words.
       await expect(card.getByRole('button', { name: 'Burn into video' })).toHaveCount(0)
@@ -15087,7 +15085,7 @@ test.describe('T-172 Track A: a converted import re-opened is the same video; th
     })
   }
 
-  test('(2) controls: a DIFFERENT converted file opened after the Close keeps the line, the vanishing rows and the refusal, as before', async () => {
+  test('(2) controls: a DIFFERENT converted file opened after the Close keeps the line, the vanishing rows and the scan refusal, as before; the late transcript is held for its file (T-174 (5))', async () => {
     test.setTimeout(420_000)
     const other = twin(flvSrc, 't172-other.flv')
     const { app, window, outDir, seeded } = await launchOn('t172diff', flvSrc)
@@ -15119,7 +15117,7 @@ test.describe('T-172 Track A: a converted import re-opened is the same video; th
       await releaseHeld(app, 'video:findHighlights')
       await releaseHeld(app, 'captions:transcribe')
       await expectToast(window, 'The scan of stream.flv finished after that video was closed or replaced')
-      await expectToast(window, 'Captions for stream.flv finished after that video was closed or replaced')
+      await expectToast(window, 'Captions for stream.flv are ready. Open it again to see them.')
       await expect(highlightCard(window).getByRole('button', { name: 'Scan VOD' }), 'nothing was stored for t172-other.flv').toBeVisible()
       await expect(captionsCard(window).getByText('words', { exact: true })).toHaveCount(0)
     } finally {
@@ -15349,6 +15347,139 @@ test.describe('T-173 Track C: a transcript comes back with its video', () => {
       await openIt(window, flvSrc)
       await expectTranscribed(window, 'the same .flv opened again')
       expect(await calls(), 'and Transcribe was not pressed again').toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// ── T-174 Track B (5): a transcription that finishes after its video was closed is held for the video ───────────────────────────────────────────────────────────────────────────
+//
+// T-173 Track C held a finished transcript by `videoKey` so opening the video again gives it back - but a result that landed while its video was closed or another was open was refused
+// before it was held, and the toast said to transcribe again (minutes of whisper, and the .srt left in the captions folder). The run now carries the probe duration it STARTED on and
+// a refused late result is held under its key with it, so the video opened again has the transcript, Save .srt and Burn into video without Transcribe pressed. The engine is stubbed as
+// everywhere in this suite (the answer is held in main until the test releases it); the .srt is a real file in the real captions folder.
+test.describe('T-174 Track B (5): a late transcription is held for its video', () => {
+  const READY = { exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }
+  const LINE = 'a line the stub heard late'
+  const FIRST_RUN = 'Transcribe the source video, then save the text as .srt or burn it into a new MP4.'
+  const preview = (window: Page): Locator => captionsCard(window).getByLabel('Transcript preview')
+
+  /** Home, the stubbed engine (ready; Transcribe is HELD in main until `release`, then answers with a real .srt, or with no speech), Video Studio, `file` opened. */
+  async function launchHeld(name: string, file: string, speech: boolean): Promise<Studio & { calls: () => Promise<number>; release: () => Promise<void> }> {
+    const studio = await launchHome(name)
+    const captionsDir = path.join(studio.userDataDir, 'captions')
+    mkdirSync(captionsDir, { recursive: true })
+    const srt = path.join(captionsDir, `${name}-1700000000000.srt`)
+    writeFileSync(srt, `1\n00:00:00,000 --> 00:00:01,000\n${LINE}\n`, 'utf8')
+    await studio.app.evaluate(({ ipcMain }, arg) => {
+      const g = globalThis as unknown as { __t174: { calls: number; release: () => void } }
+      let release: () => void = () => undefined
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      g.__t174 = { calls: 0, release }
+      ipcMain.removeHandler('captions:status')
+      ipcMain.handle('captions:status', () => arg.ready)
+      ipcMain.removeHandler('captions:transcribe')
+      ipcMain.handle('captions:transcribe', async (_e, req: { jobId: string }) => {
+        g.__t174.calls += 1
+        await gate
+        return arg.speech
+          ? { jobId: req.jobId, srtPath: arg.srt, segments: [{ startSec: 0, endSec: 1, text: arg.line }], durationMs: 5 }
+          : { jobId: req.jobId, srtPath: null, segments: [], durationMs: 5 }
+      })
+    }, { ready: READY, srt, line: LINE, speech })
+    await gotoVideoStudio(studio.window)
+    await installToastLog(studio.window)
+    await openIt(studio.window, file)
+    return {
+      ...studio,
+      calls: () => studio.app.evaluate(() => (globalThis as unknown as { __t174: { calls: number } }).__t174.calls),
+      release: () => studio.app.evaluate(() => (globalThis as unknown as { __t174: { release: () => void } }).__t174.release())
+    }
+  }
+  async function openIt(window: Page, file: string): Promise<void> {
+    await dropOnVideoImporter(window, file, path.basename(file))
+    await expect(window.locator('header').getByText(path.basename(file), { exact: true })).toBeVisible({ timeout: 120_000 })
+    await expect(window.locator('video')).toHaveCount(1)
+    await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+  }
+  async function closeVideo(window: Page): Promise<void> {
+    window.once('dialog', (dialog) => void dialog.accept())
+    await window.getByRole('button', { name: 'Close', exact: true }).click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+  }
+  async function startTranscribe(window: Page): Promise<void> {
+    await captionsCard(window).getByRole('button', { name: 'Transcribe', exact: true }).click()
+    await expect(captionsCard(window).getByRole('button', { name: 'Transcribing…' })).toBeVisible({ timeout: 15_000 })
+  }
+  async function expectTranscribed(window: Page, why: string): Promise<void> {
+    await expect(preview(window), `${why}: the preview`).toContainText(LINE, { timeout: 15_000 })
+    await expect(captionsCard(window).getByRole('button', { name: 'Save .srt' }), `${why}: Save .srt`).toBeVisible()
+    await expect(captionsCard(window).getByRole('button', { name: 'Burn into video' }), `${why}: Burn into video`).toBeEnabled()
+    await expect(captionsCard(window).getByText(FIRST_RUN), `${why}: not the first-run hint`).toHaveCount(0)
+  }
+  async function expectFirstRun(window: Page, why: string): Promise<void> {
+    await expect(captionsCard(window).getByText(FIRST_RUN), `${why}: the first-run hint`).toBeVisible()
+    await expect(captionsCard(window).getByRole('button', { name: 'Save .srt' }), `${why}: no Save .srt`).toHaveCount(0)
+    await expect(preview(window), `${why}: no preview`).toHaveCount(0)
+  }
+
+  test('Transcribe, Close, the engine finishes: the toast says the captions are ready to open again, and the same video opened again has the transcript and Save .srt without pressing Transcribe', async () => {
+    test.setTimeout(300_000)
+    const { app, window, calls, release } = await launchHeld('t174closed', clipSrc, true)
+    try {
+      await startTranscribe(window)
+      await closeVideo(window)
+      await release()
+      await expectToast(window, 'Captions for pipeline.mp4 are ready. Open it again to see them.')
+      expect((await readToastLog(window)).join(' | '), 'not the old refusal').not.toMatch(/weren't added|Transcribe again when you're ready/)
+      await expect(window.getByText('Drop a video here'), 'nothing was opened by the late result').toBeVisible()
+
+      await openIt(window, clipSrc)
+      await expectTranscribed(window, 'the same video opened again')
+      expect(await calls(), 'Transcribe was pressed once').toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('Transcribe on a 2 s video, Close, a 14 s video opened, the engine finishes: that video has none of it (control), and the first one opened again has its transcript (the duration it STARTED on)', async () => {
+    test.setTimeout(300_000)
+    const { app, window, calls, release } = await launchHeld('t174other', clipSrc, true)
+    try {
+      await startTranscribe(window)
+      await closeVideo(window)
+      await openIt(window, burstSrc)
+      await release()
+      await expectToast(window, 'Captions for pipeline.mp4 are ready. Open it again to see them.')
+      await expectFirstRun(window, 'the other video, which was open when the result landed')
+
+      await closeVideo(window)
+      await openIt(window, clipSrc)
+      await expectTranscribed(window, 'the first video opened again')
+      expect(await calls()).toBe(1)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+
+  test('a run that found no speech and landed after Close: the toast says so for that file, and the video opened again shows "No speech found in this video" and no Save .srt', async () => {
+    test.setTimeout(300_000)
+    const { app, window, calls, release } = await launchHeld('t174quiet', clipSrc, false)
+    try {
+      await startTranscribe(window)
+      await closeVideo(window)
+      await release()
+      await expectToast(window, 'No speech found in pipeline.mp4, so there are no captions')
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/Open it again to see them|weren't added/)
+
+      await openIt(window, clipSrc)
+      await expect(captionsCard(window).getByText('No speech found in this video, so there are no captions.')).toBeVisible({ timeout: 15_000 })
+      await expect(captionsCard(window).getByRole('button', { name: 'Save .srt' })).toHaveCount(0)
+      await expect(captionsCard(window).getByText(FIRST_RUN)).toHaveCount(0)
+      expect(await calls()).toBe(1)
     } finally {
       await app.close().catch(() => undefined)
     }

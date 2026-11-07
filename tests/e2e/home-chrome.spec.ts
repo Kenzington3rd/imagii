@@ -4117,3 +4117,108 @@ test.describe('T-168 (6): a double-click on the tour\'s Done leaves the control 
     }
   })
 })
+
+// ── T-174 Track B (4): what a Restore could not apply comes back with its file ─────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// A Restore whose video was gone said "load the video again in Video Studio", and loading it again opened it fresh: the clips were applied only when the video loaded, and the
+// next autosave replaced the only copy. ProjectIO keeps a studio part its file could not be opened for (the clips, the selection, the caption path) for the session, `captureProject`
+// writes it while the studio has nothing open (so the autosave on disk keeps it), and the same file opened again gets it back; a different file opening drops it. The sentence is unchanged.
+test.describe('T-174 Track B (4): a Restore whose video was gone keeps its clips for the video', () => {
+  const FIRST = { id: 'k1', name: 'First half', startSec: 0, endSec: 1, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }
+  const SECOND = { id: 'k2', name: 'Second half', startSec: 1, endSec: 2, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }
+
+  /** The autosave file as it is on disk now: when it was written, and its video part. */
+  interface AutosavedFile {
+    savedAt?: number
+    videoStudio?: { sourcePath?: string; clips?: Array<{ name: string }> }
+  }
+  function readAutosaved(userDataDir: string): AutosavedFile | null {
+    try {
+      return JSON.parse(readFileSync(autosaveFile(userDataDir), 'utf8')) as AutosavedFile
+    } catch {
+      return null
+    }
+  }
+  const clipButton = (window: Page, name: string): ReturnType<Page['getByRole']> => window.getByRole('button', { name: new RegExp(`^Select clip ${name},`) })
+
+  /** An autosave whose video is not there (yet), restored; the rest opens and the sentence is the T-84 one. */
+  async function restoreWithMissingVideo(label: string): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; missing: string; seededAt: number | undefined }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const missing = path.join(root, 'source', 'stream-on-the-drive.mp4')
+    mkdirSync(path.dirname(missing), { recursive: true })
+    seedAutosave(userDataDir, {
+      ...canvasProject('Kept rect'),
+      videoStudio: { sourcePath: missing, clips: [FIRST, SECOND], selectedClipId: 'k2', watermark: null, srtPath: null }
+    })
+    const seededAt = readAutosaved(userDataDir)?.savedAt
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+    await window.getByRole('button', { name: 'Restore' }).click()
+    await expect
+      .poll(() => readToastLog(window), { timeout: 20_000, intervals: [200] })
+      .toContain(
+        "Couldn't find stream-on-the-drive.mp4. It may have been moved or deleted. " +
+          'The rest of your project is open — load the video again in Video Studio.'
+      )
+    return { app, window, root, userDataDir, missing, seededAt }
+  }
+  async function openInVideoStudio(window: Page, file: string): Promise<void> {
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+    await dropOnZone(window, '[data-tutorial="video-import"] .card', file, path.basename(file))
+    await expect(window.locator('header').getByText(path.basename(file), { exact: true })).toBeVisible({ timeout: 60_000 })
+    await expect(window.locator('video')).toHaveCount(1)
+  }
+
+  test('the autosave written after the Restore still holds the clips, and the video put back and opened in Video Studio has them - not one fresh clip', async () => {
+    test.setTimeout(240_000)
+    const { app, window, root, userDataDir, missing, seededAt } = await restoreWithMissingVideo('t174-same')
+    try {
+      // The autosave the session writes next (a NEW file: its stamp moved on from the seeded one) keeps the video part - it used to be replaced by an autosave with no video at all.
+      await expect.poll(() => readAutosaved(userDataDir)?.savedAt, { timeout: 40_000, intervals: [500] }).not.toBe(seededAt)
+      expect(readAutosaved(userDataDir)?.videoStudio).toMatchObject({ sourcePath: missing, clips: [{ name: 'First half' }, { name: 'Second half' }] })
+
+      // The drive comes back; the same file opened in Video Studio has its clips.
+      await makeFixtureMp4(missing)
+      await openInVideoStudio(window, missing)
+      await expect(clipButton(window, 'First half')).toBeVisible({ timeout: 15_000 })
+      await expect(clipButton(window, 'Second half')).toBeVisible()
+      await expect(window.getByRole('button', { name: /^Select clip Clip 1,/ }), 'not one fresh clip').toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('control: a DIFFERENT video opened first lets the kept clips go - the missing file, put back later, opens as one fresh clip, and the autosave no longer holds them', async () => {
+    test.setTimeout(240_000)
+    const { app, window, root, userDataDir, missing } = await restoreWithMissingVideo('t174-other')
+    try {
+      const other = path.join(root, 'source', 'some-other-video.mp4')
+      await makeFixtureMp4(other)
+      await openInVideoStudio(window, other)
+      await expect(clipButton(window, 'Clip 1')).toBeVisible({ timeout: 15_000 })
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+
+      await makeFixtureMp4(missing)
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', missing, path.basename(missing))
+      await expect(window.locator('header').getByText(path.basename(missing), { exact: true })).toBeVisible({ timeout: 60_000 })
+      await expect(clipButton(window, 'Clip 1')).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('button', { name: /^Select clip First half,/ })).toHaveCount(0)
+      await expect(window.getByRole('button', { name: /^Select clip Second half,/ })).toHaveCount(0)
+      // And what the autosave holds is the open video, as saved: the one fresh clip.
+      await expect
+        .poll(() => readAutosaved(userDataDir)?.videoStudio?.clips?.map((c) => c.name), { timeout: 40_000, intervals: [500] })
+        .toEqual(['Clip 1'])
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

@@ -16,7 +16,7 @@ import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
 import { persistSetting } from '../../lib/persistSetting'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastKeptTake, toastSaved } from '../../lib/savedToast'
-import { NoPictureError, startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
+import { NoPictureError, startCompositor, waitForFirstPicture, type CompositorHandle, type WebcamCorner } from './compositor'
 import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
 import { micLostLine, saveCard, SAVE_RUNNING_MESSAGE } from './saveCard'
 import { useRecordSave } from './saveRun'
@@ -72,6 +72,9 @@ export function RecordStudio(): JSX.Element {
   const [devicesScanned, setDevicesScanned] = useState(false)
   const [selectedCamId, setSelectedCamId] = useState<string | null>(null)
   const [showCam, setShowCam] = useState(false)
+  // T-174 (1): the webcam is ticked and the first scan has not written `cams` yet, so a Start now would read an empty list and answer "No camera found." about a camera
+  // that may be there. Start waits (and says so) until the scan settles; with the box unticked it never waits, the take does not need a camera.
+  const checkingDevices = showCam && !devicesScanned
   const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>('bottom-right')
   const [elapsed, setElapsed] = useState(0)
   // T-126 (2): how far into the take the microphone stopped (null: it did not). The ref is what `finalizeRecording` reads for the
@@ -443,6 +446,14 @@ export function RecordStudio(): JSX.Element {
           toast.error(`${message} Recording screen only.`, { duration: ERROR_TOAST_MS })
           // Fall through with videoTrackSource still pointing at the raw screen
         }
+      }
+
+      // T-174 (2): a take whose picture is the raw screen (the webcam off, or the camera fell back) has no compositor to notice a screen that sends
+      // nothing. Wait for its first picture BEFORE the main-process session opens and the recorder is built, so a silent screen ends the start (the
+      // one catch below says the sentence and lets everything go) and no take of nothing is opened. A working screen answers at once.
+      if (videoTrackSource === screenStream) {
+        await waitForFirstPicture(screenStream)
+        if (leftWhileStarting(micStream)) return
       }
 
       const tracks = [
@@ -942,10 +953,10 @@ export function RecordStudio(): JSX.Element {
             </div>
             <button
               className="btn-primary px-4 py-3 text-base disabled:opacity-50 inline-flex items-center justify-center gap-2"
-              disabled={!selectedSourceId || starting}
+              disabled={!selectedSourceId || starting || checkingDevices}
               onClick={startRecording}
             >
-              <Icon name="record" size={18} /> {starting ? 'Starting…' : 'Start recording'}
+              <Icon name="record" size={18} /> {starting ? 'Starting…' : checkingDevices ? 'Checking devices…' : 'Start recording'}
             </button>
           </div>
         </div>

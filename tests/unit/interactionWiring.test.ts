@@ -1096,8 +1096,9 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     // The re-entry gate is the function's first statement, ahead of even the source check.
     expect(studio).toMatch(/async function startRecording\(\): Promise<void> \{\s*\n\s*if \(startingRef\.current\) return/)
     // The button: off while it opens, and saying so. E2E: record.spec.ts "Start while the capture is still opening".
-    expect(studio).toMatch(/disabled=\{!selectedSourceId \|\| starting\}/)
-    expect(studio).toMatch(/\{starting \? 'Starting…' : 'Start recording'\}/)
+    // (round 123 Track A: it is also off while the webcam is ticked and the first scan is out, with its own label - pinned in the describe at the end.)
+    expect(studio).toMatch(/disabled=\{!selectedSourceId \|\| starting \|\| checkingDevices\}/)
+    expect(studio).toMatch(/\{starting \? 'Starting…' : checkingDevices \? 'Checking devices…' : 'Start recording'\}/)
   })
 
   it('Edit in Video Studio asks through videoDiscardMessage before it loads, and Close asks through the same list (3)', () => {
@@ -1421,8 +1422,8 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
   it('every await in startRecording is followed by the unmount check, and the flag is set by the unmount cleanup and cleared on mount (9)', () => {
     const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
     const awaits = awaitsChecked(studio, 'startRecording', 'leftWhileStarting')
-    // The screen capture, the microphone, the camera, the compositor and the main-process session.
-    expect(awaits.map((a) => a.await)).toHaveLength(5)
+    // The screen capture, the microphone, the camera, the compositor, the raw screen's first picture (round 123 Track A) and the main-process session.
+    expect(awaits.map((a) => a.await)).toHaveLength(6)
     expect(awaits.filter((a) => !a.checked), 'an await with no unmount check after it').toEqual([])
     // The check releases what it was handed and the session, through the one teardown the failure path also uses.
     expect(studio).toMatch(/function leftWhileStarting\(\.\.\.extra: Array<MediaStream \| null>\): boolean \{\s*if \(!unmountedRef\.current\) return false\s*for \(const stream of extra\) stream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)\s*abandonStart\(\)\s*return true/)
@@ -1727,7 +1728,7 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     expect(banner.indexOf('if (!snapshot.ok) {')).toBeGreaterThan(gate)
     expect(banner.indexOf('imagii autosaved your work')).toBeGreaterThan(gate)
     // The definition is the autosave gate's: one function, used by both.
-    expect(strip(read('modules/project/ProjectIO.ts'))).toMatch(/export function sessionHoldsWork\(\): boolean \{\s*return hasStudioState\(captureProject\(\)\)/)
+    expect(strip(read('modules/project/ProjectIO.ts'))).toMatch(/export function sessionHoldsWork\(\): boolean \{\s*return hasStudioState\(capture\(true\)\)/)
     const validation = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../shared/projectValidation.ts'), 'utf8'))
     expect(validation).toMatch(/if \(!hasStudioState\(project\)\) \{\s*return \{ ok: false, reason: 'no studio state to save' \}/)
   })
@@ -3214,7 +3215,8 @@ describe('T-140 Track C - the twenty-sixth sweep', () => {
       /export function subscribeSessionStores\(listener: \(\) => void\): \(\) => void \{\s*const stops = \[useVideoStore\.subscribe\(listener\), useAudioStore\.subscribe\(listener\), useCanvasStore\.subscribe\(listener\)\]\s*return \(\) => stops\.forEach\(\(stop\) => stop\(\)\)\s*\}/
     )
     // ...and those are the stores `captureProject` builds the three studio sections from: a section from a fourth store would be a change nobody heard.
-    const capture = io.slice(io.indexOf('export function captureProject()'), io.indexOf('export function sessionHoldsWork()'))
+    // T-174 (4): the builder is `capture(openOnly)` now (`captureProject` is `capture(false)`: what is open plus the parts kept for a file that could not be opened).
+    const capture = io.slice(io.indexOf('function capture(openOnly: boolean)'), io.indexOf('export function sessionHoldsWork()'))
     expect(capture).toMatch(/const video = useVideoStore\.getState\(\)\s*const audio = useAudioStore\.getState\(\)\s*const canvas = useCanvasStore\.getState\(\)/)
     expect(capture.match(/use\w+Store\.getState\(\)/g) ?? [], 'the three stores the sections are built from').toHaveLength(3)
     expect(capture).toMatch(/videoStudio: video\.source/)
@@ -3226,7 +3228,7 @@ describe('T-140 Track C - the twenty-sixth sweep', () => {
     const banner = strip(read('components/AutosaveRestore.tsx'))
     expect(banner).toMatch(/toast\(describeRestoreRefused\(\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: ERROR_TOAST_MS \}\)/)
     const io = strip(read('modules/project/ProjectIO.ts'))
-    expect(io).toMatch(/export function describeRestoreRefused\(project: ImagiiProject = captureProject\(\)\): string \{/)
+    expect(io).toMatch(/export function describeRestoreRefused\(project: ImagiiProject = capture\(true\)\): string \{/)
     expect(io).toMatch(/Nothing was restored: \$\{names\} \$\{open\.length > 1 \? 'are' : 'is'\} open now, and restoring would replace \$\{open\.length > 1 \? 'them' : 'it'\}\./)
   })
 
@@ -4746,5 +4748,52 @@ describe('round 122 Track A - Record\'s microphone is owned from the moment it o
     expect(flatStudio).toContain('{devicesScanned && includeMic && mics.length === 0 ? (')
     expect(flatStudio).toContain('{devicesScanned && showCam && cams.length === 0 ? (')
     expect(flatStudio.match(/noDeviceHint\(/g), 'only the two hints draw it').toHaveLength(2)
+  })
+})
+
+// ═════════ round 123 Track A (T-174 items 1, 2 and 3): Start waits for the scan, a silent screen is caught with the webcam off, a Pencil is a Pencil ═════════
+// E2E: record.spec.ts "round 123 Track A" (the held scan: Start disabled and "Checking devices…"; a frameless screen with the webcam off); image.spec.ts "round 123 Track A" (the layer rows).
+describe('round 123 Track A - Record starts what it says, and a Pencil stroke is a Pencil', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+  const flatStudio = studio.replace(/\s+/g, ' ')
+
+  it('(1) checkingDevices is the webcam ticked before the first scan settled, and it gates Start and its label', () => {
+    expect(flatStudio).toContain('const checkingDevices = showCam && !devicesScanned')
+    expect(flatStudio).toContain('disabled={!selectedSourceId || starting || checkingDevices}')
+    expect(flatStudio).toContain("{starting ? 'Starting…' : checkingDevices ? 'Checking devices…' : 'Start recording'}")
+    expect(studio.match(/checkingDevices/g), 'the definition, the disabled gate and the label only: the start itself reads the lists as before').toHaveLength(3)
+  })
+
+  it('(2) the raw-screen take waits for its first picture AFTER the camera branch decided and BEFORE the recorder and the main-process session exist', () => {
+    expect(flatStudio).toMatch(
+      /if \(videoTrackSource === screenStream\) \{ await waitForFirstPicture\(screenStream\) if \(leftWhileStarting\(micStream\)\) return \}/
+    )
+    const at = studio.indexOf('await waitForFirstPicture(screenStream)')
+    expect(at, 'present once').toBeGreaterThan(-1)
+    expect(studio.match(/waitForFirstPicture\(/g)).toHaveLength(1)
+    expect(at, 'after the camera branch').toBeGreaterThan(studio.indexOf('videoTrackSource = compositor.outputStream'))
+    expect(at, 'before the combined stream').toBeLessThan(studio.indexOf('const combined = new MediaStream(tracks)'))
+    expect(at, 'before the recorder').toBeLessThan(studio.indexOf('new MediaRecorder('))
+    expect(at, 'before the main-process session opens').toBeLessThan(studio.indexOf('window.api.recording.begin()'))
+  })
+
+  it('(2) waitForFirstPicture races the screen\'s play() against the shared limit and tears its element down in a finally, without stopping tracks', () => {
+    const src = strip(read('modules/record-studio/compositor.ts'))
+    const body = /export async function waitForFirstPicture\(stream: MediaStream\): Promise<void> \{([\s\S]*?)\n\}\n/.exec(src)?.[1].replace(/\s+/g, ' ') ?? ''
+    expect(body).toContain("document.body.appendChild(v) try { await playWithin(v, 'screen', tracks) } finally { teardownOffscreen([v]) }")
+    expect(body).toContain("if (tracks.every((t) => t.readyState === 'ended')) return")
+    expect(body).toContain("v.style.display = 'none'")
+    expect(body).not.toContain('.stop()')
+  })
+
+  it('(3) the Pencil\'s draw end names its layer "Pencil", the Line\'s keeps the default, and "Polygon" is gone', () => {
+    const canvas = strip(read('modules/image-studio/Canvas.tsx'))
+    expect(canvas).toContain("addLayer(makeLineLayer(pencilPoints, 'Pencil'))")
+    expect(canvas).toMatch(/addLayer\(makeLineLayer\(\[drawing\.start\.x, drawing\.start\.y, drawing\.current\.x, drawing\.current\.y\]\)\)/)
+    const store = strip(read('modules/image-studio/state/canvasStore.ts'))
+    expect(store).toContain("export function makeLineLayer(points: number[], name: 'Line' | 'Pencil' = 'Line'): LineLayer {")
+    expect(store).not.toContain('Polygon')
+    expect(store.replace(/\s+/g, ' ')).toContain('strokeWidth: 3, closed: false }')
   })
 })

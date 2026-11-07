@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { NoPictureError, computeContainRect, computeCornerRect, drawFrame, startCompositor, __testing__ } from './compositor'
+import { NoPictureError, computeContainRect, computeCornerRect, drawFrame, startCompositor, waitForFirstPicture, __testing__ } from './compositor'
 
 /**
  * Pure-function tests for the compositor. The actual canvas drawing and
@@ -664,5 +664,134 @@ describe('startCompositor gives up on a source that sends no picture (T-172 (1))
     expect(dom.attached(), 'a late timer would have torn the compositor down').toBe(2)
     handle.stop()
     expect(dom.attached()).toBe(0)
+  })
+})
+
+/**
+ * T-174 (2): with the webcam off (or the camera fallen back) the take's picture is the raw screen and no compositor runs, so the 10 s first-picture check
+ * `startCompositor` makes never ran: a screen that sent nothing opened a take of nothing. `waitForFirstPicture` is that same race on its own.
+ */
+describe('waitForFirstPicture waits for the screen\'s first picture and leaves nothing behind (T-174 (2))', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+    vi.unstubAllGlobals()
+  })
+
+  /** A document stub that records the <video>s appended; `stalled` makes play() never settle. The stream has one track whose stop() is a spy. */
+  function setup(stalled: boolean): {
+    attached: () => number
+    made: Array<Record<string, unknown>>
+    stream: MediaStream
+    stop: ReturnType<typeof vi.fn>
+    track: EventTarget & { readyState: string }
+  } {
+    const attached = new Set<unknown>()
+    const made: Array<Record<string, unknown>> = []
+    const stop = vi.fn()
+    const track = Object.assign(new EventTarget(), { stop, readyState: 'live' })
+    const stream = { getTracks: () => [track], getVideoTracks: () => [track] } as unknown as MediaStream
+    vi.stubGlobal('document', {
+      body: {
+        appendChild: (v: { parentNode: unknown }) => {
+          v.parentNode = { removeChild: (c: unknown) => attached.delete(c) }
+          attached.add(v)
+        }
+      },
+      createElement: () => {
+        const v: Record<string, unknown> = {
+          style: {},
+          muted: false,
+          playsInline: false,
+          srcObject: null,
+          parentNode: null,
+          play: () => (stalled ? new Promise<void>(() => undefined) : Promise.resolve()),
+          pause: () => undefined
+        }
+        made.push(v)
+        return v
+      }
+    })
+    return { attached: () => attached.size, made, stream, stop, track }
+  }
+
+  async function settle(p: Promise<unknown>): Promise<unknown> {
+    return p.then(
+      () => null,
+      (error: unknown) => error
+    )
+  }
+
+  it('a play() that resolves resolves it: the hidden muted <video> held the stream while it waited, and is gone after, with the stream\'s tracks untouched', async () => {
+    vi.useFakeTimers()
+    const dom = setup(false)
+    await waitForFirstPicture(dom.stream)
+    expect(dom.made).toHaveLength(1)
+    const v = dom.made[0] as Record<string, unknown>
+    expect(v.srcObject, 'teardown cleared the element\'s hold on the stream').toBeNull()
+    expect(v.muted).toBe(true)
+    expect(v.playsInline).toBe(true)
+    expect((v.style as { display: string }).display).toBe('none')
+    expect(dom.attached(), 'no <video> is left in the document').toBe(0)
+    expect(dom.stop, 'the recorder still needs the screen\'s track').not.toHaveBeenCalled()
+    expect(vi.getTimerCount(), 'the race cleared its timer').toBe(0)
+  })
+
+  it('while a play() is still pending the hidden element is mounted and holds the stream (it decodes only when attached)', async () => {
+    vi.useFakeTimers()
+    const dom = setup(true)
+    const done = settle(waitForFirstPicture(dom.stream))
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(dom.attached(), 'still waiting just under the limit: the element is mounted').toBe(1)
+    expect(dom.made[0]?.srcObject).toBe(dom.stream)
+    await vi.advanceTimersByTimeAsync(2)
+    await done
+  })
+
+  it('a play() that never settles rejects with a NoPictureError for the screen at the limit, in the finished sentence, leaving no <video> and the tracks untouched', async () => {
+    vi.useFakeTimers()
+    const dom = setup(true)
+    const done = settle(waitForFirstPicture(dom.stream))
+    await vi.advanceTimersByTimeAsync(10_001)
+    const error = await done
+    expect(error).toBeInstanceOf(NoPictureError)
+    expect((error as NoPictureError).source).toBe('screen')
+    expect((error as Error).message).toBe(
+      'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+    )
+    expect(dom.attached(), 'torn down on the failing outcome too').toBe(0)
+    expect(dom.made[0]?.srcObject).toBeNull()
+    expect(dom.stop, 'the caller owns the tracks: the one catch releases them').not.toHaveBeenCalled()
+  })
+
+  it('a track that has already ended is not waited for: it resolves at once, with no element made and no timer pending (T-124 (1))', async () => {
+    vi.useFakeTimers()
+    const dom = setup(true)
+    dom.track.readyState = 'ended'
+    await waitForFirstPicture(dom.stream)
+    expect(dom.made, 'nothing was mounted for a source that is gone').toHaveLength(0)
+    expect(vi.getTimerCount()).toBe(0)
+  })
+
+  it('a track that ends during the wait resolves it at once, leaves no <video>, and no timer or listener is left to fire later', async () => {
+    vi.useFakeTimers()
+    const dom = setup(true)
+    const done = settle(waitForFirstPicture(dom.stream))
+    await vi.advanceTimersByTimeAsync(3_000)
+    expect(dom.attached(), 'still waiting for a live track').toBe(1)
+    dom.track.readyState = 'ended'
+    dom.track.dispatchEvent(new Event('ended'))
+    expect(await done, 'the end of the source is no "sent no picture"').toBeNull()
+    expect(dom.attached()).toBe(0)
+    expect(vi.getTimerCount(), 'the limit was cleared').toBe(0)
+    await vi.advanceTimersByTimeAsync(20_000)
+    expect(dom.stop).not.toHaveBeenCalled()
+  })
+
+  it('control: a live track that sends nothing is still the 10 s sentence', async () => {
+    vi.useFakeTimers()
+    const dom = setup(true)
+    const done = settle(waitForFirstPicture(dom.stream))
+    await vi.advanceTimersByTimeAsync(10_001)
+    expect(await done).toBeInstanceOf(NoPictureError)
   })
 })

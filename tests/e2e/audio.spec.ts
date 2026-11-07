@@ -5983,3 +5983,86 @@ test.describe('T-172 Track C (7): a sound re-opened from the same file is the sa
     }
   })
 })
+
+// ── T-174 Track B (4): a sound whose video was gone keeps its chain for the video ──────────────────────────────────────────────────────────────────────────────────────────────
+//
+// "load the audio again in Audio Studio" was a promise the app broke: the chain (cleanup, cuts, second track) was applied only when the sound loaded, and loading the video again extracted a fresh sound
+// with the default chain - while Save project and the autosave had nothing of it left to write. ProjectIO keeps the chain for the video (`soundKey`), `captureProject` writes it while no sound is open, and
+// the same video opened in Audio Studio gets it back; a different file opening drops it. The sentence is unchanged.
+test.describe('T-174 Track B (4): a sound whose video was gone', () => {
+  const GONE =
+    "Couldn't find e2e-clip.mp4. It may have been moved or deleted. " +
+    'The rest of your project is open — load the audio again in Audio Studio.'
+
+  /** A project naming the sound of `video` with Hum removal and Remove low rumble on, opened from Home while the video is not there. */
+  async function openProjectWithMissingVideo(studio: Studio, video: string): Promise<void> {
+    const { app, window } = studio
+    const projectFile = path.join(studio.root, 'gone.imagii.json')
+    writeFileSync(
+      projectFile,
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        audioStudio: { sourcePath: video, extractedFromVideo: true, chain: { ...DEFAULT_CHAIN_SPEC, hum60: true, rumbleHighpass: true } }
+      }),
+      'utf8'
+    )
+    await stubOpenDialog(app, projectFile)
+    await window.getByRole('link', { name: 'Home' }).click()
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(GONE)
+  }
+
+  test('Open project names the missing video; Save project afterwards still writes the chain; the video put back and dropped on Audio Studio has Hum removal and Remove low rumble checked', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t174sound')
+    try {
+      const { app, window } = studio
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await openProjectWithMissingVideo(studio, video)
+
+      // What Save project writes now still holds the sound's chain (it was "Nothing to save yet": the chain was nowhere).
+      const saved = path.join(studio.root, 'saved-after.imagii.json')
+      await stubSaveDialog(app, saved)
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(saved), { timeout: 15_000 }).toBe(true)
+      expect(JSON.parse(readFileSync(saved, 'utf8')).audioStudio).toMatchObject({ sourcePath: video, extractedFromVideo: true, chain: { hum60: true, rumbleHighpass: true } })
+
+      // The video comes back; the same file in Audio Studio has the chain.
+      await makeFixtureMp4(video)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).toBeChecked()
+      await expect(window.locator(CLEANUP).getByLabel('Remove low rumble (below 80 Hz)')).toBeChecked()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: a DIFFERENT sound opened first lets the kept chain go - the video put back later opens with the default chain', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t174sound-other')
+    try {
+      const { window } = studio
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await openProjectWithMissingVideo(studio, video)
+
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+      await window.getByRole('button', { name: 'Close', exact: true }).click() // the dialog spy accepts a question, if one is asked
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+      await expect(window.locator(CLEANUP).getByLabel('Remove low rumble (below 80 Hz)')).not.toBeChecked()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

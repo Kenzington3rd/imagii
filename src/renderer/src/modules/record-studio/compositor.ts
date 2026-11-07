@@ -296,20 +296,60 @@ const START_TIMEOUT_MS = 10000
  * would leave `startCompositor` pending for good. Races it against START_TIMEOUT_MS; on the limit it rejects with a NoPictureError
  * naming `who`. The timer is cleared on either outcome.
  */
-function playWithin(v: HTMLVideoElement, who: 'camera' | 'screen'): Promise<void> {
+function playWithin(v: HTMLVideoElement, who: 'camera' | 'screen', endsOn: MediaStreamTrack[] = []): Promise<void> {
   return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => reject(new NoPictureError(who)), START_TIMEOUT_MS)
+    const settle = (): void => {
+      clearTimeout(timer)
+      for (const t of endsOn) t.removeEventListener('ended', onEnded)
+    }
+    // T-174 (2): a track in `endsOn` that ends during the wait ends it quietly (resolves): the source went away, it did not "send no picture".
+    const onEnded = (): void => {
+      settle()
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      settle()
+      reject(new NoPictureError(who))
+    }, START_TIMEOUT_MS)
+    for (const t of endsOn) t.addEventListener('ended', onEnded)
     v.play().then(
       () => {
-        clearTimeout(timer)
+        settle()
         resolve()
       },
       (err: unknown) => {
-        clearTimeout(timer)
+        settle()
         reject(err)
       }
     )
   })
+}
+
+/**
+ * T-174 (2): waits for `stream` to show its first picture, for a take whose picture is the raw screen with no compositor (the webcam off, or the
+ * camera fell back). `startCompositor` runs this same race for the screen, so only a start with the webcam on was protected; with it off a screen that
+ * sent nothing opened a take of nothing. Rejects with `NoPictureError('screen')` at START_TIMEOUT_MS. A hidden muted <video> is appended like the
+ * compositor's (a detached element may not decode) and torn down on every outcome; `teardownOffscreen` pauses it and clears its `srcObject`, and
+ * never stops the stream's tracks, which the recorder still needs. A track that has ended is not waited for: a stream with no live video track resolves
+ * at once, and one that ends during the wait resolves then (the listener is removed on every outcome), so a window that closed while the start was opening
+ * reaches the start's own ended-track check and the take ends at once (T-124 (1)) instead of saying "no picture" about a window that is gone.
+ */
+export async function waitForFirstPicture(stream: MediaStream): Promise<void> {
+  // A track that has ended is not waited for (T-124 (1)): a window that closed while the start was opening sends no picture and never will, and the
+  // start's own check of the track (when the recorder is running) ends the take at once. Only a LIVE track that sends nothing is the 10 s sentence.
+  const tracks = stream.getVideoTracks()
+  if (tracks.every((t) => t.readyState === 'ended')) return
+  const v = document.createElement('video')
+  v.srcObject = stream
+  v.muted = true
+  v.playsInline = true
+  v.style.display = 'none'
+  document.body.appendChild(v)
+  try {
+    await playWithin(v, 'screen', tracks)
+  } finally {
+    teardownOffscreen([v])
+  }
 }
 
 /**

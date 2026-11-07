@@ -246,7 +246,7 @@ export function Canvas(): JSX.Element {
   function handleMouseUp(): void {
     if (tool === 'pencil' && pencilPoints) {
       if (pencilPoints.length >= 4) {
-        addLayer(makeLineLayer(pencilPoints, false))
+        addLayer(makeLineLayer(pencilPoints, 'Pencil'))
       }
       setPencilPoints(null)
       return

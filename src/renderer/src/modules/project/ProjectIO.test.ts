@@ -2411,3 +2411,313 @@ describe('applyProject floors a clip with no length once the source is known (T-
     expect(useVideoStore.getState().clips).toEqual([])
   })
 })
+
+/**
+ * T-174 (4) - what a Restore or a project open could not apply because the file was unavailable or would not open is KEPT for the session, written by the next
+ * capture (so the autosave keeps it) and given back when the same file is opened again (`videoKey` / `soundKey`); another file opening in that studio drops it.
+ * The sentence "load the video again" was a promise the app broke: loading it again opened it fresh, and the autosave after replaced the only copy.
+ */
+describe('a part that could not be applied is kept for the file and given back to it (T-174 (4))', () => {
+  const ORIGINAL = '/media/stream.flv'
+  const COPY_A = '/tmp/imagii-import/stream-aB3dE5fG.mp4'
+  const COPY_B = '/tmp/imagii-import/stream-Zx9Kp2Lm.mp4'
+  const OTHER = '/home/user/Videos/other.mp4'
+  const WAV_1 = '/tmp/imagii-audio/aB3dE5fG7h.wav'
+  const WAV_2 = '/tmp/imagii-audio/Zx9Kp2LmQr.wav'
+  const missing = (p: string): Error => new Error(`ffprobe exit 1: ${p}: No such file or directory`)
+
+  /** The preload bridge with `gone` files absent (probe, conversion and extraction say so) and `broken` files present but refusing to open (a cause that is not "missing"). */
+  function bridge(opts: { gone?: string[]; broken?: string[] } = {}): void {
+    const gone = opts.gone ?? []
+    const broken = opts.broken ?? []
+    const fail = (p: string): Error | null => (gone.includes(p) ? missing(p) : broken.includes(p) ? new Error('Cannot open: Permission denied') : null)
+    vi.stubGlobal('window', {
+      api: {
+        video: {
+          probe: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(VIDEO_PROBE)),
+          fileUrl: (p: string) => pathToImagiiFileUrl(p),
+          convertForImport: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(COPY_A))
+        },
+        audio: {
+          ...PEAKS_BRIDGE,
+          probe: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(AUDIO_PROBE)),
+          extractFromVideo: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(sound(WAV_1, true)))
+        }
+      }
+    })
+  }
+  const videoProject = (extra: Partial<NonNullable<ImagiiProject['videoStudio']>> = {}): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    videoStudio: { sourcePath: VIDEO_PATH, clips: [CLIP_A, CLIP_B], selectedClipId: CLIP_B.id, watermark: null, srtPath: SRT_PATH, ...extra }
+  })
+  const audioProject = (part: NonNullable<ImagiiProject['audioStudio']>): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    audioStudio: part
+  })
+  /** Let the session forget a kept part the way a person does: open some other file in the studio, then close it. */
+  async function moveOn(): Promise<void> {
+    await useVideoStore.getState().loadSource(OTHER)
+    useVideoStore.getState().clearSource()
+    useVideoStore.getState().forgetHeldTranscripts()
+    await useAudioStore.getState().loadSource(MUSIC_PATH)
+    useAudioStore.getState().clearSource()
+  }
+  beforeEach(async () => {
+    bridge()
+    await moveOn()
+  })
+  afterEach(async () => {
+    bridge()
+    await moveOn()
+  })
+
+  const quiet = async <T,>(run: () => Promise<T>): Promise<T> => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      return await run()
+    } finally {
+      spy.mockRestore()
+    }
+  }
+
+  describe('the video', () => {
+    it('an unavailable video: with nothing open, the next capture still holds its clips, selection and caption path - the autosave keeps them', async () => {
+      bridge({ gone: [VIDEO_PATH] })
+      const outcome = await quiet(() => applyProject(videoProject()))
+      expect(outcome.unavailable).toHaveLength(1)
+      expect(useVideoStore.getState().source).toBeNull()
+      expect(captureProject().videoStudio).toEqual({
+        sourcePath: VIDEO_PATH,
+        clips: [CLIP_A, CLIP_B],
+        selectedClipId: CLIP_B.id,
+        watermark: null,
+        srtPath: SRT_PATH
+      })
+      // ...and what the autosave writes passes the validator the file will be read through.
+      const raw = JSON.stringify(captureProject())
+      expect(validateProjectJsonString(raw)).toMatchObject({ ok: true })
+    })
+
+    it('the same file opened again: its clips, selection and caption path are back, and the kept part is gone', async () => {
+      bridge({ gone: [VIDEO_PATH] })
+      await quiet(() => applyProject(videoProject()))
+      bridge()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      const video = useVideoStore.getState()
+      expect(video.clips).toEqual([CLIP_A, CLIP_B])
+      expect(video.selectedClipId).toBe(CLIP_B.id)
+      expect(video.srtPath).toBe(SRT_PATH)
+      // gone: Close, and the next capture holds nothing for it; opened again it is a fresh one-clip video.
+      useVideoStore.getState().clearSource()
+      expect(captureProject().videoStudio).toBeUndefined()
+      // (T-173 (4) holds a caption path under its key for the session, apart from this: the transcript is forgotten here so only the kept part is in question.)
+      useVideoStore.getState().forgetHeldTranscripts()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      expect(useVideoStore.getState().clips).toHaveLength(1)
+      expect(useVideoStore.getState().srtPath).toBeNull()
+    })
+
+    it('a video that was there but would not open (not "missing") is kept the same way', async () => {
+      bridge({ broken: [VIDEO_PATH] })
+      const outcome = await quiet(() => applyProject(videoProject()))
+      expect(outcome.failed).toHaveLength(1)
+      expect(captureProject().videoStudio?.clips).toEqual([CLIP_A, CLIP_B])
+      bridge()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    })
+
+    it('a converted import: the capture names the ORIGINAL and the marker; the NEW working copy of the same original gets the clips', async () => {
+      bridge({ gone: [ORIGINAL] })
+      await quiet(() => applyProject(videoProject({ sourcePath: ORIGINAL, convertedForImport: true })))
+      expect(captureProject().videoStudio).toEqual({
+        sourcePath: ORIGINAL,
+        convertedForImport: true,
+        clips: [CLIP_A, CLIP_B],
+        selectedClipId: CLIP_B.id,
+        watermark: null,
+        srtPath: SRT_PATH
+      })
+      bridge()
+      await useVideoStore.getState().loadSource(COPY_B, ORIGINAL)
+      expect(useVideoStore.getState().source?.filePath).toBe(COPY_B)
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+      expect(useVideoStore.getState().srtPath).toBe(SRT_PATH)
+    })
+
+    it('another video is open when the apply fails: the capture is of the OPEN video; Close keeps the part, and the missing file opened later gets it', async () => {
+      bridge({ gone: [VIDEO_PATH] })
+      await useVideoStore.getState().loadSource(OTHER)
+      await quiet(() => applyProject(videoProject()))
+      expect(useVideoStore.getState().source?.filePath, 'the apply left the open video alone').toBe(OTHER)
+      expect(captureProject().videoStudio?.sourcePath, 'while a video is open the capture is of it').toBe(OTHER)
+      useVideoStore.getState().clearSource()
+      expect(captureProject().videoStudio?.clips, 'Close keeps the part').toEqual([CLIP_A, CLIP_B])
+      expect(captureProject().videoStudio?.sourcePath).toBe(VIDEO_PATH)
+      bridge()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    })
+
+    it('a kept part is not work the session holds: Restore over it is not refused, and its sentence names nothing open', async () => {
+      bridge({ gone: [VIDEO_PATH] })
+      await quiet(() => applyProject(videoProject()))
+      expect(captureProject().videoStudio).toBeDefined()
+      expect(sessionHoldsWork()).toBe(false)
+      expect(describeRestoreRefused()).toBe('Nothing was restored: your work is open now, and restoring would replace it.')
+    })
+
+    it('control: a DIFFERENT video opened drops it - closed and the first one opened later, there are no clips back and the capture holds nothing', async () => {
+      bridge({ gone: [VIDEO_PATH] })
+      await quiet(() => applyProject(videoProject()))
+      bridge()
+      await useVideoStore.getState().loadSource(OTHER)
+      expect(useVideoStore.getState().clips).toHaveLength(1)
+      useVideoStore.getState().clearSource()
+      expect(captureProject().videoStudio, 'the person moved on: nothing is written for the file that was missing').toBeUndefined()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      expect(useVideoStore.getState().clips, 'the missing file came back, but its clips were let go when another video opened').toHaveLength(1)
+      expect(useVideoStore.getState().srtPath).toBeNull()
+    })
+
+    it('control: a skipped video (the person opened another while it loaded) keeps nothing', async () => {
+      let release: (copy: string) => void = () => undefined
+      const gate = new Promise<string>((resolve) => {
+        release = resolve
+      })
+      bridge()
+      const base = (window as unknown as { api: { video: Record<string, unknown> } }).api.video
+      base.convertForImport = () => gate
+      const pending = applyProject(videoProject({ sourcePath: ORIGINAL, convertedForImport: true }))
+      await useVideoStore.getState().loadSource(OTHER)
+      release(COPY_A)
+      const outcome = await pending
+      expect(outcome.skipped).toEqual(['video'])
+      useVideoStore.getState().clearSource()
+      expect(captureProject().videoStudio).toBeUndefined()
+      await useVideoStore.getState().loadSource(COPY_B, ORIGINAL)
+      expect(useVideoStore.getState().clips).toHaveLength(1)
+    })
+
+    it('control: a video that opened keeps nothing - Close, and the capture holds nothing', async () => {
+      await applyProject(videoProject())
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+      useVideoStore.getState().clearSource()
+      expect(captureProject().videoStudio).toBeUndefined()
+    })
+
+    it('a project that opens the video AFTER a failed apply supersedes the kept part (the new clips are the ones applied)', async () => {
+      bridge({ gone: [VIDEO_PATH] })
+      await quiet(() => applyProject(videoProject()))
+      bridge()
+      await applyProject(videoProject({ clips: [CLIP_A], selectedClipId: CLIP_A.id, srtPath: null }))
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A])
+      expect(useVideoStore.getState().srtPath).toBeNull()
+      useVideoStore.getState().clearSource()
+      expect(captureProject().videoStudio).toBeUndefined()
+    })
+
+    it('a second failed apply replaces the first (one part per studio)', async () => {
+      bridge({ gone: [VIDEO_PATH, OTHER] })
+      await quiet(() => applyProject(videoProject()))
+      await quiet(() => applyProject(videoProject({ sourcePath: OTHER, clips: [CLIP_A], selectedClipId: CLIP_A.id, srtPath: null })))
+      expect(captureProject().videoStudio).toMatchObject({ sourcePath: OTHER, clips: [CLIP_A] })
+    })
+  })
+
+  describe('the sound', () => {
+    it('a sound whose extraction failed: the capture holds its chain (the video named, the marker), and the same file opened again has the chain back', async () => {
+      bridge({ broken: [VIDEO_PATH] })
+      const outcome = await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })))
+      expect(outcome.failed).toHaveLength(1)
+      expect(useAudioStore.getState().source).toBeNull()
+      expect(captureProject().audioStudio).toEqual({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })
+      expect(validateProjectJsonString(JSON.stringify(captureProject()))).toMatchObject({ ok: true })
+
+      bridge()
+      await useAudioStore.getState().loadSource(WAV_2, VIDEO_PATH, undefined, true)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+      useAudioStore.getState().clearSource()
+      expect(captureProject().audioStudio, 'given back, so gone').toBeUndefined()
+    })
+
+    it('a sound from a converted import: the extraction of the NEW working copy of the same original gets the chain', async () => {
+      bridge({ gone: [ORIGINAL] })
+      await quiet(() => applyProject(audioProject({ sourcePath: ORIGINAL, extractedFromVideo: true, chain: CHAIN })))
+      expect(captureProject().audioStudio?.sourcePath).toBe(ORIGINAL)
+      bridge()
+      await useAudioStore.getState().loadSource(WAV_2, COPY_B, ORIGINAL, true)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    })
+
+    it('a plain audio file that is gone: kept as itself (no marker), and given back to that file', async () => {
+      bridge({ gone: [AUDIO_PATH] })
+      await quiet(() => applyProject(audioProject({ sourcePath: AUDIO_PATH, chain: CHAIN })))
+      expect(captureProject().audioStudio).toEqual({ sourcePath: AUDIO_PATH, chain: CHAIN })
+      bridge()
+      await useAudioStore.getState().loadSource(AUDIO_PATH)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    })
+
+    it('an older project that names the video beside a scratch WAV: kept under the VIDEO, as an extraction', async () => {
+      bridge({ broken: [VIDEO_PATH, WAV_1] })
+      await quiet(() => applyProject(audioProject({ sourcePath: WAV_1, fromVideoPath: VIDEO_PATH, chain: CHAIN })))
+      expect(captureProject().audioStudio).toEqual({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })
+    })
+
+    it('another sound is open when the apply fails: the capture is of the OPEN sound; Close keeps the chain, and the video opened later gets it', async () => {
+      bridge({ broken: [VIDEO_PATH] })
+      await useAudioStore.getState().loadSource(MUSIC_PATH)
+      await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })))
+      expect(useAudioStore.getState().source?.filePath).toBe(MUSIC_PATH)
+      expect(captureProject().audioStudio?.sourcePath, 'while a sound is open the capture is of it').toBe(MUSIC_PATH)
+      useAudioStore.getState().clearSource()
+      expect(captureProject().audioStudio).toEqual({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })
+      bridge()
+      await useAudioStore.getState().loadSource(WAV_2, VIDEO_PATH, undefined, true)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    })
+
+    it('control: a DIFFERENT file opened drops it', async () => {
+      bridge({ gone: [AUDIO_PATH] })
+      await quiet(() => applyProject(audioProject({ sourcePath: AUDIO_PATH, chain: CHAIN })))
+      bridge()
+      await useAudioStore.getState().loadSource(MUSIC_PATH)
+      expect(useAudioStore.getState().chain).not.toEqual(CHAIN)
+      useAudioStore.getState().clearSource()
+      expect(captureProject().audioStudio).toBeUndefined()
+      await useAudioStore.getState().loadSource(AUDIO_PATH)
+      expect(useAudioStore.getState().chain, 'the file came back, but the chain was let go when another sound opened').not.toEqual(CHAIN)
+    })
+
+    it('control: a skipped sound (another opened while it loaded) keeps nothing, and a sound that opened keeps nothing', async () => {
+      let release: () => void = () => undefined
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      bridge()
+      const audioApi = (window as unknown as { api: { audio: Record<string, unknown> } }).api.audio
+      audioApi.extractFromVideo = async () => {
+        await gate
+        return sound(WAV_1, true)
+      }
+      const pending = applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN }))
+      await useAudioStore.getState().loadSource(MUSIC_PATH)
+      release()
+      const outcome = await pending
+      expect(outcome.skipped).toEqual(['audio'])
+      useAudioStore.getState().clearSource()
+      expect(captureProject().audioStudio).toBeUndefined()
+
+      bridge()
+      await applyProject(audioProject({ sourcePath: AUDIO_PATH, chain: CHAIN }))
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+      useAudioStore.getState().clearSource()
+      expect(captureProject().audioStudio).toBeUndefined()
+    })
+  })
+})

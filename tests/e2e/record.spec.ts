@@ -4789,3 +4789,338 @@ test.describe('round 122 Track A - the microphone a failed start opened, and the
     }
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// round 123 Track A (T-174 items 1 and 2): Start waits for the first device scan when the webcam is ticked, and a screen that sends no picture is caught
+// with the webcam OFF too (the check used to run only inside the compositor).
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('round 123 Track A - Start waits for the device scan, and a silent screen is caught with the webcam off', () => {
+  const SCREEN_SENTENCE = 'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+
+  /**
+   * Stubs `getUserMedia`: the screen (told apart by its `mandatory` desktop constraint) is `canvas.captureStream(0)` when `frameless` (opens, live
+   * track, never a frame) and a repainting canvas otherwise; the camera (`deviceId`) always repaints; the MICROPHONE of a take (`audio` is an object
+   * and there is no `video`) is an oscillator's stream. The probes (`video: true`, `audio: true`) go to what was installed before. Every stream
+   * handed out is kept in `__held`, so a test can ask which tracks are still live.
+   */
+  async function stubSources(window: Page, frameless: boolean): Promise<void> {
+    await window.evaluate((silentScreen) => {
+      const w = window as unknown as { __held: MediaStream[] }
+      w.__held = []
+      const md = navigator.mediaDevices
+      const previous = md.getUserMedia.bind(md)
+      const make = (frames: boolean): MediaStream => {
+        const canvas = document.createElement('canvas')
+        canvas.width = 320
+        canvas.height = 240
+        const ctx = canvas.getContext('2d')
+        if (frames) {
+          let n = 0
+          window.setInterval(() => {
+            if (!ctx) return
+            ctx.fillStyle = `hsl(${(n++ * 9) % 360}, 80%, 50%)`
+            ctx.fillRect(0, 0, 320, 240)
+          }, 33)
+        }
+        const s = canvas.captureStream(frames ? 30 : 0)
+        w.__held.push(s)
+        return s
+      }
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        const v = c?.video
+        if (v && typeof v === 'object' && 'mandatory' in v) return make(!silentScreen) // the screen
+        if (v && typeof v === 'object' && 'deviceId' in v) return make(true) // the camera
+        if (c && typeof c.audio === 'object' && !c.video) {
+          const ctx = new AudioContext()
+          const dest = ctx.createMediaStreamDestination()
+          const osc = ctx.createOscillator()
+          osc.connect(dest)
+          osc.start()
+          w.__held.push(dest.stream)
+          return dest.stream // the microphone of the take, which the stub holds
+        }
+        return previous(c)
+      }
+    }, frameless)
+  }
+
+  /** `enumerateDevices` (the last await of a scan) waits on a gate the test opens, then answers with what was installed before it. */
+  async function holdScan(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __scanGate: { hold: boolean; asked: number; pending: Array<() => void> } }
+      const md = navigator.mediaDevices
+      const answer = md.enumerateDevices.bind(md)
+      w.__scanGate = { hold: true, asked: 0, pending: [] }
+      md.enumerateDevices = () => {
+        w.__scanGate.asked += 1
+        if (!w.__scanGate.hold) return answer()
+        return new Promise((resolve) => w.__scanGate.pending.push(() => resolve(answer())))
+      }
+    })
+  }
+  const scansAsked = (window: Page): Promise<number> => window.evaluate(() => (window as unknown as { __scanGate: { asked: number } }).__scanGate.asked)
+  const releaseScan = (window: Page): Promise<void> =>
+    window.evaluate(() => {
+      const g = (window as unknown as { __scanGate: { hold: boolean; pending: Array<() => void> } }).__scanGate
+      g.hold = false
+      g.pending.splice(0).forEach((f) => f())
+    })
+
+  const liveTracks = (window: Page, kind: 'audio' | 'video'): Promise<number> =>
+    window.evaluate(
+      (k) =>
+        (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getTracks()).filter((t) => t.kind === k && t.readyState === 'live')
+          .length,
+      kind
+    )
+  const heldTracks = (window: Page, kind: 'audio' | 'video'): Promise<number> =>
+    window.evaluate(
+      (k) => (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getTracks()).filter((t) => t.kind === k).length,
+      kind
+    )
+
+  /** Opens Record from Home (the stubs are installed on Home first, so the mount scan meets them) and picks the first source. */
+  async function openRecord(app: ElectronApplication, install: (window: Page) => Promise<void>): Promise<Page> {
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, null)
+    await waitForHome(window)
+    await install(window)
+    await window.getByRole('link', { name: /Record/ }).first().click()
+    await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+    await installToastLog(window)
+    return window
+  }
+  async function pickSource(window: Page): Promise<void> {
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+  }
+
+  test('item 1: webcam ticked with the first scan out - Start is disabled and reads "Checking devices…"; released with a camera, Start is back and the take has the camera', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r123a-checking')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecord(app, async (w) => {
+        await stubCameras(w)
+        await holdScan(w)
+        await stubSources(w, false)
+      })
+      await expect.poll(() => scansAsked(window), { timeout: 20_000, intervals: [100], message: 'the mount scan never reached enumerateDevices' }).toBeGreaterThan(0)
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone: this case is about the camera
+      await window.getByRole('checkbox').nth(1).check() // the webcam, ticked before the scan answered
+      await pickSource(window)
+
+      const checking = window.getByRole('button', { name: /Checking devices…/ })
+      await expect(checking, 'a source is picked and the webcam is ticked, but nothing has looked for a camera yet').toBeDisabled()
+      await expect(window.getByRole('button', { name: /Start recording/ }), 'the label is not the invitation while it waits').toHaveCount(0)
+      await window.waitForTimeout(500)
+      await expect(checking).toBeDisabled()
+
+      await releaseScan(window)
+      const start = window.getByRole('button', { name: /Start recording/ })
+      await expect(start, 'the scan settled: Start is back').toBeEnabled({ timeout: 15_000 })
+      await expect(checking).toHaveCount(0)
+      await start.click()
+
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 15_000 })
+      expect((await readToastLog(window)).join(' | '), 'the camera was there: no sentence about a missing one').not.toContain('No camera found')
+      expect(await liveTracks(window, 'video'), 'the screen AND the camera are in the take').toBe(2)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: the webcam unticked does not wait for the scan; released with no camera listed, Start is back and the T-42 sentence is said on press', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r123a-nocam')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecord(app, holdScan)
+      await expect.poll(() => scansAsked(window), { timeout: 20_000, intervals: [100], message: 'the mount scan never reached enumerateDevices' }).toBeGreaterThan(0)
+      await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+      await pickSource(window)
+
+      // The scan is still out. With the webcam unticked (the default) the take needs no camera, so nothing waits.
+      await expect(window.getByRole('button', { name: /Start recording/ }), 'the box is what waits, not every Start').toBeEnabled()
+      await expect(window.getByRole('button', { name: /Checking devices…/ })).toHaveCount(0)
+
+      await window.getByRole('checkbox').nth(1).check() // ticked late, still before the answer; it settles with no camera
+      await releaseScan(window)
+
+      const start = window.getByRole('button', { name: /Start recording/ })
+      await expect(start).toBeEnabled({ timeout: 15_000 })
+      await expect(window.getByText(/^No camera found\./), 'the scan found none: now it is said').toBeVisible()
+      await start.click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 30_000, intervals: [200] })
+        .toContain('No camera found. Recording screen only.')
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 15_000 })
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('item 2: a screen that sends no picture with the webcam OFF - after the limit the screen sentence, Start is back, no take was opened, every track is ended', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r123a-nowebcam-silent')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecord(app, (w) => stubSources(w, true))
+      await expect(window.getByRole('checkbox').nth(0), 'the microphone is checked by default').toBeChecked()
+      await expect(window.getByRole('checkbox').nth(1), 'the webcam is off').not.toBeChecked()
+      await pickSource(window)
+      await window.getByRole('button', { name: /Start recording/ }).click()
+
+      // While the check waits for a picture (its limit is 10 s) no take exists yet: `recording:begin` makes the temp file the moment it is asked, and
+      // `abandon` removes the file but not the folder, so only a look DURING the wait tells a check before the session from one after it.
+      await expect(window.getByRole('button', { name: /Starting…/ })).toBeDisabled({ timeout: 10_000 })
+      await window.waitForTimeout(2_000)
+      expect(leftoverTemps(userDataDir), 'the main-process session was opened before the screen had shown a picture').toEqual([])
+      expect(existsSync(recordingsDir(userDataDir)), 'recording:begin was asked before the screen had shown a picture').toBe(false)
+
+      await expect
+        .poll(async () => (await readToastLog(window)).includes(SCREEN_SENTENCE), {
+          timeout: 40_000,
+          intervals: [250],
+          message: 'a take of nothing was opened: no screen sentence after the limit'
+        })
+        .toBe(true)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled({ timeout: 15_000 })
+      await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+      await expect(window.getByText(/REC 00:/)).toHaveCount(0)
+      expect(await heldTracks(window, 'audio'), 'the start did open the microphone before the screen ended it').toBe(1)
+      await expect
+        .poll(async () => (await liveTracks(window, 'video')) + (await liveTracks(window, 'audio')), {
+          timeout: 10_000,
+          intervals: [200],
+          message: 'a track stayed live after the failed start'
+        })
+        .toBe(0)
+      await expect(window.locator('video'), 'the check\'s hidden element is gone with the rest').toHaveCount(0)
+      expect(existsSync(recordingsDir(userDataDir)), 'recording:begin was asked for a take nobody will see').toBe(false)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: a working screen with the webcam off starts at once, as before, and Stop ends every track', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r123a-nowebcam-ok')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecord(app, (w) => stubSources(w, false))
+      await pickSource(window)
+      const pressed = Date.now()
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 8_000 })
+      const startedInMs = Date.now() - pressed
+      test.info().annotations.push({ type: 'start-latency-ms', description: String(startedInMs) })
+      expect(startedInMs, 'a screen that sends a picture is not made to wait for the limit').toBeLessThan(8_000)
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 15_000 })
+      expect((await readToastLog(window)).join(' | ')).not.toContain('no picture')
+      expect(await liveTracks(window, 'video'), 'the screen stays live: the check did not stop its track').toBe(1)
+      expect(await liveTracks(window, 'audio')).toBe(1)
+      await expect(window.locator('video'), 'only the recording preview: the check\'s hidden element is gone').toHaveCount(1)
+
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      await expect
+        .poll(async () => (await liveTracks(window, 'video')) + (await liveTracks(window, 'audio')), { timeout: 10_000, intervals: [200] })
+        .toBe(0)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a window that closed while the start was waiting for the microphone: the take ends at once, with no "sent no picture" about a window that is gone (T-124 (1) x item 2)', async () => {
+    // The screen is frameless, so a `play()` on it never settles by itself: whether the first-picture check ended quietly used to depend on a frame having
+    // landed before the window closed. The track is ended BEFORE the start reaches the check, so the order is fixed, not a race.
+    test.setTimeout(150_000)
+    const root = makeRoot('r123a-closed-early')
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, 'take.mp4')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      await stubSaveDialog(app, outPath, 6_000)
+      const window = await openRecord(app, async (w) => {
+        await stubSources(w, true)
+        // The microphone waits on a gate the test opens (the start is held between the screen's capture and the check).
+        await w.evaluate(() => {
+          const g = window as unknown as { __mic: { asked: number; release: () => void } }
+          let release: () => void = () => undefined
+          const gate = new Promise<void>((resolve) => (release = resolve))
+          g.__mic = { asked: 0, release }
+          const md = navigator.mediaDevices
+          const previous = md.getUserMedia.bind(md)
+          md.getUserMedia = async (c?: MediaStreamConstraints) => {
+            if (c && typeof c.audio === 'object' && !c.video) {
+              g.__mic.asked += 1
+              await gate
+            }
+            return previous(c)
+          }
+        })
+      })
+      await pickSource(window)
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect
+        .poll(() => window.evaluate(() => (window as unknown as { __mic: { asked: number } }).__mic.asked), {
+          timeout: 20_000,
+          message: 'the start reached the microphone, after the screen was captured'
+        })
+        .toBeGreaterThan(0)
+
+      // The captured window goes away (what the OS does: the track ends and fires `ended`), then the start goes on.
+      await window.evaluate(() => {
+        for (const s of (window as unknown as { __held: MediaStream[] }).__held)
+          for (const t of s.getVideoTracks()) {
+            t.stop()
+            t.dispatchEvent(new Event('ended'))
+          }
+      })
+      await window.evaluate(() => (window as unknown as { __mic: { release: () => void } }).__mic.release())
+
+      await expect(
+        window.locator('div.card', { hasText: 'Finishing up' }).getByText('Finishing up — converting to MP4…'),
+        'a picture that was already gone when the take began ends it at once, not after the 10 s limit'
+      ).toBeVisible({ timeout: 5_000 })
+      expect((await readToastLog(window)).join(' | '), 'no "no picture" about a window that closed').not.toContain('sent no picture')
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 90_000 })
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

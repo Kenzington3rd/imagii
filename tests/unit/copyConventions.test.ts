@@ -691,7 +691,7 @@ describe('T-159 (1): nothing Audio Studio shows its person calls their sound a "
 // shipped with a period that BRANDING_GUIDE "Toasts" forbids on a one-sentence result). These are the helpers' outputs, as an explicit list of calls (not a reflective walk of the module).
 // simplification: the list is hand-kept; a new `*Message` helper that the renderer toasts as a result must be added here. Upgrade: none needed while there are five.
 // Covered: captionsReadyMessage (0, 1, 3), burnInDoneMessage (all four argument pairs), clearedTranscriptsMessage (its two single-sentence successes) and previewCopySkippedMessage (a
-// single-sentence warning toast). Left out, each with its reason: staleCaptionsMessage and clearedTranscriptsMessage's partial branch are TWO sentences (both keep their periods,
+// single-sentence warning toast). Left out, each with its reason: staleCaptionsMessage's cues branch (T-174 (5): its none branch IS in the list) and clearedTranscriptsMessage's partial branch are TWO sentences (both keep their periods,
 // asserted below, with lateScanMessage (T-167 (3)) and kitFailedMessage's two-sentence branch (T-167 (4), a failure: a full sentence with its period); clearedTranscriptsMessage's refusal and `ipcErrorMessage` are failures (a full sentence with its period); `overlayOutsideClipMessage` is an inline note in the editor, not a toast;
 // `clearTranscriptsQuestion` is a confirm's question, not a result.
 describe('T-163 (3): a helper-built single-sentence result toast has no trailing period', () => {
@@ -699,6 +699,7 @@ describe('T-163 (3): a helper-built single-sentence result toast has no trailing
     ['captionsReadyMessage(0)', captionsReadyMessage(0)],
     ['captionsReadyMessage(1)', captionsReadyMessage(1)],
     ['captionsReadyMessage(3)', captionsReadyMessage(3)],
+    ['staleCaptionsMessage(none)', staleCaptionsMessage('a.mp4', 0)],
     ['burnInDoneMessage(true, true)', burnInDoneMessage(true, true)],
     ['burnInDoneMessage(true, false)', burnInDoneMessage(true, false)],
     ['burnInDoneMessage(false, true)', burnInDoneMessage(false, true)],
@@ -715,7 +716,7 @@ describe('T-163 (3): a helper-built single-sentence result toast has no trailing
   })
 
   it('the two-sentence toasts keep both periods', () => {
-    expect(staleCaptionsMessage('a.mp4')).toMatch(/\. .*\.$/)
+    expect(staleCaptionsMessage('a.mp4', 3)).toMatch(/\. .*\.$/)
     // T-167 (3): the late scan's toast is two sentences, like the captions one it follows.
     expect(lateScanMessage('a.mp4')).toMatch(/\. .*\.$/)
     // T-167 (4): kitFailedMessage is a FAILURE (reportFailure's `failed`, a full sentence with its period, followed by the cause): two sentences when files survived, one when none did.

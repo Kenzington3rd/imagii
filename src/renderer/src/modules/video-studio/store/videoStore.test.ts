@@ -8,6 +8,7 @@ import {
   videoHasNoSound,
   videoSessionHasLoss,
   videoKey,
+  holdTranscriptFor,
   useVideoStore
 } from './videoStore'
 import type { VideoSource } from './videoStore'
@@ -2173,5 +2174,83 @@ describe('a transcript comes back with its video (T-173 (4))', () => {
     await useVideoStore.getState().loadSource('/v/a.mp4')
     transcribed('/v/a.mp4')
     expect(videoSessionHasLoss(useVideoStore.getState())).toBe(false)
+  })
+})
+
+/**
+ * T-174 (5): a transcription that finishes after its video was closed (or another opened) is held under the video it was made for, so opening that video again gives it
+ * back. `holdTranscriptFor` writes the same entry `loadSource` reads; the duration is the one the run STARTED on.
+ */
+describe('holdTranscriptFor - a late transcript waits for its video (T-174 (5))', () => {
+  const SEGMENTS = [{ startSec: 0, endSec: 2, text: 'late words' }]
+  const ORIGINAL = '/media/stream.flv'
+  let probeDuration = 60
+
+  beforeEach(() => {
+    probeDuration = 60
+    vi.stubGlobal('window', {
+      api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => ({ ...FAKE_SOURCE.probe, duration: probeDuration }) } }
+    })
+    useVideoStore.getState().clearSource()
+    useVideoStore.getState().forgetHeldTranscripts()
+  })
+  afterEach(() => {
+    useVideoStore.getState().forgetHeldTranscripts()
+    vi.unstubAllGlobals()
+  })
+
+  it('the video opened later gets the path and the segments; the video open meanwhile does not', async () => {
+    await useVideoStore.getState().loadSource('/v/b.mp4')
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', '/captions/a.srt'), 'the refusal this is for').toBe(false)
+    holdTranscriptFor('/v/a.mp4', { srtPath: '/captions/a.srt', transcript: SEGMENTS, duration: 60 })
+    expect(useVideoStore.getState().srtPath, 'the open video is not given a late result').toBeNull()
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath).toBe('/captions/a.srt')
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS)
+  })
+
+  it('a converted import: the NEW working copy of the same original gets it', async () => {
+    holdTranscriptFor(ORIGINAL, { srtPath: '/captions/s.srt', transcript: SEGMENTS, duration: 60 })
+    await useVideoStore.getState().loadSource('/tmp/imports/stream-Zx9Kp2Lm.mp4', ORIGINAL)
+    expect(useVideoStore.getState().srtPath).toBe('/captions/s.srt')
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS)
+  })
+
+  it('a run that found no speech is held as "ran, found nothing": [] and no path', async () => {
+    holdTranscriptFor('/v/a.mp4', { srtPath: null, transcript: [], duration: 60 })
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().derived.transcript).toEqual([])
+    expect(useVideoStore.getState().srtPath).toBeNull()
+  })
+
+  it('control: the file opened again 2 s longer (it was replaced while the run was out) gets none; 0.4 s off still does', async () => {
+    holdTranscriptFor('/v/a.mp4', { srtPath: '/captions/a.srt', transcript: SEGMENTS, duration: 60 })
+    probeDuration = 62
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+    probeDuration = 60.4
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath).toBe('/captions/a.srt')
+  })
+
+  it('control: a DIFFERENT video gets none', async () => {
+    holdTranscriptFor('/v/a.mp4', { srtPath: '/captions/a.srt', transcript: SEGMENTS, duration: 60 })
+    await useVideoStore.getState().loadSource('/v/c.mp4')
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+  })
+
+  it('the newest run replaces what was held, and an entry with neither path nor segments is no entry', async () => {
+    holdTranscriptFor('/v/a.mp4', { srtPath: '/captions/first.srt', transcript: SEGMENTS, duration: 60 })
+    holdTranscriptFor('/v/a.mp4', { srtPath: '/captions/second.srt', transcript: SEGMENTS, duration: 60 })
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath).toBe('/captions/second.srt')
+    useVideoStore.getState().clearSource()
+    holdTranscriptFor('/v/a.mp4', { srtPath: null, transcript: null, duration: 60 })
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
   })
 })

@@ -959,3 +959,30 @@ describe('an edit that changes nothing records nothing and keeps Redo (T-167 (2)
     expect(useCanvasStore.getState().history.past).toHaveLength(past + 2)
   })
 })
+
+/**
+ * T-174 (3): the Pencil and the Line tool both made a layer named "Line". The Layers panel shows `name`, the toolbar says "Pencil", and the tutorial says
+ * "Line (L) and Pencil (P)". The unreachable "Polygon" naming (nothing passed `closed`) is gone; the field stays false.
+ */
+describe('makeLineLayer names the layer for the tool that drew it (T-174 (3))', () => {
+  it('a Pencil stroke is "Pencil", a Line is "Line", and the default is "Line"', () => {
+    expect(makeLineLayer([0, 0, 10, 10, 20, 5], 'Pencil').name).toBe('Pencil')
+    expect(makeLineLayer([0, 0, 10, 10], 'Line').name).toBe('Line')
+    expect(makeLineLayer([0, 0, 10, 10]).name).toBe('Line')
+  })
+
+  it('both are the same stroke layer otherwise: type line, points kept, never closed', () => {
+    for (const layer of [makeLineLayer([1, 2, 3, 4, 5, 6], 'Pencil'), makeLineLayer([1, 2, 3, 4])]) {
+      expect(layer.type).toBe('line')
+      expect(layer.closed).toBe(false)
+      expect(layer.stroke).toBeTruthy()
+    }
+    expect(makeLineLayer([1, 2, 3, 4, 5, 6], 'Pencil').points).toEqual([1, 2, 3, 4, 5, 6])
+  })
+
+  it('a Pencil layer added to the store shows as "Pencil" in the document\'s layers', () => {
+    useCanvasStore.getState().addLayer(makeLineLayer([0, 0, 30, 30, 60, 10], 'Pencil'))
+    const layers = useCanvasStore.getState().doc.layers
+    expect(layers[layers.length - 1]?.name).toBe('Pencil')
+  })
+})

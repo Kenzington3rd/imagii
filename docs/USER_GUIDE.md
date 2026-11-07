@@ -133,8 +133,12 @@ and webcam if you want them. Game and desktop sound are not captured.
    itself, with the webcam where the file will have it; there is no second picture of
    the camera over it. A camera that opens but sends no picture is given 10 seconds:
    then imagii says "The camera sent no picture for 10 seconds. Recording screen
-   only." and records the screen without it. If the screen itself sends no picture,
-   imagii says so, stops, and **Start recording** is back to try another screen or window.
+   only." and records the screen without it. Right after you open Record, with the
+   webcam checked, **Start recording** reads **Checking devices…** and waits until imagii has
+   looked for cameras, so a camera that is slow to answer is not mistaken for none.
+   Whether or not the webcam is checked, if the screen itself sends no picture for 10
+   seconds, imagii says so, stops without opening a take, and **Start recording** is back to
+   try another screen or window.
 4. Under **Output**, leave **Convert to MP4 after recording** checked (slower,
    better compatibility), or uncheck it for a quick WebM save, which some apps do
    not accept.
@@ -442,15 +446,21 @@ that names the file being converted.)
   clip, anything you can still undo, a scan's moments, a chat log you pasted or the spikes found in it. A video
   you have only opened closes with no question (and with nothing running, nothing is asked at all); a
   transcript is not on that list: open the same video again and it is back (a saved project, or the autosave, keeps it across a restart).
+  That includes a transcription that finishes after you closed the video or opened another: it is kept for the video it was made for, and the
+  toast says so (**Captions for stream.mp4 are ready. Open it again to see them.**, or **No speech found in stream.mp4, so there are no captions** when it heard nothing).
   Canceling from the card is the same as canceling from the panel: an export of two or more files asks first, and nothing
   half-written is left in your folder.
 - **When something fails,** the message says what happened and what to try, in
   plain words — and the Export row that failed is marked **Failed** with the reason
   under it, so you can still see which one, and why, after the message fades.
-- **Open project** with a video or audio file that has moved: imagii opens
+- **Open project** (and **Restore**) with a video or audio file that has moved: imagii opens
   everything else in the project and names the missing file, so you can load
-  it again in its studio. A file that is there but won't open (a conversion that
-  failed, a full disk) is reported with its real cause instead, and if you open a
+  it again in its studio - and when you do, the clips, the selected clip and the caption file of that video
+  (or the cleanup, cuts and second track of that sound) are back with it. imagii keeps them for the session
+  while the file is missing, and the autosave keeps them too, so they are not lost to the next save.
+  Opening a different video (or sound) in that studio lets them go; closing leaves them waiting. A file that is
+  there but won't open (a conversion that
+  failed, a full disk) is reported with its real cause instead and keeps its work the same way, and if you open a
   different video while a long conversion is still running, the project's video is
   skipped — what you opened is never replaced — and a note says so.
 
@@ -720,7 +730,8 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    and remove them. The **Properties** panel edits the selected layer; one drag of its
    **Opacity** slider, or one run of typing in a name, text, color or number field (**X (px)**,
    **Y (px)**, **Rotation**, **Size (px)**, **Stroke (px)**), is one **Undo**; a rotation preset
-   button is one **Undo** each. A picture
+   button is one **Undo** each. A straight line drawn with **Line** is a layer named **Line**, and a
+   freehand stroke drawn with **Pencil** is a layer named **Pencil** (rename either in **Properties**). A picture
    you import is placed at most 800 px on its long side, and always inside the canvas
    (a small canvas such as the 112×112 emote makes it smaller to fit, and it starts
    60 px in from the corner when there is room for that), whether you drop it, pick

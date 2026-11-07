@@ -379,16 +379,14 @@ export function captionsReadyMessage(segmentCount: number): string {
 }
 
 /**
- * The toast when a transcription finishes for a video that is no longer the one open (T-113).
- * "Another video" was wrong for the case where the video was only CLOSED (nothing replaced
- * it), so it says what is true of both — closed or replaced — and what to do: the captions
- * were thrown away, not kept somewhere, so the way back is to transcribe again.
+ * The toast when a transcription finishes for a video that is no longer the one open (T-113, T-174 (5)). It was thrown away then ("Transcribe again when you're
+ * ready" - minutes of whisper, and the .srt left in the captions folder); the store holds it under the video's key now (`holdTranscriptFor`), so the sentence says
+ * where it is: with the video, which "Open it again" brings back. A run that found no speech has nothing to open again, and says that (the wording of
+ * `captionsReadyMessage(0)`, with the file named, and no period: one sentence, a result).
  */
-export function staleCaptionsMessage(fileName: string): string {
-  return (
-    `Captions for ${fileName} finished after that video was closed or replaced, so they weren't added. ` +
-    "Transcribe again when you're ready."
-  )
+export function staleCaptionsMessage(fileName: string, cueCount: number): string {
+  if (cueCount === 0) return `No speech found in ${fileName}, so there are no captions`
+  return `Captions for ${fileName} are ready. Open it again to see them.`
 }
 
 /**

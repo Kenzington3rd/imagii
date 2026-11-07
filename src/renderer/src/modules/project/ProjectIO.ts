@@ -1,11 +1,11 @@
 import toast from 'react-hot-toast'
 import type { ChainSpec } from '@shared/audio'
-import { MIN_CLIP_SEC, floorRange } from '@shared/clip'
+import { MIN_CLIP_SEC, floorRange, type Clip } from '@shared/clip'
 import type { ImagiiProject, PlaceRecord } from '@shared/workspace'
 import { KNOWN_ROUTES, MAX_SCHEMA_VERSION, hasStudioState } from '@shared/projectValidation'
 import { isMissingFileError, userFacingError } from '@shared/userFacingError'
-import { useVideoStore } from '../video-studio/store/videoStore'
-import { useAudioStore, waveformArrived, type AudioSource } from '../audio-studio/state/audioStore'
+import { useVideoStore, videoKey } from '../video-studio/store/videoStore'
+import { useAudioStore, soundKey, waveformArrived, type AudioSource } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { useReferencesStore } from '../references/state/referencesStore'
 import { basename } from '../../components/OutputDirLabel'
@@ -72,10 +72,27 @@ function captureAudio(
   return { sourcePath: source.filePath, chain }
 }
 
-export function captureProject(): ImagiiProject {
+/**
+ * T-174 (4): the studio parts a project or an autosave could not apply because their file was unavailable (moved, an unplugged drive) or would not open (a failed
+ * conversion, a full disk), kept for the session. The sentence for such a file sends the person to load it again, and loading it again opened it fresh - while the
+ * next autosave replaced the only copy of its clips and chain. So `applyProject` keeps the part here (a SKIP is not kept: the person chose another file), `capture`
+ * writes it while its studio has nothing open (the autosave keeps it), and `giveBack` applies it when the same file is opened (`videoKey` / `soundKey`), or drops it
+ * when a different file opens in that studio (the person moved on). Closing the studio keeps it. Module-level: it outlives `clearSource` and is gone with the
+ * renderer; a project file or the autosave carries it across a restart. `key` is the original the person opened (a converted import's, a video's sound's).
+ * simplification: one part per studio, for the session; a second failed apply replaces the first. Upgrade: a map by key if two missing files ever need to wait together.
+ */
+const keptParts: {
+  video?: { key: string; converted: boolean; clips: Clip[]; selectedClipId: string | null; srtPath: string | null }
+  audio?: { key: string; extracted: boolean; chain: ChainSpec }
+} = {}
+
+/** What the open studios hold, as a project part each - and, unless `openOnly`, a kept part in the slot of a studio with nothing open (an open source always wins its slot). */
+function capture(openOnly: boolean): ImagiiProject {
   const video = useVideoStore.getState()
   const audio = useAudioStore.getState()
   const canvas = useCanvasStore.getState()
+  const keptVideo = openOnly ? undefined : keptParts.video
+  const keptAudio = openOnly ? undefined : keptParts.audio
 
   return {
     // Always emit MAX_SCHEMA_VERSION on save; older versions are only
@@ -99,10 +116,27 @@ export function captureProject(): ImagiiProject {
           watermark: null,
           srtPath: video.srtPath
         }
-      : undefined,
-    audioStudio: audio.source ? captureAudio(audio.source, audio.chain) : undefined,
+      : keptVideo
+        ? {
+            sourcePath: keptVideo.key,
+            ...(keptVideo.converted ? { convertedForImport: true } : {}),
+            clips: keptVideo.clips,
+            selectedClipId: keptVideo.selectedClipId,
+            watermark: null,
+            srtPath: keptVideo.srtPath
+          }
+        : undefined,
+    audioStudio: audio.source ? captureAudio(audio.source, audio.chain)
+      : keptAudio
+        ? { sourcePath: keptAudio.key, ...(keptAudio.extracted ? { extractedFromVideo: true } : {}), chain: keptAudio.chain }
+        : undefined,
     imageCanvas: canvas.doc.layers.length > 0 ? { doc: canvas.doc } : undefined
   }
+}
+
+/** The whole session as a project: what is open, and the parts set aside for a file that could not be opened (T-174 (4)). */
+export function captureProject(): ImagiiProject {
+  return capture(false)
 }
 
 /**
@@ -112,7 +146,8 @@ export function captureProject(): ImagiiProject {
  * `captureProject`, so it is the definition the autosave gate uses (`hasStudioState`), not a second one.
  */
 export function sessionHoldsWork(): boolean {
-  return hasStudioState(captureProject())
+  // T-174 (4): what is OPEN. A part kept for a file that could not be opened is not work the session holds - Restore over it replaces nothing a person can see.
+  return hasStudioState(capture(true))
 }
 
 /**
@@ -132,7 +167,7 @@ export function subscribeSessionStores(listener: () => void): () => void {
  * (Audio Studio's own word for a sound that is open, as "Close this audio?"), a Stream Graphics canvas. Asked of `captureProject`, as `sessionHoldsWork` is, so the
  * studios it names are the ones that made the work test true.
  */
-export function describeRestoreRefused(project: ImagiiProject = captureProject()): string {
+export function describeRestoreRefused(project: ImagiiProject = capture(true)): string {
   const open = [
     project.videoStudio ? 'a video' : null,
     project.audioStudio ? 'audio' : null,
@@ -367,6 +402,60 @@ export async function audioSettled(outcome: Pick<ApplyOutcome, 'audioOpened'>): 
 }
 
 /**
+ * The video part of a project, put in the open video (T-153 (8) and the srt rule): the clips floored once the source's duration is known, the selection, then the
+ * caption path (`loadSource` clears it). One function for the apply and for the give-back of a kept part (T-174 (4)), so a part comes back exactly as it would have.
+ */
+function applyVideoPart(part: { clips: Clip[]; selectedClipId: string | null; srtPath?: string | null }): void {
+  if (part.clips.length > 0) {
+    // T-153 (8): a clip a saved project or an autosave carries with no length ([0, 0], [D, D]; v1.6.0 wrote them) comes back
+    // with the floor every range edit holds, once the source's duration is known - the validator checks finiteness only. Only a clip SHORTER
+    // than the floor is touched: one with length that lies past the end of a recording that got shorter stays as saved (T-133 (4): Burn says so in a sentence).
+    const duration = useVideoStore.getState().source?.probe.duration
+    useVideoStore.setState({
+      clips:
+        duration === undefined
+          ? part.clips
+          : part.clips.map((c) => (c.endSec - c.startSec < MIN_CLIP_SEC ? { ...c, ...floorRange(c.startSec, c.endSec, duration) } : c)),
+      selectedClipId: part.selectedClipId ?? part.clips[0]?.id ?? null
+    })
+  }
+  // Restore srtPath after loadSource (which clears it). Ignore on
+  // older v1 projects where the field was absent — they get null.
+  if (part.srtPath) {
+    useVideoStore.getState().setSrtPath(part.srtPath)
+  }
+}
+
+/**
+ * T-174 (4): a video was opened (or the studio emptied). Closing keeps the kept part; the same file (`videoKey`: the original, so a converted import's new working copy
+ * is it) gets it applied; any other file means the person moved on, and it is dropped.
+ */
+function giveBackVideo(): void {
+  const kept = keptParts.video
+  const open = useVideoStore.getState().source
+  if (!kept || !open) return
+  delete keptParts.video
+  if (videoKey(open) === kept.key) applyVideoPart(kept)
+}
+
+/** The sound's twin of `giveBackVideo`: `soundKey` is the file the person opened (a video's sound is its video), and the part is the chain. */
+function giveBackAudio(): void {
+  const kept = keptParts.audio
+  const open = useAudioStore.getState().source
+  if (!kept || !open) return
+  delete keptParts.audio
+  if (soundKey(open) === kept.key) useAudioStore.setState({ chain: kept.chain })
+}
+
+// Installed once, with the module: the stores are singletons and a kept part can be waiting from the first apply.
+useVideoStore.subscribe((state, prev) => {
+  if (state.source !== prev.source) giveBackVideo()
+})
+useAudioStore.subscribe((state, prev) => {
+  if (state.source !== prev.source) giveBackAudio()
+})
+
+/**
  * Put a project's studios back, each independently.
  *
  * T-84: this used to be one straight line of awaits, so the first
@@ -433,26 +522,20 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
           await useVideoStore.getState().loadSource(sourcePath)
           return true
         }
+    // T-174 (4): this project speaks for the video now, so a part kept from an earlier apply is superseded - and one loaded over it would otherwise be given back first.
+    delete keptParts.video
     const loaded = await loadReporting('video', sourcePath, load, outcome)
     videoOpened = loaded
     if (loaded) {
-      if (video.clips.length > 0) {
-        // T-153 (8): a clip a saved project or an autosave carries with no length ([0, 0], [D, D]; v1.6.0 wrote them) comes back
-        // with the floor every range edit holds, once the source's duration is known - the validator checks finiteness only. Only a clip SHORTER
-        // than the floor is touched: one with length that lies past the end of a recording that got shorter stays as saved (T-133 (4): Burn says so in a sentence).
-        const duration = useVideoStore.getState().source?.probe.duration
-        useVideoStore.setState({
-          clips:
-            duration === undefined
-              ? video.clips
-              : video.clips.map((c) => (c.endSec - c.startSec < MIN_CLIP_SEC ? { ...c, ...floorRange(c.startSec, c.endSec, duration) } : c)),
-          selectedClipId: video.selectedClipId ?? video.clips[0]?.id ?? null
-        })
-      }
-      // Restore srtPath after loadSource (which clears it). Ignore on
-      // older v1 projects where the field was absent — they get null.
-      if (video.srtPath) {
-        useVideoStore.getState().setSrtPath(video.srtPath)
+      applyVideoPart(video)
+    } else if (!outcome.skipped.includes('video')) {
+      // T-174 (4): the file could not be opened (unavailable or failed; a SKIP is the person's choice and keeps nothing): its clips and caption path wait for it.
+      keptParts.video = {
+        key: sourcePath,
+        converted: video.convertedForImport === true,
+        clips: video.clips,
+        selectedClipId: video.selectedClipId,
+        srtPath: video.srtPath ?? null
       }
     }
   }
@@ -514,10 +597,15 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
             opened = await useAudioStore.getState().loadSource(sourcePath)
             return true
           }
-    const loaded = await loadReporting('audio', fromVideo ?? sourcePath, load, outcome)
+    // T-174 (4): the file this sound is named by - the one a failure reports, and the key a kept chain waits under (`soundKey` of the sound it will be opened as).
+    const audioKey = fromVideo ?? sourcePath
+    delete keptParts.audio
+    const loaded = await loadReporting('audio', audioKey, load, outcome)
     if (loaded) {
       useAudioStore.setState({ chain: audio.chain })
       if (opened) outcome.audioOpened = opened
+    } else if (!outcome.skipped.includes('audio')) {
+      keptParts.audio = { key: audioKey, extracted: audio.extractedFromVideo === true || fromVideo !== null, chain: audio.chain }
     }
   }
   // Last: the selections and the playhead only mean anything once the

@@ -214,7 +214,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['Canvas.tsx:267', 'src/renderer/src/modules/image-studio/Canvas.tsx', 267, 267, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
     ['Canvas.tsx:179-182', 'src/renderer/src/modules/image-studio/Canvas.tsx', 179, 182, /function snap\([\s\S]*gridSize/],
     ['Canvas.tsx:193', 'src/renderer/src/modules/image-studio/Canvas.tsx', 193, 193, /MAX_STAGE_ZOOM = 4/],
-    ['canvasStore.ts:390', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 390, 390, /'Line'/],
+    ['canvasStore.ts:391', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 391, 391, /makeLineLayer\(points: number\[\], name: 'Line' \| 'Pencil' = 'Line'\)/],
     ['canvasStore.ts:197', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 197, 197, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
     ['canvasStore.ts:130', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 130, 130, /future: \[\]/],
     ['ImageStudio.tsx:67-76', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 67, 76, /e\.key === 'v'[\s\S]*setTool\('pencil'\)/],

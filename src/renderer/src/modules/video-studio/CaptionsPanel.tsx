@@ -18,7 +18,7 @@ import {
 import { countOf } from '@shared/plural'
 import { landedBesideNote } from '@shared/landedPath'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
-import { NO_SOUND_MESSAGE, useVideoStore, videoHasNoSound, videoKey } from './store/videoStore'
+import { NO_SOUND_MESSAGE, holdTranscriptFor, useVideoStore, videoHasNoSound, videoKey } from './store/videoStore'
 import {
   cancelCaptionsJob,
   cancelModelInstall,
@@ -165,6 +165,9 @@ export function CaptionsPanel(): JSX.Element | null {
     // T-172 (2): the transcript is for the original the person opened, so a converted import re-opened while this runs still receives it; main reads `startedFor`.
     const startedKey = videoKey(source)
     const startedName = source.fileName
+    // T-174 (5): the probe duration of the video the run is FOR, read now - a result that lands after Close is held under this key with the duration it was made at, and the
+    // give-back on re-open compares it with the file's (the open video at that moment may be another, or none).
+    const startedDuration = source.probe.duration
     if (!useCaptionsRun.getState().begin({ job: 'transcribe', name: startedName, videoPath: startedKey })) return
     useCaptionsProgress.setState({ progress: null })
     try {
@@ -173,7 +176,14 @@ export function CaptionsPanel(): JSX.Element | null {
         sourcePath: startedFor
       })
       if (!setSrtPathFor(startedKey, result.srtPath)) {
-        toast(staleCaptionsMessage(startedName), {
+        // T-174 (5): the video is closed or another is open, but the transcript is not lost - it is held under the video it was made for, and opening that video again gives it
+        // back (`loadSource`). A run that found no speech is held as "ran, found nothing", as for an open video.
+        holdTranscriptFor(startedKey, {
+          srtPath: result.srtPath,
+          transcript: result.srtPath === null ? [] : result.segments,
+          duration: startedDuration
+        })
+        toast(staleCaptionsMessage(startedName, result.srtPath === null ? 0 : result.segments.length), {
           icon: <Icon name="warning" size={18} />,
           duration: 8000
         })

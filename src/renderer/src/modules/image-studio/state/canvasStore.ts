@@ -383,11 +383,16 @@ export function makeEllipseLayer(x: number, y: number, rx = 80, ry = 60): Ellips
   }
 }
 
-export function makeLineLayer(points: number[], closed = false): LineLayer {
+/**
+ * T-174 (3): a straight Line and a freehand Pencil stroke are the same layer type; `name` is what the Layers panel shows, so it says which tool drew it
+ * (the toolbar and the tutorial call them "Line" and "Pencil"). `closed` is always false: no tool draws a closed shape, and the field stays on the type
+ * for the project files that carry it.
+ */
+export function makeLineLayer(points: number[], name: 'Line' | 'Pencil' = 'Line'): LineLayer {
   return {
     id: nanoid(8),
     type: 'line',
-    name: closed ? 'Polygon' : 'Line',
+    name,
     visible: true,
     locked: false,
     x: 0,
@@ -399,7 +404,7 @@ export function makeLineLayer(points: number[], closed = false): LineLayer {
     points,
     stroke: EMBER,
     strokeWidth: 3,
-    closed
+    closed: false
   }
 }
 

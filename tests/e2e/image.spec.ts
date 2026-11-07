@@ -1123,9 +1123,9 @@ test.describe('Image Studio — tools and drawing', () => {
       const pencil = await lastShape(window)
       expect(pencil.cls).toBe('Line')
       expect((pencil.points as number[]).length).toBeGreaterThan(4)
-      // Both drawing tools that produce a Line name it "Line" (canvasStore.ts:390).
+      // The Line tool's layer is "Line" and the Pencil's is "Pencil" (canvasStore.ts:391; round 123 Track A: both used to be "Line").
       expect(await layerNames(window)).toEqual([
-        'Line',
+        'Pencil',
         'Line',
         'Ellipse',
         'Rectangle',
@@ -6958,6 +6958,50 @@ test.describe('Image Studio - the channel banner and the template card (T-172 Tr
       }
       expect(fromPanel.some((c) => c.checker), 'the catalog has a transparent template, so the checkerboard is exercised').toBe(true)
       expect(fromPanel.some((c) => !c.checker), 'and a filled one').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// round 123 Track A (T-174 item 3): a Pencil stroke's layer is named for the Pencil, a Line's for the Line.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('round 123 Track A - a Pencil stroke is a Pencil in the Layers panel', () => {
+  test('a Pencil stroke\'s row and Name field read "Pencil", a Line\'s read "Line", and the two are told apart', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('r123-pencil-name')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+
+      await toolbar.getByRole('button', { name: 'Line' }).click()
+      await dragOnStage(window, { x: 200, y: 200 }, { x: 500, y: 320 })
+      await expectLayerCount(window, 2)
+      expect(await layerNames(window)).toEqual(['Line', 'Text'])
+      await expect(field(window, 'Name')).toHaveValue('Line')
+
+      await toolbar.getByRole('button', { name: 'Pencil' }).click()
+      await dragOnStage(
+        window,
+        { x: 500, y: 600 },
+        { x: 900, y: 700 },
+        {
+          via: [
+            { x: 600, y: 625 },
+            { x: 700, y: 650 },
+            { x: 800, y: 675 }
+          ]
+        }
+      )
+      await expectLayerCount(window, 3)
+      const stroke = await lastShape(window)
+      expect(stroke.cls, 'a Pencil stroke is still a line shape on the stage').toBe('Line')
+      expect(await layerNames(window), 'the Pencil\'s row says Pencil; the Line\'s row did not change').toEqual(['Pencil', 'Line', 'Text'])
+      await expect(field(window, 'Name'), 'the stroke is selected after drawing: its Name field says Pencil').toHaveValue('Pencil')
+      await expect(layerRow(window, 'Polygon')).toHaveCount(0)
     } finally {
       await closeStudio(studio)
     }

@@ -535,7 +535,8 @@ const ALLOWED: Readonly<Record<string, readonly string[]>> = {
   // Local pictures (a capture's thumbnail as a data URL, an imported file as a data URL): `<img>` draws them, nothing is requested.
   // T-125 (26), T-171 (1): and the one live-preview `<video>`, which plays the capture's own MediaStream (`srcObject`), never an address.
   'renderer/src/modules/record-studio/RecordStudio.tsx': ['<img>', '<video>'],
-  'renderer/src/modules/record-studio/compositor.ts': ['createElement(video)', 'createElement(video)'],
+  // The compositor's two offscreen `<video>`s and (T-174 (2)) the first-picture check's one: each holds a MediaStream (`srcObject`), never an address.
+  'renderer/src/modules/record-studio/compositor.ts': ['createElement(video)', 'createElement(video)', 'createElement(video)'],
   'renderer/src/modules/image-studio/ThumbnailVariants.tsx': ['new Image(', '<img>'],
   // T-137 (6), (10): the one place a picture is decoded to be copied onto the canvas (an imported file's data URL, or the mood-board tile the person is looking at, loaded
   // `crossOrigin: 'anonymous'` so its copy can be read back): `loadImage` was `new Image(` in ImportPanel and in MoodBoardPanel, now here. It requests exactly what those did.

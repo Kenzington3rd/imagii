@@ -80,6 +80,17 @@ function holdTranscript(source: VideoSource | null, patch: { srtPath?: string | 
   else heldTranscripts.set(videoKey(source), { srtPath, transcript, duration: source.probe.duration })
 }
 
+/**
+ * T-174 (5): hold a transcript for a video that is NOT the open one - a run that finished after its video was closed or replaced. Written straight into
+ * `heldTranscripts` (the same entry shape, so `loadSource` gives it back under the same duration rule): `duration` is the probe duration the run STARTED on,
+ * read before the minutes of whisper, because the open video's probe is not the one that was transcribed. Replaces what was held for that key (the newest run wins,
+ * as for the open video); a run with no path and no segments is not an entry.
+ */
+export function holdTranscriptFor(key: string, entry: { srtPath: string | null; transcript: DerivedResults['transcript']; duration: number }): void {
+  if (entry.srtPath === null && entry.transcript === null) heldTranscripts.delete(key)
+  else heldTranscripts.set(key, entry)
+}
+
 /** One undo step: the clip-editing state as it was before a mutation.
  *  selectedClipId travels with the clips so undoing a removal also
  *  restores which clip was active — the pair is always captured

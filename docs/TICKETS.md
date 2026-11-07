@@ -8846,7 +8846,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 123)
+- **Status:** done (round 123 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9422,6 +9422,57 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 123 — T-174, all five counted items, landed in the commit that
+carries this entry. Two Sonnet workers in fresh clones of 3a2e318,
+disjoint source files, merged by the expediter. Track A: Record's
+Start waits, disabled and reading "Checking devices…", while the
+webcam is ticked and the first device scan has not settled, so a take
+is not started without the camera it was asked for and "No camera
+found" is not said about one that exists; a take whose picture is the
+raw screen (the webcam off, or the camera fallback) waits for the
+screen's first picture (`waitForFirstPicture`, the compositor's 10 s
+race) before the main-process session opens, so a silent screen ends
+the start with the screen sentence instead of opening a take of
+nothing — and a screen track that has already ended (the window closed
+while the start was opening) is not waited for, nor one that ends
+mid-wait, so T-124 (1)'s take still ends at once (a race the first
+merged e2e caught on record.spec.ts:3077, 1 run in the full suite,
+sent back and made deterministic); a Pencil stroke's layer is "Pencil"
+(the unreachable "Polygon" naming gone). Track B: a Restore or project
+open whose video or sound cannot be opened keeps that studio's part
+for the session (`keptParts`: the clips, selection and caption path;
+the sound's chain), the autosave keeps writing it while that studio
+has nothing open, and opening the same file again gives it back (a
+different file drops it, a newer project supersedes it) — the "load it
+again" sentence is now true; a transcription that finishes after its
+video was closed is held for that video (`holdTranscriptFor`, the
+duration taken at the start) and comes back when it is opened again,
+with "Captions for <file> are ready. Open it again to see them."
+Deviations, accepted: A updated networkAllowlist's compositor <video>
+count, a docClaims cite, an IC cite and two interactionWiring pins;
+B's no-speech toast keeps BRANDING's no-period rule, the Home banner
+and Restore's refusal read the open-only capture, the kept part
+carries its converted/extracted flags, `applyProject` supersedes a
+kept part, and an audio e2e was added. Ledgers: A 26 rows (two invalid
+mutants disclosed, the valid move killed) plus the follow-up's 3 (the
+mid-wait listener killed at unit only, an e2e cannot time it), B 39
+rows (two first-run survivors strengthened and killed), all others
+killed. Expedited personally: one independent mutation per track at a
+seam no ledger row names — A: the first-picture check gated on the
+webcam being unticked (the camera fallback skipping it) → the wiring
+pin red (the e2e does not reach a camera fallback over a silent
+screen; disclosed), and on the follow-up a mid-wait `ended` that
+rejects with the no-picture sentence → the unit case red, with the
+record cases 5x standalone 8/8; B: Restore's refusal reading the
+capture with kept parts → two unit cases red — each restored
+byte-identical, sha256 verified; on the MERGED tree: verify x2 (210
+files, 6680 tests each), test:media 515 passed and 17 skipped of 532
+on 7.0.2, FULL Playwright 797 of 797 (the first 507 in the full run,
+cut at 599 by a container restart with no failures, and
+video-pipelines.spec.ts's 290 run whole on the same build). Applied to
+3a2e318 by `git apply` with every file byte-identical to the expedited
+merge.
 
 Round 122 — T-173, all four counted items, landed in the commit that
 carries this entry. Three Sonnet workers in fresh clones of dbb5bd6,

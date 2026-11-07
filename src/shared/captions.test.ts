@@ -596,16 +596,13 @@ describe('isUsableFrame — a probe can answer 0 (T-113)', () => {
   })
 })
 
-describe('staleCaptionsMessage — a transcript that finished for a video that is gone (T-113)', () => {
-  it('names the video, says closed or replaced (a close is not "another video"), and the way back', () => {
-    expect(staleCaptionsMessage('stream.mp4')).toBe(
-      "Captions for stream.mp4 finished after that video was closed or replaced, so they weren't added. " +
-        "Transcribe again when you're ready."
-    )
+describe('staleCaptionsMessage — a transcript that finished for a video that is gone (T-113, T-174 (5))', () => {
+  it('names the video and says where the captions are: they are held, and opening it again shows them (T-174 (5); T-113 said "weren\'t added")', () => {
+    expect(staleCaptionsMessage('stream.mp4', 12)).toBe('Captions for stream.mp4 are ready. Open it again to see them.')
   })
 
   it('does not claim another video was opened', () => {
-    expect(staleCaptionsMessage('a.mp4')).not.toMatch(/another video/i)
+    expect(staleCaptionsMessage('a.mp4', 3)).not.toMatch(/another video/i)
   })
 })
 
@@ -763,5 +760,19 @@ describe('captionStyleMatches: which preset the style in use is (T-165 fold)', (
   it('a key the preset leaves out is not compared', () => {
     const { outlineWidth: _omitted, ...bare } = CAPTION_STYLE_PRESETS[0]!.style
     expect(captionStyleMatches({ ...bare, outlineWidth: 9 }, bare)).toBe(true)
+  })
+})
+
+describe('staleCaptionsMessage - the two sentences of a late transcription (T-174 (5))', () => {
+  it('cues: the file is ready, and the way to it is to open it again - not "weren\'t added", not "transcribe again"', () => {
+    const text = staleCaptionsMessage('stream.mp4', 1)
+    expect(text).toBe('Captions for stream.mp4 are ready. Open it again to see them.')
+    expect(text).not.toMatch(/weren't added|Transcribe again/i)
+    expect(staleCaptionsMessage('stream.mp4', 400)).toBe(text)
+  })
+
+  it('no cues: says there was no speech in THAT file, with no period (one sentence, a result)', () => {
+    expect(staleCaptionsMessage('stream.mp4', 0)).toBe('No speech found in stream.mp4, so there are no captions')
+    expect(staleCaptionsMessage('stream.mp4', 0)).not.toMatch(/Open it again|ready/i)
   })
 })
