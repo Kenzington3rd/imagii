@@ -1,7 +1,9 @@
 import { ipcMain, app } from 'electron'
+import path from 'node:path'
 import { getSetting, setSetting } from '../store'
 import type { SettingsKey } from '../../shared/api'
 import { folderVerdict } from '../ffmpeg/outputPath'
+import { isSafeAbsolutePath } from '../../shared/pathSafety'
 
 // Round 17 phase-4: the renderer-supplied `key` reaches electron-store, which
 // happily creates whatever top-level field it's handed. A hostile or buggy
@@ -58,6 +60,13 @@ export function registerSettingsIpc(): void {
   ipcMain.handle('settings:set', (_e, key: unknown, value: unknown) => {
     assertKnownKey(key)
     setSetting(key, value)
+  })
+  // T-175 (2): is the FOLDER of this file there? An importer drops a Recent entry whose file failed to open as "can't find" only when it is (the file itself is
+  // gone); an unplugged drive takes its folder with it and the entry must stay. Only a local stat, under the same deadline as the remembered-folder read: 'unknown'
+  // (a stat that did not answer) and 'not-a-folder' are both "not there". A path that is not a safe absolute one answers false rather than throwing.
+  ipcMain.handle('settings:folderOfFilePresent', async (_e, filePath: unknown): Promise<boolean> => {
+    if (!isSafeAbsolutePath(filePath)) return false
+    return (await folderVerdict(path.dirname(filePath))) === 'folder'
   })
   ipcMain.handle('app:getVersion', () => app.getVersion())
 }

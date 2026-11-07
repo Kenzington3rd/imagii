@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach, afterAll } from 'vitest'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -108,5 +108,47 @@ describe('settings:get on a folder key (T-126 (10))', () => {
     expect(await invoke('settings:get', 'streamerHandle')).toBe(HUNG)
     expect(statCalls).toEqual([])
     await invoke('settings:set', 'streamerHandle', undefined)
+  })
+})
+
+/**
+ * T-175 (2) - `settings:folderOfFilePresent`: is the FOLDER of this file there? The importers drop a Recent entry whose file failed to open as "can't find" only when it
+ * is; an unplugged drive takes its folder with it and the entry stays. The same stat and deadline as the remembered-folder read (`folderVerdict`): a stat that has not
+ * answered by the deadline is "not there" (keep the entry), and a path that is not a safe absolute one answers false without a stat and without throwing.
+ */
+describe('settings:folderOfFilePresent (T-175 (2))', () => {
+  const NOT_A_FOLDER = path.join(SCRATCH, 'a-file.txt')
+  writeFileSync(NOT_A_FOLDER, 'x')
+
+  it('is registered beside settings:get', () => {
+    expect(handlers.has('settings:folderOfFilePresent')).toBe(true)
+  })
+
+  it('a file in a folder that is there: true (the file itself need not exist - it is the folder that is asked)', async () => {
+    expect(await invoke('settings:folderOfFilePresent', path.join(HERE, 'stream-vod.mp4'))).toBe(true)
+    expect(statCalls).toContain(HERE)
+  })
+
+  it('a file whose folder is gone (a drive that is not connected): false', async () => {
+    expect(await invoke('settings:folderOfFilePresent', path.join(SCRATCH, 'unplugged-drive', 'Captures', 'vod.mp4'))).toBe(false)
+  })
+
+  it('a file whose "folder" is a file: false', async () => {
+    expect(await invoke('settings:folderOfFilePresent', path.join(NOT_A_FOLDER, 'vod.mp4'))).toBe(false)
+  })
+
+  it('a path that is not a safe absolute one, or not a string: false, with no stat and no throw', async () => {
+    for (const bad of ['vod.mp4', './Clips/vod.mp4', '../Clips/vod.mp4', `${HERE}/../Clips/vod.mp4`, '', undefined, null, 42, { path: HERE }]) {
+      expect(await invoke('settings:folderOfFilePresent', bad), String(bad)).toBe(false)
+    }
+    expect(statCalls).toEqual([])
+  })
+
+  it('a folder whose stat never answers is false at the deadline - "can\'t tell" keeps the entry', async () => {
+    vi.useFakeTimers()
+    const asked = invoke('settings:folderOfFilePresent', path.join(HUNG, 'vod.mp4'))
+    await vi.advanceTimersByTimeAsync(FOLDER_CHECK_DEADLINE_MS + 1)
+    expect(await asked).toBe(false)
+    expect(statCalls.filter((p) => p === HUNG)).toHaveLength(1)
   })
 })

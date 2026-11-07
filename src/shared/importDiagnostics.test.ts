@@ -1,5 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
+  DRIVE_NOT_CONNECTED_SENTENCE,
+  describeFailedOpen,
   describeImportError,
   examineDroppedFile,
   isNotFoundError,
@@ -386,5 +388,77 @@ describe('isNotFoundError - a missing program is not a missing file (T-151)', ()
 
   it('the ordinary ENOENT is still the not-found case', () => {
     expect(isNotFoundError(new Error("ENOENT: no such file or directory, open '/x/a.mp4'"))).toBe(true)
+  })
+})
+
+/**
+ * T-175 (2) - a Recent entry on a drive that is not connected is not erased. An unplugged capture drive fails exactly as a deleted file does (ENOENT), and T-150 dropped the
+ * entry on that sentence. `describeFailedOpen` drops it only when the file's FOLDER is there; the importers hand it the Recent hook's `remove` and main's
+ * `settings.folderOfFilePresent`. Pinned in the built app by home-chrome.spec.ts; the importers' use of it by interactionWiring.test.ts.
+ */
+describe('describeFailedOpen: a Recent entry is dropped only when its folder is there (T-175 (2))', () => {
+  const NOT_FOUND = new Error('ffprobe exit 1: /x/a.mp4: No such file or directory')
+  const MOVED = "imagii can't find that file. It may have been moved or deleted — pick it again with Choose file…."
+  const CLOUD = "imagii can't find that file. It looks like a cloud-sync placeholder — right-click it in Explorer, choose Always keep on this device, then try again."
+
+  function recent(folder: boolean | 'rejects' | 'throws', inList = true) {
+    const folderPresent = vi.fn((_p: string): Promise<boolean> => {
+      if (folder === 'throws') throw new TypeError('window.api.settings.folderOfFilePresent is not a function')
+      return folder === 'rejects' ? Promise.reject(new Error('refused')) : Promise.resolve(folder)
+    })
+    const remove = vi.fn((_p: string): Promise<boolean> => Promise.resolve(inList))
+    return { folderPresent, remove }
+  }
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('the drive sentence is exactly the ticket\'s words', () => {
+    expect(DRIVE_NOT_CONNECTED_SENTENCE).toBe("imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again.")
+  })
+
+  it('the folder is there (the file itself is gone): the entry is removed and the toast says so - T-150 unchanged', async () => {
+    const r = recent(true)
+    expect(await describeFailedOpen(NOT_FOUND, '/x/a.mp4', 'video', r)).toBe(`${MOVED} It was removed from Recent.`)
+    expect(r.folderPresent).toHaveBeenCalledWith('/x/a.mp4')
+    expect(r.remove).toHaveBeenCalledWith('/x/a.mp4')
+  })
+
+  it('the folder is NOT there (a drive that is not connected): the entry stays and the toast is the drive sentence alone', async () => {
+    const r = recent(false)
+    expect(await describeFailedOpen(NOT_FOUND, 'E:\\Captures\\a.mp4', 'video', r)).toBe(DRIVE_NOT_CONNECTED_SENTENCE)
+    expect(r.remove).not.toHaveBeenCalled()
+  })
+
+  it('a refused check (it rejects, or the bridge is missing and throws) counts as "not there": the entry stays', async () => {
+    for (const how of ['rejects', 'throws'] as const) {
+      const r = recent(how)
+      expect(await describeFailedOpen(NOT_FOUND, '/x/a.mp4', 'audio', r), how).toBe(DRIVE_NOT_CONNECTED_SENTENCE)
+      expect(r.remove, how).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the folder is there but the path was not in the list: the not-found sentence, no removal claim', async () => {
+    expect(await describeFailedOpen(NOT_FOUND, '/x/a.mp4', 'video', recent(true, false))).toBe(MOVED)
+  })
+
+  it('the cloud-placeholder variant is unchanged when the folder is there, and a missing folder is the drive sentence even in a cloud folder', async () => {
+    const path = 'C:\\Users\\me\\OneDrive\\clip.mp4'
+    expect(await describeFailedOpen(NOT_FOUND, path, 'video', recent(true))).toBe(`${CLOUD} It was removed from Recent.`)
+    expect(await describeFailedOpen(NOT_FOUND, path, 'video', recent(false))).toBe(DRIVE_NOT_CONNECTED_SENTENCE)
+  })
+
+  it('a failure that is not "not found" is describeImportError, and asks main nothing and drops nothing', async () => {
+    const r = recent(false)
+    const codec = new Error('Unknown codec: hevc_xyz')
+    expect(await describeFailedOpen(codec, '/x/a.mp4', 'video', r)).toBe(describeImportError(codec, '/x/a.mp4'))
+    expect(await describeFailedOpen(codec, '/x/a.mp3', 'audio', r)).toBe(describeImportError(codec, '/x/a.mp3', 'audio'))
+    const spawn = new Error('spawn /opt/imagii/ffprobe ENOENT')
+    expect(await describeFailedOpen(spawn, '/x/a.mp4', 'video', r), 'the runner failing to start is not the person\'s file being gone (T-151)').toBe(describeImportError(spawn, '/x/a.mp4'))
+    expect(r.folderPresent).not.toHaveBeenCalled()
+    expect(r.remove).not.toHaveBeenCalled()
   })
 })

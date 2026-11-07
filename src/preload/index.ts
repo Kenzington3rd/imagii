@@ -23,7 +23,8 @@ import type { ImagiiProject, RecordingFinalizeSpec } from '../shared/workspace'
 const api: ImagiiApi = {
   settings: {
     get: (key: SettingsKey) => ipcRenderer.invoke('settings:get', key),
-    set: (key: SettingsKey, value: unknown) => ipcRenderer.invoke('settings:set', key, value)
+    set: (key: SettingsKey, value: unknown) => ipcRenderer.invoke('settings:set', key, value),
+    folderOfFilePresent: (filePath: string) => ipcRenderer.invoke('settings:folderOfFilePresent', filePath)
   },
   app: {
     getVersion: () => ipcRenderer.invoke('app:getVersion')

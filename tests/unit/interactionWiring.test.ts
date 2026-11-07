@@ -1168,9 +1168,9 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     const importer = read('modules/audio-studio/AudioImporter.tsx')
     // T-137 (1): the claim is the import run's `begin()` in the module store (it was a component ref), taken before the first await and given back in a finally.
     expect(importer).toMatch(/useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)/)
-    expect(importer).toMatch(/async function loadFile\(filePath: string\): Promise<void> \{\s*\n\s*if \(refuseIfBusy\(\)\) return/)
+    expect(importer).toMatch(/async function loadFile\(filePath: string, advise\?: \(\) => void\): Promise<void> \{\s*\n\s*if \(refuseIfBusy\(\)\) return/)
     expect(importer).toMatch(/if \(file && refuseIfBusy\(\)\) return\s*\n\s*const diag = examineDroppedFile\(file\)/)
-    expect(importer).toMatch(/if \(refuseIfBusy\(\)\) return\s*\n\s*if \(pathLooksLikeCloudSync\(filePath\)\)/)
+    expect(importer).toMatch(/if \(refuseIfBusy\(\)\) return\s*\n\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)/)
     expect(importer).toMatch(/Still extracting audio from the last file\. Wait for it to finish\./)
     expect(importer).toMatch(/Still loading the last file\. Wait for it to finish\./)
   })
@@ -1265,7 +1265,7 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     expect(flow).toContain("Skipped this video's sound because you opened another file in Audio Studio while it was extracting")
     // the same rule opening a project uses, not a second copy of it
     expect(read('modules/project/ProjectIO.ts')).toMatch(/export function replacedSince</)
-    expect(studio).toMatch(/import \{ currentRoute, replacedSince \} from '\.\.\/project\/ProjectIO'/)
+    expect(studio).toMatch(/import \{ currentRoute, keptPartQuestion, replacedSince \} from '\.\.\/project\/ProjectIO'/)
   })
 
   // T-133 (6): `replacedSince` is identity of the SOURCE; work tuned on the file already open during the wait was replaced with no question
@@ -1428,7 +1428,7 @@ describe('T-120 — the round-70 fixes are wired where the person reaches them',
     // The check releases what it was handed and the session, through the one teardown the failure path also uses.
     expect(studio).toMatch(/function leftWhileStarting\(\.\.\.extra: Array<MediaStream \| null>\): boolean \{\s*if \(!unmountedRef\.current\) return false\s*for \(const stream of extra\) stream\?\.getTracks\(\)\.forEach\(\(t\) => t\.stop\(\)\)\s*abandonStart\(\)\s*return true/)
     expect(studio).toMatch(/function abandonStart\(\): void \{\s*stopAllStreams\(\)\s*const sid = sessionIdRef\.current[\s\S]*?window\.api\.recording\.abandon\(sid\)/)
-    expect(studio).toMatch(/abandonStart\(\)\s*if \(err instanceof MicStartFailure\) \{[\s\S]*?\} else \{\s*reportFailure\(err, \{ failed: "Couldn't start recording\." \}\)/)
+    expect(studio).toMatch(/abandonStart\(\)\s*if \(unmountedRef\.current\) return\s*if \(err instanceof MicStartFailure\) \{[\s\S]*?\} else \{\s*reportFailure\(err, \{ failed: "Couldn't start recording\." \}\)/)
     // The flag: false at the start of the mount effect (StrictMode runs the cleanup and the effect again in dev),
     // true in its cleanup, ahead of the stop.
     expect(studio).toMatch(/unmountedRef\.current = false\s*void refreshDevices\(\)/)
@@ -2824,7 +2824,7 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     expect(importer).toMatch(/const busy = useImportRun\(\(s\) => s\.run !== null\)/)
     expect(importer, 'none of the component-state spellings this replaced').not.toMatch(/busyRef|convertingRef|setBusy\(/)
     const handle = importer.slice(importer.indexOf('async function handleFile('), importer.indexOf('function onDrop('))
-    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) return\s*if \(!useImportRun\.getState\(\)\.begin\(\{ filePath, converting: false \}\)\) return\s*const heldBefore = useVideoStore\.getState\(\)\.source/)
+    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('video', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return\s*advise\?\.\(\)\s*if \(!useImportRun\.getState\(\)\.begin\(\{ filePath, converting: false \}\)\) return\s*const heldBefore = useVideoStore\.getState\(\)\.source/)
     expect(handle).toMatch(/finally \{\s*useImportRun\.getState\(\)\.end\(\)\s*\}/)
     // After the wait, before the load: the same rule as a project open's.
     expect(handle.indexOf('convertForImport(')).toBeLessThan(handle.indexOf('replacedSince(heldBefore, useVideoStore.getState().source)'))
@@ -2938,7 +2938,7 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     expect(importer).toMatch(/const busy = useAudioImportRun\(\(s\) => s\.run !== null\)/)
     expect(importer, 'none of the component-state spellings this replaced').not.toMatch(/busyRef|extractingRef|setBusy\(/)
     const load = importer.slice(importer.indexOf('async function loadFile('), importer.indexOf('function onDrop('))
-    expect(load).toMatch(/if \(refuseIfBusy\(\)\) return\s*const extracting = audioNeedsExtraction\(filePath\)\s*if \(!useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)\) return\s*const heldBefore = useAudioStore\.getState\(\)\.source/)
+    expect(load).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('audio', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return\s*advise\?\.\(\)\s*const extracting = audioNeedsExtraction\(filePath\)\s*if \(!useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)\) return\s*const heldBefore = useAudioStore\.getState\(\)\.source/)
     expect(load).toMatch(/finally \{\s*useAudioImportRun\.getState\(\)\.end\(\)\s*\}/)
     // After the wait, before the load: the same rule as a project open's and Clean audio's.
     expect(load).toMatch(/if \(replacedSince\(heldBefore, useAudioStore\.getState\(\)\.source\)\) \{\s*toast\(`Skipped the sound of/)
@@ -3763,9 +3763,10 @@ describe('T-150 — scanner "+ Clip" repeat guard, one phrasing per event, the R
     for (const f of ['modules/video-studio/Importer.tsx', 'modules/audio-studio/AudioImporter.tsx']) {
       const src = strip(read(f))
       expect(src, f).toMatch(/const \{ recent, push, remove, clear \} = useRecentFiles\(/)
-      expect(src, f).toContain('isNotFoundError(err) && (await remove(filePath))')
-      expect(src, f).toContain("' It was removed from Recent.'")
+      // T-175 (2): the drop moved into `describeFailedOpen` (importDiagnostics.ts), which hands the Recent hook's `remove` over with the folder check.
+      expect(src, f).toMatch(/describeFailedOpen\(err, filePath, '(?:video|audio)', \{ folderPresent: \(p\) => window\.api\.settings\.folderOfFilePresent\(p\), remove \}\)/)
     }
+    expect(strip(read('../../shared/importDiagnostics.ts'))).toContain("' It was removed from Recent.'")
     expect(read('hooks/useRecentFiles.ts')).toMatch(/remove: \(filePath: string\) => Promise<boolean>/)
   })
 })
@@ -4615,7 +4616,7 @@ describe('T-171 Track B - Record and Audio say and show what is so', () => {
     expect(start.match(/new MicStartFailure/g)).toHaveLength(1)
     expect(start).toMatch(/camStream = await navigator\.mediaDevices\.getUserMedia\(\{\s*video:/)
     expect(start).toMatch(
-      /abandonStart\(\)\s*if \(err instanceof MicStartFailure\) \{\s*const \{ message \} = userFacingError\(err\.original, "Couldn't start recording\."\)\s*toast\.error\(`\$\{message\} \$\{MIC_START_REMEDY\}`, \{ duration: ERROR_TOAST_MS \}\)/
+      /abandonStart\(\)\s*if \(unmountedRef\.current\) return\s*if \(err instanceof MicStartFailure\) \{\s*const \{ message \} = userFacingError\(err\.original, "Couldn't start recording\."\)\s*toast\.error\(`\$\{message\} \$\{MIC_START_REMEDY\}`, \{ duration: ERROR_TOAST_MS \}\)/
     )
     expect(studio).toContain("const MIC_START_REMEDY = 'To record without it, uncheck Record microphone.'")
   })
@@ -4795,5 +4796,147 @@ describe('round 123 Track A - Record starts what it says, and a Pencil stroke is
     expect(store).toContain("export function makeLineLayer(points: number[], name: 'Line' | 'Pencil' = 'Line'): LineLayer {")
     expect(store).not.toContain('Polygon')
     expect(store.replace(/\s+/g, ' ')).toContain('strokeWidth: 3, closed: false }')
+  })
+})
+
+// ═════════ round 124 Track A (T-175 item 1): leaving Record during a start says nothing, from the one catch every start failure reaches ═════════
+// E2E: record.spec.ts "round 124 Track A" (Start then Home during a silent screen's wait: no toast over Home; the control: staying on Record says the sentence).
+describe('round 124 Track A - the start\'s outer catch lets go, then stays silent for a studio that was left', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const studio = strip(read('modules/record-studio/RecordStudio.tsx'))
+  const flatStudio = studio.replace(/\s+/g, ' ')
+
+  it('(1) the outer catch is abandonStart(), then the left-studio return, then the two sentence branches - in that order', () => {
+    expect(flatStudio).toContain(
+      '} catch (err) { abandonStart() if (unmountedRef.current) return if (err instanceof MicStartFailure) {'
+    )
+    const abandon = flatStudio.indexOf('} catch (err) { abandonStart() if (unmountedRef.current) return')
+    const mic = flatStudio.indexOf('if (err instanceof MicStartFailure)', abandon)
+    const report = flatStudio.indexOf("reportFailure(err, { failed: \"Couldn't start recording.\" })", abandon)
+    expect(abandon, 'present').toBeGreaterThan(-1)
+    expect(mic, 'the MicStartFailure branch comes after the guard').toBeGreaterThan(abandon)
+    expect(report, 'the generic reportFailure comes after the guard').toBeGreaterThan(mic)
+  })
+
+  it('(2) one guard: the catch reads unmountedRef once, so the sentences stay exactly as they were for a person still on Record', () => {
+    const catchBody = /\} catch \(err\) \{\s*abandonStart\(\)([\s\S]*?)\} finally \{\s*startingRef\.current = false/.exec(studio)?.[1] ?? ''
+    expect(catchBody, 'the outer catch was found').toContain('MicStartFailure')
+    expect(catchBody.match(/unmountedRef\.current/g)).toHaveLength(1)
+    const flat = catchBody.replace(/\s+/g, ' ')
+    expect(flat).toContain('toast.error(`${message} ${MIC_START_REMEDY}`, { duration: ERROR_TOAST_MS })')
+    expect(flat).toContain("reportFailure(err, { failed: \"Couldn't start recording.\" })")
+  })
+})
+
+// round 124 Track B (T-175 items 2 and 3): the wiring the behavior tests stand on. Behavior: ProjectIO.test.ts "keptPartQuestion" (the words, the same-key rule, the key each entry asks with
+// against the key the give-back compares), importDiagnostics.test.ts "describeFailedOpen", settingsFolderDeadline.test.ts "settings:folderOfFilePresent"; the built app:
+// home-chrome.spec.ts / audio.spec.ts "round 124 Track B".
+describe('T-175 Track B - a kept part is asked about before it is let go; a Recent entry on a drive that is not connected stays', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+  const src = (rel: string): string => path.join(RENDERER_ROOT, '../..', rel)
+
+  it('useEditInVideoStudio asks keptPartQuestion over the output path AFTER its own replace question and BEFORE anything loads; a Cancel returns', () => {
+    const hook = strip(read('lib/editInVideoStudio.ts'))
+    expect(hook).toMatch(/import \{ keptPartQuestion \} from '\.\.\/modules\/project\/ProjectIO'/)
+    expect(hook).toMatch(/const keptQuestion = keptPartQuestion\('video', outputPath, basename\(outputPath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return/)
+    const replace = hook.indexOf('if (message !== null && !confirm(message)) return')
+    const kept = hook.indexOf('keptPartQuestion(')
+    const load = hook.indexOf('await loadVideoSource(outputPath)')
+    expect(replace, 'the replace question is there').toBeGreaterThan(-1)
+    expect(kept, 'asked after the replace question').toBeGreaterThan(replace)
+    expect(kept, 'and before the load').toBeLessThan(load)
+    expect(hook.indexOf('mayLeaveLiveTake()'), 'the live-take question stays first').toBeLessThan(replace)
+  })
+
+  it('Clean audio asks keptPartQuestion over videoKey(source) after its chain question and BEFORE it claims its run or toasts; a Cancel returns', () => {
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    const flow = studio.slice(studio.indexOf('async function cleanAudioFlow'), studio.indexOf('return (\n    <div className="h-full'))
+    expect(flow).toMatch(/const keptQuestion = keptPartQuestion\('audio', videoKey\(source\), source\.fileName\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return/)
+    const chain = flow.indexOf("confirmAudioClose(chainAsked, (message) => confirm(message), 'replace')")
+    const kept = flow.indexOf('keptPartQuestion(')
+    const begin = flow.indexOf('useCleanAudioRun.getState().begin(')
+    const toastLoading = flow.indexOf("toast.loading('Extracting audio")
+    expect(chain).toBeGreaterThan(-1)
+    expect(kept, 'after the chain question').toBeGreaterThan(chain)
+    expect(kept, 'before the run is claimed').toBeLessThan(begin)
+    expect(kept, 'before anything is said').toBeLessThan(toastLoading)
+    expect(studio).toMatch(/import \{[^}]*\bvideoKey\b[^}]*\} from '\.\/store\/videoStore'/)
+  })
+
+  it('both importers ask it over the picked path after refuseIfBusy and before they claim their run; a Cancel returns', () => {
+    const video = strip(read('modules/video-studio/Importer.tsx'))
+    const handle = video.slice(video.indexOf('async function handleFile('), video.indexOf('function onDrop('))
+    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('video', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return\s*advise\?\.\(\)\s*if \(!useImportRun\.getState\(\)\.begin/)
+    const audio = strip(read('modules/audio-studio/AudioImporter.tsx'))
+    const load = audio.slice(audio.indexOf('async function loadFile('), audio.indexOf('function onDrop('))
+    expect(load).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('audio', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return\s*advise\?\.\(\)\s*const extracting/)
+    expect(load.indexOf('keptPartQuestion('), 'before the claim').toBeLessThan(load.indexOf('useAudioImportRun.getState().begin('))
+    // Drop, Choose file and Recent all reach the one function.
+    expect(video).toMatch(/void handleFile\(filePath, advise\)/)
+    expect(video).toMatch(/if \(filePath\) await handleFile\(filePath\)/)
+    expect(video).toMatch(/onPick=\{\(p\) => void handleFile\(p\)\}/)
+    expect(audio).toMatch(/void loadFile\(filePath, advise\)/)
+    expect(audio).toMatch(/await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)/)
+    expect(audio).toMatch(/onPick=\{\(p\) => void loadFile\(p\)\}/)
+  })
+
+  it('Open project does not ask (it supersedes a kept part: the standing rule)', () => {
+    const io = strip(read('modules/project/ProjectIO.ts'))
+    const apply = io.slice(io.indexOf('export async function applyProject'))
+    expect(apply).not.toContain('keptPartQuestion')
+    expect(apply).not.toMatch(/\bconfirm\(/)
+    expect(io).toMatch(/export function keptPartQuestion\(studio: 'video' \| 'audio', key: string, openingName: string\): string \| null/)
+  })
+
+  it('the importers\' catch hands describeFailedOpen the Recent hook\'s remove and main\'s folder check; the drive sentence lives in importDiagnostics', () => {
+    for (const [f, kind] of [['modules/video-studio/Importer.tsx', 'video'], ['modules/audio-studio/AudioImporter.tsx', 'audio']] as const) {
+      const code = strip(read(f))
+      expect(code, f).toContain(`describeFailedOpen(err, filePath, '${kind}', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })`)
+      expect(code, f).not.toMatch(/isNotFoundError\(/)
+    }
+    const diag = strip(readFileSync(src('shared/importDiagnostics.ts'), 'utf8'))
+    expect(diag).toContain("\"imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again.\"")
+    expect(diag).toMatch(/if \(!folderThere\) \{[\s\S]*?return DRIVE_NOT_CONNECTED_SENTENCE\s*\}\s*const removed = await recent\.remove\(filePath\)/)
+  })
+
+  it('the folder check is one IPC channel: main registers it, preload forwards it, the bridge type names it, and main answers with the shared guard and the deadline stat', () => {
+    const main = strip(readFileSync(src('main/ipc/settings.ts'), 'utf8'))
+    expect(main).toMatch(/ipcMain\.handle\('settings:folderOfFilePresent', async \(_e, filePath: unknown\): Promise<boolean> => \{\s*if \(!isSafeAbsolutePath\(filePath\)\) return false\s*return \(await folderVerdict\(path\.dirname\(filePath\)\)\) === 'folder'\s*\}\)/)
+    expect(strip(readFileSync(src('preload/index.ts'), 'utf8'))).toContain("folderOfFilePresent: (filePath: string) => ipcRenderer.invoke('settings:folderOfFilePresent', filePath)")
+    expect(strip(readFileSync(src('shared/api.ts'), 'utf8'))).toContain('folderOfFilePresent(filePath: string): Promise<boolean>')
+  })
+
+
+  it('the advisory toasts about a dropped or picked file are passed as `advise`, said after the kept question and before the run is claimed - a Cancel leaves none on screen', () => {
+    const video = strip(read('modules/video-studio/Importer.tsx'))
+    const handle = video.slice(video.indexOf('async function handleFile('), video.indexOf('function onDrop('))
+    expect(handle).toMatch(/async function handleFile\(filePath: string, advise\?: \(\) => void\): Promise<void> \{/)
+    expect(handle.indexOf('confirm(keptQuestion)'), 'advice after the question').toBeLessThan(handle.indexOf('advise?.()'))
+    expect(handle.indexOf('advise?.()'), 'and before the claim').toBeLessThan(handle.indexOf('useImportRun.getState().begin('))
+    const drop = video.slice(video.indexOf('function onDrop('), video.indexOf('async function onPickFile('))
+    expect(drop).toMatch(/const advise = isVideoFilename\(file\.name\)\s*\?\s*undefined\s*:\s*\(\): void => \{\s*toast\(`\$\{file\.name\} may not be a supported video — trying anyway`/)
+    expect(drop).toMatch(/void handleFile\(filePath, advise\)/)
+    expect(drop.indexOf('may not be a supported video'), 'no toast ahead of the call').toBeGreaterThan(drop.indexOf('const advise'))
+    expect(drop.split('may not be a supported video')).toHaveLength(2)
+    // The refusals that are not about the file being tried stay where they were.
+    expect(drop).toMatch(/if \(refuseIfBusy\(\)\) return/)
+    expect(drop).toContain('Could not read file path')
+    expect(video).toMatch(/if \(filePath\) await handleFile\(filePath\)/)
+    expect(video).toMatch(/onPick=\{\(p\) => void handleFile\(p\)\}/)
+
+    const audio = strip(read('modules/audio-studio/AudioImporter.tsx'))
+    const load = audio.slice(audio.indexOf('async function loadFile('), audio.indexOf('function onDrop('))
+    expect(load).toMatch(/async function loadFile\(filePath: string, advise\?: \(\) => void\): Promise<void> \{/)
+    expect(load.indexOf('confirm(keptQuestion)')).toBeLessThan(load.indexOf('advise?.()'))
+    expect(load.indexOf('advise?.()')).toBeLessThan(load.indexOf('useAudioImportRun.getState().begin('))
+    const adrop = audio.slice(audio.indexOf('function onDrop('), audio.indexOf('async function onPickFile('))
+    expect(adrop).toMatch(/const advise =\s*diag\.reason === 'cloud-placeholder'\s*\?\s*\(\): void => \{\s*toast\(diag\.hint \?\? 'Cloud-sync path detected\.'/)
+    expect(adrop).toMatch(/void loadFile\(filePath, advise\)/)
+    expect(adrop.split('Cloud-sync path detected').length, 'the hint is toasted only inside advise').toBe(2)
+    expect(adrop).toMatch(/if \(file && refuseIfBusy\(\)\) return/)
+    const pick = audio.slice(audio.indexOf('async function onPickFile('), audio.indexOf('return (\n    <div'))
+    expect(pick).toMatch(/if \(refuseIfBusy\(\)\) return\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)\s*\?\s*\(\): void => \{\s*toast\(\s*'Cloud-sync path\. If import fails/)
+    expect(pick.split('Cloud-sync path.').length, 'the warning is toasted only inside advise').toBe(2)
+    expect(audio).toMatch(/onPick=\{\(p\) => void loadFile\(p\)\}/)
   })
 })

@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { Clip } from '@shared/clip'
 import type { ChainSpec, ExtractedSound } from '@shared/audio'
+import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
 import type { CanvasDocument } from '@shared/canvas'
 import type { ImagiiProject } from '@shared/workspace'
 import {
@@ -23,10 +24,11 @@ import {
   audioSettled,
   sessionHoldsWork,
   describeRestoreRefused,
-  subscribeSessionStores
+  subscribeSessionStores,
+  keptPartQuestion
 } from './ProjectIO'
-import { useVideoStore } from '../video-studio/store/videoStore'
-import { useAudioStore } from '../audio-studio/state/audioStore'
+import { useVideoStore, videoKey } from '../video-studio/store/videoStore'
+import { useAudioStore, soundKey } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { useReferencesStore } from '../references/state/referencesStore'
 
@@ -2718,6 +2720,227 @@ describe('a part that could not be applied is kept for the file and given back t
       expect(useAudioStore.getState().chain).toEqual(CHAIN)
       useAudioStore.getState().clearSource()
       expect(captureProject().audioStudio).toBeUndefined()
+    })
+  })
+})
+
+/**
+ * T-175 (3) - a part kept for a file that could not be opened is not let go without a word. Every entry that opens a file into a studio asks `keptPartQuestion` with
+ * the key the give-back will compare (`videoKey` / `soundKey` of what it opens), so the question is null for the SAME file (it gets the part back) and a sentence
+ * for any other. The e2e twins drive the question in the built app (home-chrome.spec.ts, audio.spec.ts); the entries asking it are pinned in interactionWiring.test.ts.
+ */
+describe('keptPartQuestion - what is asked before a kept part is let go (T-175 (3))', () => {
+  const ORIGINAL = '/media/stream.flv'
+  const COPY_B = '/tmp/imagii-import/stream-Zx9Kp2Lm.mp4'
+  const OTHER = '/home/user/Videos/other.mp4'
+  const WAV_2 = '/tmp/imagii-audio/Zx9Kp2LmQr.wav'
+  const WIN_VIDEO = 'D:\\Captures\\night-stream.mp4'
+  const missing = (p: string): Error => new Error(`ffprobe exit 1: ${p}: No such file or directory`)
+
+  function bridge(gone: string[] = []): void {
+    const fail = (p: string): Error | null => (gone.includes(p) ? missing(p) : null)
+    vi.stubGlobal('window', {
+      api: {
+        video: {
+          probe: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(VIDEO_PROBE)),
+          fileUrl: (p: string) => pathToImagiiFileUrl(p),
+          convertForImport: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(COPY_B))
+        },
+        audio: {
+          ...PEAKS_BRIDGE,
+          probe: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(AUDIO_PROBE)),
+          extractFromVideo: (p: string) => (fail(p) ? Promise.reject(fail(p)) : Promise.resolve(sound(WAV_2, true)))
+        }
+      }
+    })
+  }
+  const videoProject = (sourcePath: string, clips: Clip[] = [CLIP_A, CLIP_B], extra: Partial<NonNullable<ImagiiProject['videoStudio']>> = {}): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    videoStudio: { sourcePath, clips, selectedClipId: clips[0]?.id ?? null, watermark: null, srtPath: null, ...extra }
+  })
+  const audioProject = (part: NonNullable<ImagiiProject['audioStudio']>): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    audioStudio: part
+  })
+  async function moveOn(): Promise<void> {
+    await useVideoStore.getState().loadSource(OTHER)
+    useVideoStore.getState().clearSource()
+    useVideoStore.getState().forgetHeldTranscripts()
+    await useAudioStore.getState().loadSource(MUSIC_PATH)
+    useAudioStore.getState().clearSource()
+  }
+  const quiet = async <T,>(run: () => Promise<T>): Promise<T> => {
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      return await run()
+    } finally {
+      spy.mockRestore()
+    }
+  }
+  beforeEach(async () => {
+    bridge()
+    await moveOn()
+  })
+  afterEach(async () => {
+    bridge()
+    await moveOn()
+  })
+
+  it('null while the studio keeps no part, for either studio', () => {
+    expect(keptPartQuestion('video', OTHER, 'other.mp4')).toBeNull()
+    expect(keptPartQuestion('audio', OTHER, 'other.mp4')).toBeNull()
+  })
+
+  it('video: a different file asks, in the ticket\'s words, with FILE NAMES (a POSIX path and a Windows path)', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(videoProject(VIDEO_PATH)))
+    expect(keptPartQuestion('video', OTHER, 'other.mp4')).toBe('Open other.mp4? The 2 clips kept for stream.mp4, which could not be opened, will be discarded.')
+    expect(keptPartQuestion('video', 'C:\\clips\\Raid.mp4', 'Raid.mp4')).toBe('Open Raid.mp4? The 2 clips kept for stream.mp4, which could not be opened, will be discarded.')
+    expect(keptPartQuestion('audio', OTHER, 'other.mp4'), 'the other studio keeps nothing').toBeNull()
+  })
+
+  it('video: a Windows-path kept file is named by its file name, never its path', async () => {
+    bridge([WIN_VIDEO])
+    await quiet(() => applyProject(videoProject(WIN_VIDEO)))
+    const question = keptPartQuestion('video', OTHER, 'other.mp4')
+    expect(question).toBe('Open other.mp4? The 2 clips kept for night-stream.mp4, which could not be opened, will be discarded.')
+    expect(question).not.toContain('Captures')
+  })
+
+  it('video: one clip is "1 clip" (countOf), not "1 clips"', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(videoProject(VIDEO_PATH, [CLIP_A])))
+    expect(keptPartQuestion('video', OTHER, 'other.mp4')).toBe('Open other.mp4? The 1 clip kept for stream.mp4, which could not be opened, will be discarded.')
+  })
+
+  it('video: the SAME key asks nothing (the give-back applies the part)', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(videoProject(VIDEO_PATH)))
+    expect(keptPartQuestion('video', VIDEO_PATH, 'stream.mp4')).toBeNull()
+  })
+
+  it('video: a part with no clips has nothing to lose, so it asks nothing', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(videoProject(VIDEO_PATH, [])))
+    expect(keptPartQuestion('video', OTHER, 'other.mp4')).toBeNull()
+  })
+
+  it('audio: a different file asks, in the ticket\'s words, with the kept file\'s NAME', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })))
+    expect(keptPartQuestion('audio', MUSIC_PATH, 'bed.mp3')).toBe('Open bed.mp3? The changes kept for stream.mp4, which could not be opened, will be discarded.')
+    expect(keptPartQuestion('video', MUSIC_PATH, 'bed.mp3'), 'the other studio keeps nothing').toBeNull()
+  })
+
+  it('audio: the SAME key asks nothing', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })))
+    expect(keptPartQuestion('audio', VIDEO_PATH, 'stream.mp4')).toBeNull()
+  })
+
+  it('audio: a kept chain at its defaults (no cuts, no second track) has nothing to lose, so it asks nothing', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: { ...DEFAULT_CHAIN_SPEC } })))
+    expect(keptPartQuestion('audio', MUSIC_PATH, 'bed.mp3')).toBeNull()
+  })
+
+  it('a part that was given back, or let go, asks nothing afterwards', async () => {
+    bridge([VIDEO_PATH])
+    await quiet(() => applyProject(videoProject(VIDEO_PATH)))
+    bridge()
+    await useVideoStore.getState().loadSource(OTHER)
+    expect(keptPartQuestion('video', MUSIC_PATH, 'bed.mp3'), 'the other file opened and the give-back dropped the part').toBeNull()
+  })
+
+  describe('the key an entry asks with is the key the give-back compares, so the same file never asks', () => {
+    it('Importer / Edit in Video Studio, a plain video: videoKey of the loaded video is the picked path, and opening it brings the clips back', async () => {
+      bridge([VIDEO_PATH])
+      await quiet(() => applyProject(videoProject(VIDEO_PATH)))
+      bridge()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      const open = useVideoStore.getState().source
+      expect(open && videoKey(open)).toBe(VIDEO_PATH)
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    })
+
+    it('Importer, a converted import: the picked path IS videoKey of the converted video, and the new working copy gets the clips', async () => {
+      bridge([ORIGINAL])
+      await quiet(() => applyProject(videoProject(ORIGINAL, [CLIP_A, CLIP_B], { convertedForImport: true })))
+      expect(keptPartQuestion('video', ORIGINAL, 'stream.flv'), 'the picked path is the key').toBeNull()
+      // ...whereas the working copy's path is NOT the key: asking with it would ask about the very file that gets the part.
+      expect(keptPartQuestion('video', COPY_B, 'stream-Zx9Kp2Lm.mp4')).not.toBeNull()
+      bridge()
+      await useVideoStore.getState().loadSource(COPY_B, ORIGINAL)
+      const open = useVideoStore.getState().source
+      expect(open && videoKey(open), 'what the importer asks with = what the give-back compared').toBe(ORIGINAL)
+      expect(useVideoStore.getState().clips).toEqual([CLIP_A, CLIP_B])
+    })
+
+    it('AudioImporter, a video\'s sound: the picked video is soundKey of the extracted sound, and it gets the chain', async () => {
+      bridge([VIDEO_PATH])
+      await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })))
+      expect(keptPartQuestion('audio', VIDEO_PATH, 'stream.mp4')).toBeNull()
+      bridge()
+      await useAudioStore.getState().loadSource(WAV_2, VIDEO_PATH, undefined, true)
+      const open = useAudioStore.getState().source
+      expect(open && soundKey(open)).toBe(VIDEO_PATH)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    })
+
+    it('AudioImporter, an AIFF / WMA extraction (not a video\'s sound): the picked file is soundKey (extractedFrom), and it gets the chain', async () => {
+      const AIFF = '/home/user/Audio/voice.aiff'
+      bridge([AIFF])
+      await quiet(() => applyProject(audioProject({ sourcePath: AIFF, extractedFromVideo: true, chain: CHAIN })))
+      expect(keptPartQuestion('audio', AIFF, 'voice.aiff')).toBeNull()
+      bridge()
+      await useAudioStore.getState().loadSource(WAV_2, AIFF, undefined, false)
+      const open = useAudioStore.getState().source
+      expect(open && soundKey(open)).toBe(AIFF)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    })
+
+    it('AudioImporter, a plain file: the picked path is soundKey, and it gets the chain', async () => {
+      bridge([AUDIO_PATH])
+      await quiet(() => applyProject(audioProject({ sourcePath: AUDIO_PATH, chain: CHAIN })))
+      expect(keptPartQuestion('audio', AUDIO_PATH, 'mic.wav')).toBeNull()
+      bridge()
+      await useAudioStore.getState().loadSource(AUDIO_PATH)
+      const open = useAudioStore.getState().source
+      expect(open && soundKey(open)).toBe(AUDIO_PATH)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    })
+
+    it('Clean audio: videoKey(source) (what the cleanAudioFlow asks with) is soundKey of the extracted sound - a plain video and a converted import both', async () => {
+      // A plain video.
+      bridge([VIDEO_PATH])
+      await quiet(() => applyProject(audioProject({ sourcePath: VIDEO_PATH, extractedFromVideo: true, chain: CHAIN })))
+      bridge()
+      await useVideoStore.getState().loadSource(VIDEO_PATH)
+      const plain = useVideoStore.getState().source
+      expect(plain).not.toBeNull()
+      const plainKey = videoKey(plain!)
+      expect(keptPartQuestion('audio', plainKey, plain!.fileName), 'the same video\'s own kept chain asks nothing').toBeNull()
+      await useAudioStore.getState().loadSource(WAV_2, plain!.filePath, plain!.convertedFrom, true)
+      expect(soundKey(useAudioStore.getState().source!)).toBe(plainKey)
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
+
+      // A converted import: the key is the ORIGINAL, not the working copy.
+      useAudioStore.getState().clearSource()
+      useVideoStore.getState().clearSource()
+      bridge([ORIGINAL])
+      await quiet(() => applyProject(audioProject({ sourcePath: ORIGINAL, extractedFromVideo: true, chain: CHAIN })))
+      bridge()
+      await useVideoStore.getState().loadSource(COPY_B, ORIGINAL)
+      const converted = useVideoStore.getState().source!
+      expect(keptPartQuestion('audio', videoKey(converted), converted.fileName)).toBeNull()
+      expect(keptPartQuestion('audio', converted.filePath, 'x'), 'the working copy\'s path is not the key').not.toBeNull()
+      await useAudioStore.getState().loadSource(WAV_2, converted.filePath, converted.convertedFrom, true)
+      expect(soundKey(useAudioStore.getState().source!)).toBe(videoKey(converted))
+      expect(useAudioStore.getState().chain).toEqual(CHAIN)
     })
   })
 })

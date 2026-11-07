@@ -532,6 +532,10 @@ export function RecordStudio(): JSX.Element {
       // Round 18 A: if begin() succeeded but start() then threw, reap the
       // just-opened session's empty temp file. abandon is idempotent.
       abandonStart()
+      // T-175 (1): the studio was left while an await was pending and that await failed (the first-picture wait runs its 10 s on a screen nobody is
+      // looking at). Everything is let go above; the sentences below are for a person still on Record, never over Home or another studio. One guard in
+      // the one catch every start failure reaches, so every await of the start - present and future - is covered (`leftWhileStarting`'s own rule).
+      if (unmountedRef.current) return
       if (err instanceof MicStartFailure) {
         // T-171 (5): the cause sentence, then the remedy a missing microphone has (the camera's failure already records screen-only).
         const { message } = userFacingError(err.original, "Couldn't start recording.")

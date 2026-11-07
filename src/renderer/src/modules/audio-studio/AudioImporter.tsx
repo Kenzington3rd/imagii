@@ -5,15 +5,10 @@ import { useAudioImportRun } from './state/audioImport'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { basename } from '../../components/OutputDirLabel'
-import { replacedSince } from '../project/ProjectIO'
+import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
-import {
-  describeImportError,
-  examineDroppedFile,
-  isNotFoundError,
-  pathLooksLikeCloudSync
-} from '@shared/importDiagnostics'
+import { describeFailedOpen, examineDroppedFile, pathLooksLikeCloudSync } from '@shared/importDiagnostics'
 import { assertDefined } from '@shared/assert'
 import { audioNeedsExtraction, formatHint, AUDIO_EXTENSIONS } from '@shared/mediaFormats'
 
@@ -46,8 +41,14 @@ export function AudioImporter(): JSX.Element {
     return true
   }
 
-  async function loadFile(filePath: string): Promise<void> {
+  /** `advise`: what the drop or the picker has to say about the file (the cloud-sync warning). Said after the kept question (a Cancel says nothing about a file that was not tried) and before the run is claimed. */
+  async function loadFile(filePath: string, advise?: () => void): Promise<void> {
     if (refuseIfBusy()) return
+    // T-175 (3): a chain kept for a sound that could not be opened (an unplugged drive) is let go when a DIFFERENT file opens here. Asked before the run is claimed or
+    // anything is said, over the file this opens (`soundKey` of the loaded sound: the picked path, whether it is played as it is or extracted); Cancel opens nothing.
+    const keptQuestion = keptPartQuestion('audio', filePath, basename(filePath))
+    if (keptQuestion !== null && !confirm(keptQuestion)) return
+    advise?.()
     const extracting = audioNeedsExtraction(filePath)
     if (!useAudioImportRun.getState().begin({ filePath, extracting })) return
     // T-137 (1): what Audio Studio held when this import began. The importer is on screen only while no sound is open, but an extraction takes
@@ -82,8 +83,9 @@ export function AudioImporter(): JSX.Element {
       console.error('[audio-import] failed', { filePath, err })
       toast.dismiss('extract')
       // T-150: a Recent entry whose file is gone would fail the same way on every pick. Dropped from its list, and the toast says so.
-      const gone = isNotFoundError(err) && (await remove(filePath))
-      toast.error(describeImportError(err, filePath, 'audio') + (gone ? ' It was removed from Recent.' : ''), { duration: 8000 })
+      // T-175 (2): but only when its folder is there - on a drive that is not connected the entry stays and the toast says why.
+      const sentence = await describeFailedOpen(err, filePath, 'audio', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })
+      toast.error(sentence, { duration: 8000 })
     } finally {
       useAudioImportRun.getState().end()
     }
@@ -115,10 +117,13 @@ export function AudioImporter(): JSX.Element {
       (file as File & { path?: string }).path,
       'dropped file path'
     )
-    if (diag.reason === 'cloud-placeholder') {
-      toast(diag.hint ?? 'Cloud-sync path detected.', { icon: <Icon name="warning" size={18} />, duration: 6000 })
-    }
-    void loadFile(filePath)
+    const advise =
+      diag.reason === 'cloud-placeholder'
+        ? (): void => {
+            toast(diag.hint ?? 'Cloud-sync path detected.', { icon: <Icon name="warning" size={18} />, duration: 6000 })
+          }
+        : undefined
+    void loadFile(filePath, advise)
   }
 
   async function onPickFile(): Promise<void> {
@@ -128,13 +133,17 @@ export function AudioImporter(): JSX.Element {
       // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
       // before the cloud-sync warning, for the reason the drop does.
       if (refuseIfBusy()) return
-      if (pathLooksLikeCloudSync(filePath)) {
-        toast(
-          'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
-          { icon: <Icon name="warning" size={18} />, duration: 6000 }
-        )
-      }
-      await loadFile(filePath)
+      await loadFile(
+        filePath,
+        pathLooksLikeCloudSync(filePath)
+          ? (): void => {
+              toast(
+                'Cloud-sync path. If import fails, right-click in Explorer → "Always keep on this device".',
+                { icon: <Icon name="warning" size={18} />, duration: 6000 }
+              )
+            }
+          : undefined
+      )
     })
   }
 

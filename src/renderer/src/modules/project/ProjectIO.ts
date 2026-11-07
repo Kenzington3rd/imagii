@@ -9,6 +9,8 @@ import { useAudioStore, soundKey, waveformArrived, type AudioSource } from '../a
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { useReferencesStore } from '../references/state/referencesStore'
 import { basename } from '../../components/OutputDirLabel'
+import { audioCloseMessage } from '../audio-studio/audioClose'
+import { countOf } from '@shared/plural'
 
 /**
  * T-47 — the route the user is on, read off the HashRouter's own hash so a
@@ -445,6 +447,25 @@ function giveBackAudio(): void {
   if (!kept || !open) return
   delete keptParts.audio
   if (soundKey(open) === kept.key) useAudioStore.setState({ chain: kept.chain })
+}
+
+/**
+ * T-175 (3): the question every entry that opens a file into a studio asks BEFORE it claims its run, or null when nothing would be lost. A part kept for a file that
+ * could not be opened (an unplugged drive) is dropped by the give-back when a DIFFERENT file opens in its studio - the loss T-174 (4) set out to prevent, with no
+ * word, while every other way of discarding clip or chain work asks first. `key` is what the give-back compares (`videoKey` / `soundKey` of the file being opened),
+ * so the same file never asks: it gets the part back. `openingName` is the file name of what is being opened. A part with nothing in it to lose is not asked about:
+ * no clips (the caption path alone), or a chain at its defaults with no cuts and no second track (`audioCloseMessage` is null for exactly that).
+ */
+export function keptPartQuestion(studio: 'video' | 'audio', key: string, openingName: string): string | null {
+  const lead = `Open ${openingName}?`
+  if (studio === 'video') {
+    const kept = keptParts.video
+    if (!kept || kept.key === key || kept.clips.length === 0) return null
+    return `${lead} The ${countOf(kept.clips.length, 'clip')} kept for ${basename(kept.key)}, which could not be opened, will be discarded.`
+  }
+  const kept = keptParts.audio
+  if (!kept || kept.key === key || audioCloseMessage(kept.chain) === null) return null
+  return `${lead} The changes kept for ${basename(kept.key)}, which could not be opened, will be discarded.`
 }
 
 // Installed once, with the module: the stores are singletons and a kept part can be waiting from the first apply.

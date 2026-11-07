@@ -4199,6 +4199,8 @@ test.describe('T-174 Track B (4): a Restore whose video was gone keeps its clips
     test.setTimeout(240_000)
     const { app, window, root, userDataDir, missing } = await restoreWithMissingVideo('t174-other')
     try {
+      // T-175 (3): opening a different video now asks first (the round 124 Track B describe pins the question); this control is about what happens when it is accepted.
+      window.on('dialog', (dialog) => void dialog.accept())
       const other = path.join(root, 'source', 'some-other-video.mp4')
       await makeFixtureMp4(other)
       await openInVideoStudio(window, other)
@@ -4216,6 +4218,224 @@ test.describe('T-174 Track B (4): a Restore whose video was gone keeps its clips
       await expect
         .poll(() => readAutosaved(userDataDir)?.videoStudio?.clips?.map((c) => c.name), { timeout: 40_000, intervals: [500] })
         .toEqual(['Clip 1'])
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── round 124 Track B (T-175 item 2): a Recent entry on a drive that is not connected is not erased ───────────────────────────────────────────────────────────────────────
+//
+// T-150 dropped a Recent path whenever opening it failed with the not-found sentence, and an unplugged capture drive fails exactly as a deleted file does: last night's VOD left
+// Recent while its drive was merely out. Main now answers whether the file's FOLDER is there (`settings.folderOfFilePresent`); the importer drops the entry only when it is. The
+// entry on the missing drive stays and the toast is the drive sentence. The T-150 describe above is the control for a file that is gone from a folder that is there; this one drives
+// both in one session so the pair discriminates. The audio importer's twin is audio.spec.ts "round 124 Track B".
+test.describe('round 124 Track B (T-175 (2)): Recent on a drive that is not connected', () => {
+  test('Video Studio: the entry whose FOLDER is missing stays in the menu and in the settings file, and says the drive sentence; the one whose folder is there and file is gone is still removed', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t175-recent-drive')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'still-here.mp4')
+    await makeFixtureMp4(clip)
+    // The unplugged drive: its folder has never existed here. The deleted file: its folder is there.
+    const onTheDrive = path.join(root, 'unplugged-drive', 'Captures', 'last-night-vod.mp4')
+    const deleted = path.join(sourceDir, 'deleted-clip.mp4')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN, recentFiles: { video: [onTheDrive, deleted, clip] } })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+
+      await window.getByRole('button', { name: 'Recent (3)' }).click()
+      await window.getByRole('button', { name: /last-night-vod\.mp4/ }).click()
+      const drive = "imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again."
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(drive)
+      expect((await readToastLog(window)).join(' | '), 'the entry was not removed, so nothing claims it was').not.toContain('removed from Recent')
+      // Still in the menu, and still on disk.
+      await expect(window.getByRole('button', { name: 'Recent (3)' })).toBeVisible()
+      await window.getByRole('button', { name: 'Recent (3)' }).click()
+      await expect(window.getByRole('button', { name: /last-night-vod\.mp4/ }), 'the unplugged drive\'s entry is still listed').toBeVisible()
+      expect(readConfig(userDataDir).recentFiles?.video).toEqual([onTheDrive, deleted, clip])
+
+      // Control (T-150): a file gone from a folder that IS there is still dropped, with its sentence.
+      await window.getByRole('button', { name: /deleted-clip\.mp4/ }).click()
+      const moved = "imagii can't find that file. It may have been moved or deleted — pick it again with Choose file…. It was removed from Recent."
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(moved)
+      await expect.poll(() => readConfig(userDataDir).recentFiles?.video, { timeout: 15_000, intervals: [200] }).toEqual([onTheDrive, clip])
+      await expect(window.getByRole('button', { name: 'Recent (2)' })).toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === drive)).toHaveLength(1)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})
+
+// ── round 124 Track B (T-175 item 3): a kept part is not let go without a word ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// T-174 (4) keeps the clips of a video that could not be opened (an unplugged drive) and gives them back when the same video opens. A DIFFERENT video opening dropped them with
+// no question, and the next autosave replaced the only copy. Every entry that opens a file asks `keptPartQuestion` first: here the Importer's drop (Choose file and Recent reach the
+// same function, pinned in interactionWiring.test.ts). Cancel opens nothing and the part stays; the same video opens with its clips and no question; accepting opens the other
+// video and lets the clips go.
+test.describe('round 124 Track B (T-175 (3)): opening a different video asks before the kept clips are let go', () => {
+  const FIRST = { id: 'k1', name: 'First half', startSec: 0, endSec: 1, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }
+  const SECOND = { id: 'k2', name: 'Second half', startSec: 1, endSec: 2, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] }
+  const QUESTION = 'Open some-other-video.mp4? The 2 clips kept for stream-on-the-drive.mp4, which could not be opened, will be discarded.'
+
+  interface Autosaved {
+    videoStudio?: { sourcePath?: string; clips?: Array<{ name: string }> }
+  }
+  function readAutosavedVideo(userDataDir: string): Autosaved['videoStudio'] | null | undefined {
+    try {
+      return (JSON.parse(readFileSync(autosaveFile(userDataDir), 'utf8')) as Autosaved).videoStudio
+    } catch {
+      return null
+    }
+  }
+  const clipButton = (window: Page, name: string): ReturnType<Page['getByRole']> => window.getByRole('button', { name: new RegExp(`^Select clip ${name},`) })
+
+  /** The T-174 Track B fixture: an autosave whose video is not there, restored (the rest opens), and a handler for the native question that records it and answers `action`. */
+  async function restoreWithMissingVideo(label: string): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; missing: string; other: string; asked: string[]; answer: { action: 'accept' | 'dismiss' } }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const missing = path.join(root, 'source', 'stream-on-the-drive.mp4')
+    const other = path.join(root, 'source', 'some-other-video.mp4')
+    mkdirSync(path.dirname(missing), { recursive: true })
+    await makeFixtureMp4(other)
+    seedAutosave(userDataDir, {
+      ...canvasProject('Kept rect'),
+      videoStudio: { sourcePath: missing, clips: [FIRST, SECOND], selectedClipId: 'k2', watermark: null, srtPath: null }
+    })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    // Installed before any click that could raise a native question: Playwright dismisses an unhandled one, which would look the same as "not asked".
+    const asked: string[] = []
+    const answer: { action: 'accept' | 'dismiss' } = { action: 'dismiss' }
+    window.on('dialog', (dialog) => {
+      asked.push(dialog.message())
+      void (answer.action === 'accept' ? dialog.accept() : dialog.dismiss())
+    })
+    await waitForHome(window)
+    await installToastLog(window)
+    await expect(window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+    await window.getByRole('button', { name: 'Restore' }).click()
+    await expect
+      .poll(() => readToastLog(window), { timeout: 20_000, intervals: [200] })
+      .toContain("Couldn't find stream-on-the-drive.mp4. It may have been moved or deleted. The rest of your project is open — load the video again in Video Studio.")
+    return { app, window, root, userDataDir, missing, other, asked, answer }
+  }
+  async function toVideoStudio(window: Page): Promise<void> {
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 20_000 })
+  }
+  const dropVideo = (window: Page, file: string): Promise<void> => dropOnZone(window, '[data-tutorial="video-import"] .card', file, path.basename(file))
+  const openedAs = (window: Page, file: string): ReturnType<Page['locator']> => window.locator('header').getByText(path.basename(file), { exact: true })
+
+  test('Cancel: the question is the ticket\'s words, nothing opens, no toast, and the clips are still kept - Save project writes them, and the same video put back opens with them and asks nothing', async () => {
+    test.setTimeout(300_000)
+    const { app, window, root, missing, other, asked } = await restoreWithMissingVideo('t175-cancel')
+    try {
+      await toVideoStudio(window)
+      await dropVideo(window, other)
+      await expect.poll(() => asked, { timeout: 15_000, intervals: [100] }).toEqual([QUESTION])
+      // Nothing opened and nothing was said: the importer is idle and empty, with no run claimed and no "loaded".
+      await window.waitForTimeout(1500)
+      await expect(window.getByText('Drop a video here')).toBeVisible()
+      await expect(window.locator('video')).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Choose file…' }), 'no import run was claimed').toBeEnabled()
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/Video loaded|Converting|Still loading/)
+      expect(asked, 'asked once').toHaveLength(1)
+
+      // The part is still kept: what Save project writes (the same capture the autosave writes) holds the clips for the missing video.
+      const saved = path.join(root, 'saved-after-cancel.imagii.json')
+      await app.evaluate(({ dialog }, picked) => {
+        ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async () => ({ canceled: false, filePath: picked })
+      }, saved)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(saved), { timeout: 15_000 }).toBe(true)
+      expect((JSON.parse(readFileSync(saved, 'utf8')) as Autosaved).videoStudio).toMatchObject({ sourcePath: missing, clips: [{ name: 'First half' }, { name: 'Second half' }] })
+
+      // The drive comes back; the same video asks nothing and has its clips.
+      await makeFixtureMp4(missing)
+      await toVideoStudio(window)
+      await dropVideo(window, missing)
+      await expect(openedAs(window, missing)).toBeVisible({ timeout: 60_000 })
+      await expect(clipButton(window, 'First half')).toBeVisible({ timeout: 15_000 })
+      await expect(clipButton(window, 'Second half')).toBeVisible()
+      expect(asked, 'the same file asks nothing').toHaveLength(1)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('Accept: the other video opens, and the next autosave holds it - then, closed, holds no video at all (the kept clips are not written back)', async () => {
+    test.setTimeout(300_000)
+    const { app, window, root, userDataDir, missing, other, asked, answer } = await restoreWithMissingVideo('t175-accept')
+    try {
+      answer.action = 'accept'
+      await toVideoStudio(window)
+      await dropVideo(window, other)
+      await expect(openedAs(window, other)).toBeVisible({ timeout: 60_000 })
+      expect(asked).toEqual([QUESTION])
+      await expect(clipButton(window, 'Clip 1')).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('button', { name: /^Select clip First half,/ })).toHaveCount(0)
+      await expect.poll(() => readAutosavedVideo(userDataDir), { timeout: 40_000, intervals: [500] }).toMatchObject({ sourcePath: other, clips: [{ name: 'Clip 1' }] })
+
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      // The next autosave no longer carries the kept part: with no video open there is no video part (it used to write the kept clips back).
+      await expect.poll(() => readAutosavedVideo(userDataDir), { timeout: 40_000, intervals: [500] }).toBeUndefined()
+
+      // And the missing video, put back, is a fresh one-clip video that asks nothing.
+      await makeFixtureMp4(missing)
+      await dropVideo(window, missing)
+      await expect(openedAs(window, missing)).toBeVisible({ timeout: 60_000 })
+      await expect(clipButton(window, 'Clip 1')).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('button', { name: /^Select clip First half,/ })).toHaveCount(0)
+      expect(asked, 'only the one question').toHaveLength(1)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+
+  // The drop's advisory ("may not be a supported video - trying anyway") is about a file that is about to be tried: said AFTER the kept question, and not at all when it is cancelled.
+  test('a drop of a file that is not named like a video: Cancel says nothing about it and opens nothing; Accept asks first, THEN the advisory, then tries the file as before', async () => {
+    test.setTimeout(300_000)
+    const { app, window, root, asked, answer } = await restoreWithMissingVideo('t175-advice')
+    try {
+      const notes = path.join(root, 'source', 'notes-not-a-video.txt')
+      writeFileSync(notes, 'this is not a video', 'utf8')
+      const question = 'Open notes-not-a-video.txt? The 2 clips kept for stream-on-the-drive.mp4, which could not be opened, will be discarded.'
+      const advice = 'notes-not-a-video.txt may not be a supported video — trying anyway'
+      await toVideoStudio(window)
+
+      const before = (await readToastLog(window)).length
+      await dropVideo(window, notes)
+      await expect.poll(() => asked, { timeout: 15_000, intervals: [100] }).toEqual([question])
+      await window.waitForTimeout(1500)
+      expect((await readToastLog(window)).slice(before), 'a Cancel leaves no advisory about a file that was not tried').toEqual([])
+      await expect(window.getByText('Drop a video here')).toBeVisible()
+      await expect(window.locator('video')).toHaveCount(0)
+
+      answer.action = 'accept'
+      await dropVideo(window, notes)
+      await expect.poll(() => asked, { timeout: 15_000, intervals: [100] }).toEqual([question, question])
+      await expect.poll(async () => (await readToastLog(window)).slice(before).includes(advice), { timeout: 15_000, intervals: [100] }).toBe(true)
+      // ...and then the file is tried: the failure sentence comes after the advisory.
+      await expect.poll(async () => (await readToastLog(window)).slice(before).length, { timeout: 30_000, intervals: [200] }).toBeGreaterThanOrEqual(2)
+      const log = (await readToastLog(window)).slice(before)
+      expect(log[0]).toBe(advice)
     } finally {
       await app.close().catch(() => undefined)
       cleanup(root)

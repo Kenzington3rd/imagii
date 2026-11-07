@@ -6066,3 +6066,196 @@ test.describe('T-174 Track B (4): a sound whose video was gone', () => {
     }
   })
 })
+
+// ── round 124 Track B (T-175 items 2 and 3): the audio importer's twins ────────────────────────────────────────────────────────────────────────────────────────────────────
+//
+// (2) A Recent entry whose FOLDER is not there (an unplugged drive) stays, with the drive sentence; one whose file is gone from a folder that is there is still dropped (T-150).
+// (3) A chain kept for a video that could not be opened (T-174 (4)) is not let go when a DIFFERENT file opens in Audio Studio without a question: Cancel opens nothing and the
+// chain stays; the same video put back opens with it and asks nothing; accepting opens the other file and lets the chain go. The video Importer's twins are home-chrome.spec.ts.
+test.describe('round 124 Track B (T-175): the audio importer', () => {
+  const DRIVE = "imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again."
+  const MOVED = "imagii can't find that file. It may have been moved or deleted — pick it again with Choose file…. It was removed from Recent."
+  const recentAudio = (userDataDir: string): unknown => {
+    try {
+      return (JSON.parse(readFileSync(path.join(userDataDir, 'config.json'), 'utf8')) as { recentFiles?: { audio?: string[] } }).recentFiles?.audio
+    } catch {
+      return undefined
+    }
+  }
+
+  test('Recent: the entry whose folder is missing stays (menu and settings file) and says the drive sentence; the one whose file is gone from a folder that is there is removed', async () => {
+    test.setTimeout(180_000)
+    const seedRoot = path.join(os.tmpdir(), `imagii-e2e-audio-t175-seed-${Date.now().toString(36)}`)
+    const onTheDrive = path.join(seedRoot, 'unplugged-drive', 'Captures', 'last-night-mic.wav')
+    const deleted = path.join(seedRoot, 'source', 'deleted-take.wav')
+    mkdirSync(path.dirname(deleted), { recursive: true })
+    const studio = await openStudio('t175-recent', { recentFiles: { audio: [onTheDrive, deleted] } })
+    try {
+      const { window, userDataDir } = studio
+      await window.getByRole('button', { name: 'Recent (2)' }).click()
+      await window.getByRole('button', { name: /last-night-mic\.wav/ }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(DRIVE)
+      expect((await readToastLog(window)).join(' | ')).not.toContain('removed from Recent')
+      await expect(window.getByRole('button', { name: 'Recent (2)' })).toBeVisible()
+      expect(recentAudio(userDataDir)).toEqual([onTheDrive, deleted])
+
+      await window.getByRole('button', { name: 'Recent (2)' }).click()
+      await window.getByRole('button', { name: /deleted-take\.wav/ }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(MOVED)
+      await expect.poll(() => recentAudio(userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([onTheDrive])
+      await expect(window.getByRole('button', { name: 'Recent (1)' })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+      try {
+        rmSync(seedRoot, { recursive: true, force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  })
+
+  const GONE =
+    "Couldn't find e2e-clip.mp4. It may have been moved or deleted. " +
+    'The rest of your project is open — load the audio again in Audio Studio.'
+  const QUESTION = 'Open e2e-tone.wav? The changes kept for e2e-clip.mp4, which could not be opened, will be discarded.'
+
+  /** A project naming the sound of `video` with Hum removal and Remove low rumble on, opened from Home while the video is not there. */
+  async function openProjectWithMissingVideo(studio: Studio, video: string): Promise<void> {
+    const { app, window } = studio
+    const projectFile = path.join(studio.root, 'gone.imagii.json')
+    writeFileSync(
+      projectFile,
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        audioStudio: { sourcePath: video, extractedFromVideo: true, chain: { ...DEFAULT_CHAIN_SPEC, hum60: true, rumbleHighpass: true } }
+      }),
+      'utf8'
+    )
+    await stubOpenDialog(app, projectFile)
+    await window.getByRole('link', { name: 'Home' }).click()
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(GONE)
+  }
+
+  test('Cancel: the question is the ticket\'s words, nothing opens, the chain is still kept (Save project writes it), and the same video put back opens with it and asks nothing', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t175-cancel')
+    try {
+      const { app, window, dialogs } = studio
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await openProjectWithMissingVideo(studio, video)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+
+      dialogs.action = 'dismiss'
+      const toastsBefore = (await readToastLog(window)).length
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect.poll(() => dialogs.messages, { timeout: 15_000, intervals: [100] }).toEqual([QUESTION])
+      await window.waitForTimeout(1500)
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await expect(window.locator(WAVEFORM)).toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Choose file…' }), 'no import run was claimed').toBeEnabled()
+      expect((await readToastLog(window)).slice(toastsBefore).join(' | '), 'nothing was said after the drop').toBe('')
+
+      // The chain is still kept: what Save project writes (the same capture the autosave writes) holds it for the missing video.
+      const saved = path.join(studio.root, 'saved-after-cancel.imagii.json')
+      await stubSaveDialog(app, saved)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(saved), { timeout: 15_000 }).toBe(true)
+      expect(JSON.parse(readFileSync(saved, 'utf8')).audioStudio).toMatchObject({ sourcePath: video, extractedFromVideo: true, chain: { hum60: true, rumbleHighpass: true } })
+
+      // The video comes back: the same file asks nothing and has the chain.
+      await makeFixtureMp4(video)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).toBeChecked()
+      await expect(window.locator(CLEANUP).getByLabel('Remove low rumble (below 80 Hz)')).toBeChecked()
+      expect(dialogs.messages, 'the same file asks nothing').toEqual([QUESTION])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Accept: the other file opens with the default chain, Save project no longer writes the kept chain, and the video put back opens with the default chain', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t175-accept')
+    try {
+      const { app, window, dialogs } = studio
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await openProjectWithMissingVideo(studio, video)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+
+      dialogs.action = 'accept'
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      expect(dialogs.messages).toEqual([QUESTION])
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      // Nothing is kept any more: no sound is open and the capture holds no audio part (Save project says there is nothing to save, or writes none).
+      const saved = path.join(studio.root, 'saved-after-accept.imagii.json')
+      await stubSaveDialog(app, saved)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await window.waitForTimeout(1500)
+      expect(existsSync(saved) ? JSON.parse(readFileSync(saved, 'utf8')).audioStudio : undefined, 'the kept chain was let go').toBeUndefined()
+
+      await makeFixtureMp4(video)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+      expect(dialogs.messages, 'only the one question').toEqual([QUESTION])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // The cloud-sync advisories (the drop's hint, the picker's warning) are about a file that is about to be tried: said AFTER the kept question, and not at all when it is cancelled.
+  for (const via of ['drop', 'Choose file'] as const) {
+    test(`${via} of a file in a cloud-sync folder with a kept chain waiting: Cancel says nothing about it; Accept asks first, THEN the warning, then loads`, async () => {
+      test.setTimeout(300_000)
+      const studio = await openStudio(`t175-cloud-${via === 'drop' ? 'drop' : 'pick'}`)
+      try {
+        const { app, window, dialogs } = studio
+        const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+        await openProjectWithMissingVideo(studio, video)
+        await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+        await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+        const synced = path.join(studio.root, 'source', 'OneDrive', 'e2e-tone.wav')
+        mkdirSync(path.dirname(synced), { recursive: true })
+        copyFileSync(studio.fixture, synced)
+        const open = async (): Promise<void> => {
+          if (via === 'drop') await dropOnImporter(window, synced, 'e2e-tone.wav')
+          else {
+            await stubOpenDialog(app, synced)
+            await window.getByRole('button', { name: 'Choose file…' }).click()
+          }
+        }
+        const before = (await readToastLog(window)).length
+
+        dialogs.action = 'dismiss'
+        await open()
+        await expect.poll(() => dialogs.messages, { timeout: 15_000, intervals: [100] }).toEqual([QUESTION])
+        await window.waitForTimeout(1500)
+        expect((await readToastLog(window)).slice(before), 'a Cancel leaves no cloud-sync advisory about a file that was not tried').toEqual([])
+        await expect(window.locator(WAVEFORM)).toHaveCount(0)
+
+        dialogs.action = 'accept'
+        await open()
+        await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+        expect(dialogs.messages).toEqual([QUESTION, QUESTION])
+        const log = (await readToastLog(window)).slice(before)
+        expect(log[0], 'the advisory comes first after the accepted question').toMatch(via === 'drop' ? /cloud-sync folder/ : /^Cloud-sync path\. If import fails/)
+      } finally {
+        await closeStudio(studio)
+      }
+    })
+  }
+})

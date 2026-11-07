@@ -101,6 +101,38 @@ export function isNotFoundError(err: unknown): boolean {
   return isNotFoundText(openErrorText(err))
 }
 
+/** T-175 (2): the sentence for a not-found file whose FOLDER is not there either - the not-found sentence's drive form (the words `outputFolderRefusal` uses). */
+export const DRIVE_NOT_CONNECTED_SENTENCE =
+  "imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again."
+
+/** What an importer's catch needs from the Recent list and from main: whether the file's folder is there, and dropping a path from the list (true when it was in it). */
+export interface RecentPrune {
+  folderPresent: (filePath: string) => Promise<boolean>
+  remove: (filePath: string) => Promise<boolean>
+}
+
+/**
+ * T-175 (2): the sentence an importer toasts when a file will not open, and the Recent entry's fate. T-150 dropped a Recent path whenever opening it failed with the
+ * not-found sentence, and an unplugged capture drive fails exactly as a deleted file does (ENOENT): last night's VOD left Recent while its drive was merely out. So
+ * the entry is dropped only when the file's FOLDER is there (the file itself is gone); a folder that is not there - or a check that cannot say - keeps the entry and
+ * says the drive sentence. Any other failure is `describeImportError`, untouched, and asks nothing.
+ */
+export async function describeFailedOpen(err: unknown, filePath: string, kind: ImportKind, recent: RecentPrune): Promise<string> {
+  if (!isNotFoundError(err)) return describeImportError(err, filePath, kind)
+  let folderThere = false
+  try {
+    folderThere = await recent.folderPresent(filePath)
+  } catch {
+    // A refused check is "not there": the entry stays.
+  }
+  if (!folderThere) {
+    console.error('[imagii] could not open', filePath, err)
+    return DRIVE_NOT_CONNECTED_SENTENCE
+  }
+  const removed = await recent.remove(filePath)
+  return describeImportError(err, filePath, kind) + (removed ? ' It was removed from Recent.' : '')
+}
+
 /**
  * Turn a thrown error from probe / loadSource / extraction into what the user
  * should read when a file will not open.

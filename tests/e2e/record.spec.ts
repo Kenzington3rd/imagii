@@ -5124,3 +5124,141 @@ test.describe('round 123 Track A - Start waits for the device scan, and a silent
     }
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// round 124 Track A (T-175 item 1): leaving Record while a start waits for a silent screen says nothing on the screen the person went to.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('round 124 Track A - leaving Record during the first-picture wait raises no toast on the next screen', () => {
+  const SCREEN_SENTENCE = 'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+
+  /**
+   * Stubs `getUserMedia`: the screen (told apart by its `mandatory` desktop constraint) is `canvas.captureStream(0)` (opens, live track, never a
+   * frame); the MICROPHONE of a take is an oscillator's stream. Every stream handed out is kept in `__held`, so a test can ask which tracks are
+   * still live. The probes go to what was installed before.
+   *
+   * The screen's `play()` is made to NEVER settle by itself (it models the premise of the finding: a stopped track fires no `ended` and the element
+   * has no picture, so the first-picture wait runs its whole 10 s limit). That has to be stubbed: this Chromium settles a `play()` whose tracks were
+   * all stopped at once (measured: resolved 59 ms after the leave), so with an unstubbed frameless canvas the wait ends quietly on a leave and the
+   * finding cannot be seen here. What is pinned is therefore the guard (a start that fails after the studio was left says nothing), not a platform fact.
+   */
+  async function stubFramelessScreen(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __held: MediaStream[] }
+      w.__held = []
+      const play = HTMLMediaElement.prototype.play
+      HTMLMediaElement.prototype.play = function (this: HTMLMediaElement): Promise<void> {
+        if (this.srcObject && w.__held.includes(this.srcObject as MediaStream)) return new Promise<void>(() => undefined)
+        return play.call(this)
+      }
+      const md = navigator.mediaDevices
+      const previous = md.getUserMedia.bind(md)
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        const v = c?.video
+        if (v && typeof v === 'object' && 'mandatory' in v) {
+          const canvas = document.createElement('canvas')
+          canvas.width = 320
+          canvas.height = 240
+          canvas.getContext('2d')
+          const s = canvas.captureStream(0)
+          w.__held.push(s)
+          return s
+        }
+        if (c && typeof c.audio === 'object' && !c.video) {
+          const ctx = new AudioContext()
+          const dest = ctx.createMediaStreamDestination()
+          const osc = ctx.createOscillator()
+          osc.connect(dest)
+          osc.start()
+          w.__held.push(dest.stream)
+          return dest.stream
+        }
+        return previous(c)
+      }
+    })
+  }
+  const liveTracks = (window: Page): Promise<number> =>
+    window.evaluate(
+      () => (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getTracks()).filter((t) => t.readyState === 'live').length
+    )
+  const heldTracks = (window: Page): Promise<number> =>
+    window.evaluate(() => (window as unknown as { __held: MediaStream[] }).__held.flatMap((s) => s.getTracks()).length)
+
+  /** Opens Record from Home with the frameless screen stubbed (webcam off, the microphone on by default) and a source picked, the toast log installed. */
+  async function openRecordPicked(app: ElectronApplication): Promise<Page> {
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, null)
+    await waitForHome(window)
+    await stubFramelessScreen(window)
+    await window.getByRole('link', { name: /Record/ }).first().click()
+    await expect(window.locator('h1', { hasText: 'Record' })).toBeVisible({ timeout: 15_000 })
+    await installToastLog(window)
+    await expect(window.getByRole('checkbox').nth(0), 'the microphone is checked by default').toBeChecked()
+    await expect(window.getByRole('checkbox').nth(1), 'the webcam is off').not.toBeChecked()
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    return window
+  }
+
+  test('item 1: Start, then Home during the wait for a silent screen - past the limit no toast is shown over Home, every track is ended and no take is opened', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r124a-left-silent')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecordPicked(app)
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: /Starting…/ })).toBeDisabled({ timeout: 10_000 })
+      // The wait is on: the screen and the microphone are open (the start reached the first-picture check).
+      await expect.poll(() => heldTracks(window), { timeout: 10_000, intervals: [100], message: 'the start never reached the screen and the microphone' }).toBe(2)
+
+      await window.getByRole('link', { name: 'Home' }).click() // not intercepted while the phase is not 'recording'
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      // The leave stopped the tracks (their `ended` does not fire for a stop()), and the wait still has its whole limit to run.
+      await expect.poll(() => liveTracks(window), { timeout: 10_000, intervals: [200], message: 'a track stayed live after the leave' }).toBe(0)
+
+      // Past the 10 s limit (plus a margin): the wait has rejected by now. Nothing may be said over Home about a screen nobody is looking at.
+      await window.waitForTimeout(13_000)
+      const toasts = await readToastLog(window)
+      expect(toasts.join(' | '), 'the screen sentence was shown over Home').not.toContain('sent no picture')
+      expect(toasts, 'no toast at all for a start nobody is waiting on').toEqual([])
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      expect(await liveTracks(window)).toBe(0)
+      expect(existsSync(recordingsDir(userDataDir)), 'recording:begin was asked for a take nobody will see').toBe(false)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: staying on Record, the same start still says the screen sentence, Start is back and every track is ended (T-174)', async () => {
+    test.setTimeout(150_000)
+    const root = makeRoot('r124a-stay-silent')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await openRecordPicked(app)
+      await window.getByRole('button', { name: /Start recording/ }).click()
+      await expect(window.getByRole('button', { name: /Starting…/ })).toBeDisabled({ timeout: 10_000 })
+      await expect
+        .poll(async () => (await readToastLog(window)).includes(SCREEN_SENTENCE), {
+          timeout: 40_000,
+          intervals: [250],
+          message: 'a person still on Record was told nothing about the silent screen'
+        })
+        .toBe(true)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeEnabled({ timeout: 15_000 })
+      await expect(window.getByRole('button', { name: 'Stop' })).toHaveCount(0)
+      await expect.poll(() => liveTracks(window), { timeout: 10_000, intervals: [200], message: 'a track stayed live after the failed start' }).toBe(0)
+      expect(existsSync(recordingsDir(userDataDir))).toBe(false)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

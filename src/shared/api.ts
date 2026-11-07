@@ -80,6 +80,8 @@ export interface ImagiiApi {
   settings: {
     get<T = unknown>(key: SettingsKey): Promise<T | undefined>
     set<T = unknown>(key: SettingsKey, value: T): Promise<void>
+    /** T-175 (2): is the folder this file would be in there (a local stat; false for a missing folder, an unplugged drive, a path that is not absolute)? */
+    folderOfFilePresent(filePath: string): Promise<boolean>
   }
   app: {
     getVersion(): Promise<string>

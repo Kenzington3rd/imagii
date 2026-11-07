@@ -8927,7 +8927,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open.
+- **Status:** done (round 124 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9503,6 +9503,57 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 124 — T-175, all three counted items, landed in the commit that
+carries this entry. Two Sonnet workers in fresh clones of a97bfad,
+disjoint source files, merged by the expediter. Track A: Record's
+start, when it fails after the studio was left, lets everything go and
+says nothing (one `unmountedRef` guard in the one catch every start
+failure reaches, after `abandonStart()`), so no "sent no picture" over
+Home or another studio — measured by the worker: in this Chromium the
+leave's `track.stop()` settles the hidden element's `play()` about 59
+ms later, so the first-picture wait already ended quietly and the
+reported toast did not reproduce; the guard is kept as the catch-all
+for a start await that rejects after a leave (the e2e stubs the
+never-settling `play()` the finding assumed; a real Windows capture is
+a release hand-check; ticket item 1 corrected in 699b597). Track B: a
+Recent pick that fails because the file is not found drops the entry
+only when the file's folder is there (`settings:folderOfFilePresent`,
+main: the shared absolute-path guard and `folderVerdict` with its
+deadline); on a drive that is not connected the entry stays and the
+toast says "imagii can't find that file. If it is on a drive that
+isn't connected, plug the drive in and try again."; a part kept for a
+file that could not be opened is asked about before a different file
+opens in its studio (`keptPartQuestion`, asked by both importers, Edit
+in Video Studio and Clean audio before any run is claimed; Cancel
+opens nothing and keeps the part; the same file asks nothing and gets
+it back), and the drop's and the audio picker's advisory toasts are
+said after that question (`advise`), so a Cancel leaves no "trying
+anyway" on screen (the first hand-back's own found-not-fixed, sent
+back and fixed). Deviations, accepted: A widened two existing wiring
+regexes and moved one IC cite; B returns null for a kept part with no
+clips and a chain at its defaults, put the importers' failure logic in
+a shared `describeFailedOpen`, updated in-place pins, cites and one
+existing e2e (a dialog-accept handler), and wiring-pinned (not
+e2e-driven) Edit in Video Studio and Clean audio. Ledgers: A 2 reds +
+10 mutation rows (the guard moved above `abandonStart()` survives the
+e2e — the unmount cleanup has already stopped every stream — killed by
+the wiring pin, disclosed); B 14 reds + 56 mutation rows (two
+`advise`-after-`begin` survivors at e2e, killed by the wiring pin,
+disclosed), all others killed. Expedited personally: one independent
+mutation per track at a seam no ledger row names — A: the guard only
+in the `reportFailure` branch (a microphone failure after a leave
+still toasts) → three wiring pins red (no e2e drives a microphone
+failure after a leave; disclosed); B: `describeFailedOpen` claiming
+"It was removed from Recent." when `remove()` removed nothing → the
+importDiagnostics unit red — each restored byte-identical, sha256
+verified; on the MERGED tree (a 3-way EOF merge of
+interactionWiring.test.ts dropped a closing brace on the first merged
+verify; rebuilt from Track B's file plus Track A's edits and block,
+every line of both present): verify x2 (210 files, 6718 tests, both
+runs), test:media 515 passed, 17 skipped of 532 on 7.0.2, FULL
+Playwright 808 passed, 54.9 min. Applied to 699b597 by `git apply`
+with every file byte-identical to the expedited merge.
 
 Round 123 — T-174, all five counted items, landed in the commit that
 carries this entry. Two Sonnet workers in fresh clones of 3a2e318,

@@ -211,7 +211,8 @@ describe('every site the ticket named routes through the helper', () => {
 
   it('the importers pass their kind, so an mp3 never reads video wording', () => {
     const audio = FILES.find((x) => x.rel === 'modules/audio-studio/AudioImporter.tsx')
-    expect(audio?.text).toMatch(/describeImportError\(err, filePath, 'audio'\)/)
+    // T-175 (2): the catch goes through `describeFailedOpen`, which passes the kind on to `describeImportError` for every failure that is not a not-found one.
+    expect(audio?.text).toMatch(/describeFailedOpen\(err, filePath, 'audio'/)
   })
 })
 

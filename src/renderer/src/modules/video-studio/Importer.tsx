@@ -5,10 +5,10 @@ import { useImportRun } from './store/runs'
 import { RecentFilesMenu } from '../../components/RecentFilesMenu'
 import { Icon } from '../../components/Icon'
 import { basename } from '../../components/OutputDirLabel'
-import { replacedSince } from '../project/ProjectIO'
+import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
-import { describeImportError, isNotFoundError } from '@shared/importDiagnostics'
+import { describeFailedOpen } from '@shared/importDiagnostics'
 import {
   VIDEO_EXTENSIONS,
   isVideoFilename,
@@ -47,9 +47,15 @@ export function Importer(): JSX.Element {
     return true
   }
 
-  async function handleFile(filePath: string): Promise<void> {
+  /** `advise`: what the drop has to say about the file ("may not be a supported video"). Said after the kept question (a Cancel says nothing about a file that was not tried) and before the run is claimed. */
+  async function handleFile(filePath: string, advise?: () => void): Promise<void> {
     if (!filePath) return
     if (refuseIfBusy()) return
+    // T-175 (3): a part kept for a video that could not be opened (clips waiting for an unplugged drive) is let go when a DIFFERENT video opens here. Asked before the
+    // run is claimed or anything is said, over the file this opens (`videoKey` of the loaded video: the picked path, converted or not); Cancel opens nothing.
+    const keptQuestion = keptPartQuestion('video', filePath, basename(filePath))
+    if (keptQuestion !== null && !confirm(keptQuestion)) return
+    advise?.()
     if (!useImportRun.getState().begin({ filePath, converting: false })) return
     // T-136 (2): what the video store held when this import began. The importer is on screen only while no video is open, but the conversion takes
     // minutes and nothing locks the app: a video that arrives meanwhile (a project opened from Home, "Edit in Video Studio") is the one being edited.
@@ -87,8 +93,9 @@ export function Importer(): JSX.Element {
       // describeImportError which surfaces actionable hints (cloud-sync,
       // permission, unknown codec).
       // T-150: a Recent entry whose file is gone would fail the same way on every pick. Dropped from its list, and the toast says so.
-      const gone = isNotFoundError(err) && (await remove(filePath))
-      toast.error(describeImportError(err, filePath) + (gone ? ' It was removed from Recent.' : ''), { duration: 8000 })
+      // T-175 (2): but only when its folder is there - on a drive that is not connected the entry stays and the toast says why.
+      const sentence = await describeFailedOpen(err, filePath, 'video', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })
+      toast.error(sentence, { duration: 8000 })
     } finally {
       useImportRun.getState().end()
     }
@@ -110,12 +117,14 @@ export function Importer(): JSX.Element {
       })
       return
     }
-    if (!isVideoFilename(file.name)) {
-      toast(`${file.name} may not be a supported video — trying anyway`, {
-        icon: <Icon name="warning" size={18} />
-      })
-    }
-    void handleFile(filePath)
+    const advise = isVideoFilename(file.name)
+      ? undefined
+      : (): void => {
+          toast(`${file.name} may not be a supported video — trying anyway`, {
+            icon: <Icon name="warning" size={18} />
+          })
+        }
+    void handleFile(filePath, advise)
   }
 
   async function onPickFile(): Promise<void> {

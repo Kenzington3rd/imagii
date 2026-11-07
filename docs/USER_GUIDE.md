@@ -202,7 +202,9 @@ Drop a video in (or click **Choose file…**), then:
 
 (**Recent** lists the last files you opened here. A file that has been moved or deleted
 says so when you pick it, and imagii takes it off the list: **It was removed from
-Recent.** Audio Studio's **Recent** does the same.)
+Recent.** A file on a drive that is not connected is not taken off: the message says
+imagii can't find it and that the drive may need plugging in, and the entry stays for
+when it is back. Audio Studio's **Recent** does the same.)
 
 (One video loads at a time. If you drop a second while the first is still loading
 or converting, imagii says it is still working on the last one and leaves the
@@ -458,7 +460,10 @@ that names the file being converted.)
   it again in its studio - and when you do, the clips, the selected clip and the caption file of that video
   (or the cleanup, cuts and second track of that sound) are back with it. imagii keeps them for the session
   while the file is missing, and the autosave keeps them too, so they are not lost to the next save.
-  Opening a different video (or sound) in that studio lets them go; closing leaves them waiting. A file that is
+  Opening a different video (or sound) in that studio lets them go, and imagii asks first - "Open X? The 2 clips kept for
+  Y, which could not be opened, will be discarded." (or "The changes kept for Y" for a sound) - from a drop, **Choose file…**,
+  **Recent**, **Edit in Video Studio** and **Clean audio** alike; **Cancel** opens nothing and keeps them waiting, and the same
+  file opens with no question. **Open project** replaces what it names without asking. Closing leaves them waiting. A file that is
   there but won't open (a conversion that
   failed, a full disk) is reported with its real cause instead and keeps its work the same way, and if you open a
   different video while a long conversion is still running, the project's video is
