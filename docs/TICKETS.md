@@ -9219,15 +9219,17 @@ IMG-PREC.
 
 ## T-182 — sweep-69 fixes (round 131)
 
-- **Spec:** the sixty-ninth sweep's two verified findings (candidate clean pass #2 on 4c04cc4; sweep 68 on the same tree
-  was clean, so the count restarts). Item 1 found by UX reader 2; item 2 observed (unmeasured, not counted) by the
-  streamer main reader and MEASURED by the expediter, which makes it a finding. Every other reader clean on its lens.
+- **Spec:** the sixty-ninth sweep's three verified findings (candidate clean pass #2 on 4c04cc4; sweep 68 on the same
+  tree was clean, so the count restarts). Item 1 found by UX reader 2; item 2 observed (unmeasured, not counted) by the
+  streamer main reader and MEASURED by the expediter, which makes it a finding; item 3 found and measured by design
+  reader 2. Every other reader clean on its lens.
   Not counted: unguarded IPC awaits that are silent only when IPC itself refuses (the class); Reframe's panel absent on a
   vertical source with no reason (long-standing design); a kit folder chooser per press (friction); `parseChatLog`
   asserting at a million lines (contrived); occluded-window compositing on win32 (a release hand-check); the rotation-
   tagged phone clip (T-110 (h), re-measured, standing). Two tracks, disjoint files.
 
-  **Track A — a mood-board Undo or Redo that cannot be written says so and can be tried again (item 1).**
+  **Track A — a mood-board Undo or Redo that cannot be written says so and can be tried again (item 1); the Posting
+  log row keeps the clip's name (item 3).** Two renderer files, disjoint from Track B.
   1. **[LOW-MED] A mood-board Undo/Redo whose disk write fails is silent and spends the step**
      (modules/references/state/referencesStore.ts:129-136 `writeThrough`, :139-160 `step`, :162-172 `stepThroughChain`).
      `step` moves the history and the boards at once, then fires the write; a rejected `moodboard.restore` (a full disk;
@@ -9241,6 +9243,16 @@ IMG-PREC.
        adopts the disk (`list()`, keeping the selection when the board is still there) AND puts the history back to its
        value before the step, so the same Undo/Redo is offered again; if `list()` also rejects, the boards, selection and
        history all go back to the state before the step. `writeThrough`'s promise never rejects.
+  3. **[MED] The Posting log row loses the clip's name once a post goes to four or more platforms**
+     (modules/video-studio/PostChecklist.tsx:307-317). The row is `flex items-center gap-2`: the name is
+     `flex-1 truncate`, the platforms span (`e.platforms.join(' · ')`) has no `shrink-0` and no `min-w`, so in the
+     300 px column the platforms take the room and the name truncates to nothing — measured by the reader: 4 platforms
+     leave the name 76 px, 5 platforms 10 px, 7 platforms 0 px. The name is what the user scans the log for (and what
+     the row's delete acts on). DESIGN_GUIDE's row pattern for this (the Layers panel, line 357) is `flex flex-wrap`
+     with the name at `min-w-[7rem]`. Fix: the row follows that pattern — the name keeps `min-w-[7rem]` (truncating
+     with its `title` past that), the platforms wrap to the next line beneath it when they do not fit, and the delete
+     button stays on the first line at the row's end (it does not wrap away from the name). Nothing else in the row
+     changes.
 
   **Track B — the watermark fits the frame (item 2).**
   2. **[LOW-MED] On a vertical export a long watermark runs off the left edge** (main/ffmpeg/filters.ts:523-546
@@ -9259,25 +9271,30 @@ IMG-PREC.
      - USER_GUIDE's watermark paragraph says a long handle is set smaller so it stays inside the frame.
 
   Covering tests: Track A — unit (referencesStore tests, NEW describe): a rejecting `restore` on Undo → one failure
-  toast with "Couldn't undo that." (and the cause where `userFacingError` knows it), the boards equal the disk, `canUndo()`
-  true again and `canRedo()` as before the press (red on the base: silent, Undo spent); Redo the same; `restore` AND
-  `list` rejecting → no unhandled rejection, boards/selection/history as before the step; the success path unchanged
-  (control). e2e if the real write can be made to refuse without a product hook (a directory where the board's file is
-  written, the T-178 trick) — the worker's call, disclosed. Track B — unit (watermark.test.ts, NEW describe):
-  `watermarkFontSize` keeps 67 for "@sample" on 1080×1920 and 38 for 40 capitals on 1920×1080 (controls: today's size);
-  shrinks "youtube.com/@averylongchannelname" and 40 capitals and 40 "W"s on 1080×1920 and 1080×1350 so the table
-  width + 16 fits in width − 40 (red on the base: no such function / overflow); never below 12; a non-ASCII text uses the
-  widest advance. Layer 5 (media.spec.ts, NEW describe; real ffmpeg): on the distro 6.1.1 (which has drawtext; the
-  bundled linux 7.0.2 has none — see the T-51 block) with the font path swapped to Liberation Sans Bold, the product's
-  `buildVideoFilter` for a tiktok export with a 40-capital watermark in each corner renders ink whose bbox lies within
-  [0, 1080) (red on the base: x < 0); the win32-gated T-51 block keeps its pixel pins. Unit pins in filters tests that
-  the filter uses `watermarkFontSize`.
+  toast with "Couldn't undo that." (and the cause where `userFacingError` knows it), the boards equal the disk,
+  `canUndo()` true again and `canRedo()` as before the press (red on the base: silent, Undo spent); Redo the same;
+  `restore` AND `list` rejecting → no unhandled rejection, boards/selection/history as before the step; the success
+  path unchanged (control). e2e if the real write can be made to refuse without a product hook (a directory where the
+  board's file is written, the T-178 trick) — the worker's call, disclosed. Item 3 — e2e (video-pipelines.spec.ts, NEW
+  describe): log posts with 1, 5 and 7 platforms (every platform the checklist offers) and measure each row's name
+  span with `boundingBox()`: width ≥ 112 px (7rem) for all three, the full platform list still visible in the row, the
+  delete button inside the row's right edge and on the name's line (red on the base: 10 px and 0 px). Track B — unit
+  (watermark.test.ts, NEW describe): `watermarkFontSize` keeps 67 for "@sample" on 1080×1920 and 38 for 40 capitals on
+  1920×1080 (controls: today's size); shrinks "youtube.com/@averylongchannelname" and 40 capitals and 40 "W"s on
+  1080×1920 and 1080×1350 so the table width + 16 fits in width − 40 (red on the base: no such function / overflow);
+  never below 12; a non-ASCII text uses the widest advance. Layer 5 (media.spec.ts, NEW describe; real ffmpeg): on the
+  distro 6.1.1 (which has drawtext; the bundled linux 7.0.2 has none — see the T-51 block) with the font path swapped
+  to Liberation Sans Bold, the product's `buildVideoFilter` for a tiktok export with a 40-capital watermark in each
+  corner renders ink whose bbox lies within [0, 1080) (red on the base: x < 0); the win32-gated T-51 block keeps its
+  pixel pins. Unit pins in filters tests that the filter uses `watermarkFontSize`.
 
-  **Docs:** IC rows (the mood-board Undo failure state; the watermark on vertical); TESTING paragraph per track; LESSONS
-  entry at the TOP per track; USER_GUIDE (Track B's sentence; Track A: a failed Undo says so and can be pressed again).
+  **Docs:** IC rows (the mood-board Undo failure state; the Posting log row's layout; the watermark on vertical);
+  TESTING paragraph per track; LESSONS entry at the TOP per track; USER_GUIDE (Track B's sentence; Track A: a failed
+  Undo says so and can be pressed again).
 - **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
   ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
-  twice and the FULL Playwright suite green before handback; Track B also `npm run test:media`
+  twice and every touched spec file run whole and green before handback (two tracks share four
+  cores: the expediter runs the FULL Playwright suite once on the merged tree); Track B also `npm run test:media`
   (it changes a filter graph — IMG-PREC); a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** open (round 131)
