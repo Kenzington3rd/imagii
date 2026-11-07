@@ -8870,7 +8870,12 @@ IMG-PREC.
      a screen nobody is looking at"), which the camera branch's catch already keeps (:432). Fix (the root, one place): the
      outer catch, after `abandonStart()`, says nothing when the studio was left (`unmountedRef.current`) — every await of
      the start, present and future, is covered by the one guard. The MicStartFailure sentence and `reportFailure` are
-     unchanged for a person still on Record.
+     unchanged for a person still on Record. **Measured by Track A (corrects the premise):** in this Chromium/Electron the
+     leave's `track.stop()` settles the hidden element's `play()` about 59 ms later (it resolves), so the wait returns and
+     `leftWhileStarting` ends the start silently — the toast does not reproduce with the frameless stub. The guard stays as
+     the one catch-all for a start await that REJECTS after a leave (a `play()` that never settles — the finding's premise,
+     stubbed in the e2e); whether a real Windows desktop capture ever leaves the wait pending after a stop is a release
+     hand-check. Hardening, not a measured defect.
 
   **Track B — what is set aside is not lost without a word (items 2 and 3).**
   2. **[LOW] A Recent entry on a drive that is not connected is erased from Recent** (video-studio/Importer.tsx:89-91,
