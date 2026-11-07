@@ -9217,6 +9217,71 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 130 — see the Done entry)
 
+## T-182 — sweep-69 fixes (round 131)
+
+- **Spec:** the sixty-ninth sweep's two verified findings (candidate clean pass #2 on 4c04cc4; sweep 68 on the same tree
+  was clean, so the count restarts). Item 1 found by UX reader 2; item 2 observed (unmeasured, not counted) by the
+  streamer main reader and MEASURED by the expediter, which makes it a finding. Every other reader clean on its lens.
+  Not counted: unguarded IPC awaits that are silent only when IPC itself refuses (the class); Reframe's panel absent on a
+  vertical source with no reason (long-standing design); a kit folder chooser per press (friction); `parseChatLog`
+  asserting at a million lines (contrived); occluded-window compositing on win32 (a release hand-check); the rotation-
+  tagged phone clip (T-110 (h), re-measured, standing). Two tracks, disjoint files.
+
+  **Track A — a mood-board Undo or Redo that cannot be written says so and can be tried again (item 1).**
+  1. **[LOW-MED] A mood-board Undo/Redo whose disk write fails is silent and spends the step**
+     (modules/references/state/referencesStore.ts:129-136 `writeThrough`, :139-160 `step`, :162-172 `stepThroughChain`).
+     `step` moves the history and the boards at once, then fires the write; a rejected `moodboard.restore` (a full disk;
+     EPERM/EBUSY on the fresh tmp from antivirus — the T-139 class) is caught and answered only by re-listing the disk.
+     No sentence; the deleted board stays gone; Undo is now disabled (its step was spent) and Redo is lit — the
+     "Deleted — press Ctrl+Z to undo" promise fails without a word. If `moodboard.list()` also rejects, the rejection
+     escapes `void run(write)` / `.catch(noop)` with the UI showing an undo that never landed. The only disk-backed undo
+     in the app (canvas, audio and video undo are in memory). Fix:
+     - `writeThrough` takes the direction and the state BEFORE the step (boards, selection, history). On a rejected
+       restore it raises `reportFailure(err, { failed: "Couldn't undo that." })` (or `"Couldn't redo that."`), then
+       adopts the disk (`list()`, keeping the selection when the board is still there) AND puts the history back to its
+       value before the step, so the same Undo/Redo is offered again; if `list()` also rejects, the boards, selection and
+       history all go back to the state before the step. `writeThrough`'s promise never rejects.
+
+  **Track B — the watermark fits the frame (item 2).**
+  2. **[LOW-MED] On a vertical export a long watermark runs off the left edge** (main/ffmpeg/filters.ts:523-546
+     `watermarkFilter`; shared/watermark.ts). The font is 3.5% of the frame HEIGHT — 67 px on 1080×1920 (47 px on
+     1080×1350) — and the right corners place it at `w-tw-20`. Measured (distro 6.1.1 drawtext, Liberation Sans Bold,
+     Arial Bold's metric twin): "youtube.com/@averylongchannelname" (33 characters) is 1242 px wide, so it starts at
+     x = −182 and its first characters are cut off; 40 capitals (the box takes 40) are 1821 px. Landscape frames fit.
+     It hits Reels, TikTok and the Clip Kit's YouTube Short file — where a handle is most often stamped. Fix:
+     - shared/watermark.ts gains an Arial Bold advance-width table for printable ASCII (taken from
+       /usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf's `hmtx`/`cmap` by a small script — Liberation Sans
+       Bold is metric-compatible with Arial Bold; record the source in a comment; any other character counts as the
+       widest ASCII advance, so the estimate never runs short) and `watermarkFontSize(spec, frame)` = the smaller of
+       today's `round(spec.fontSizePct / 100 × frame.height)` and the largest size at which the text plus its 8 px box
+       border fits between the 20 px side margins, floored to whole pixels, never below 12. `watermarkFilter` uses it.
+       A short handle keeps today's size exactly (landscape and vertical); only a text that would not fit shrinks.
+     - USER_GUIDE's watermark paragraph says a long handle is set smaller so it stays inside the frame.
+
+  Covering tests: Track A — unit (referencesStore tests, NEW describe): a rejecting `restore` on Undo → one failure
+  toast with "Couldn't undo that." (and the cause where `userFacingError` knows it), the boards equal the disk, `canUndo()`
+  true again and `canRedo()` as before the press (red on the base: silent, Undo spent); Redo the same; `restore` AND
+  `list` rejecting → no unhandled rejection, boards/selection/history as before the step; the success path unchanged
+  (control). e2e if the real write can be made to refuse without a product hook (a directory where the board's file is
+  written, the T-178 trick) — the worker's call, disclosed. Track B — unit (watermark.test.ts, NEW describe):
+  `watermarkFontSize` keeps 67 for "@sample" on 1080×1920 and 38 for 40 capitals on 1920×1080 (controls: today's size);
+  shrinks "youtube.com/@averylongchannelname" and 40 capitals and 40 "W"s on 1080×1920 and 1080×1350 so the table
+  width + 16 fits in width − 40 (red on the base: no such function / overflow); never below 12; a non-ASCII text uses the
+  widest advance. Layer 5 (media.spec.ts, NEW describe; real ffmpeg): on the distro 6.1.1 (which has drawtext; the
+  bundled linux 7.0.2 has none — see the T-51 block) with the font path swapped to Liberation Sans Bold, the product's
+  `buildVideoFilter` for a tiktok export with a 40-capital watermark in each corner renders ink whose bbox lies within
+  [0, 1080) (red on the base: x < 0); the win32-gated T-51 block keeps its pixel pins. Unit pins in filters tests that
+  the filter uses `watermarkFontSize`.
+
+  **Docs:** IC rows (the mood-board Undo failure state; the watermark on vertical); TESTING paragraph per track; LESSONS
+  entry at the TOP per track; USER_GUIDE (Track B's sentence; Track A: a failed Undo says so and can be pressed again).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback; Track B also `npm run test:media`
+  (it changes a filter graph — IMG-PREC); a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 131)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
