@@ -23,6 +23,9 @@ describe('settings known-keys validator', () => {
     expect(KNOWN_SETTINGS_KEYS).toContain('welcomeSeen')
     expect(KNOWN_SETTINGS_KEYS).toContain('export.lastOutputDir')
     expect(KNOWN_SETTINGS_KEYS).toContain('clipKit.lastOutputDir')
+    // T-124 (21): the one folder the GIF, Compile, Reframe and picture-in-picture panels remember. Missing, every read and write
+    // of it throws at the IPC boundary and the four ask for a folder on every visit, as before.
+    expect(KNOWN_SETTINGS_KEYS).toContain('video.lastOutputDir')
     // T-20: the posting diary moved out of localStorage into settings. A
     // missing entry here would make every diary read and write throw at the
     // IPC boundary instead of persisting.
@@ -50,11 +53,62 @@ describe('settings known-keys validator', () => {
     expect(new Set(KNOWN_SETTINGS_KEYS).size).toBe(KNOWN_SETTINGS_KEYS.length)
   })
 
+  // T-120: the store's schema is NESTED, one object per dotted group, because Conf nests a dotted key (the
+  // `record.convertToMp4` setting is `{ record: { convertToMp4 } }` on disk). Flat property names with dots in
+  // them match nothing in that layout, which is how eleven keys went unvalidated for rounds while this test
+  // compared the TOP-LEVEL names to the allowlist and passed. So: the schema is flattened back into dotted
+  // paths and compared to the allowlist, and no property name may itself contain a dot.
+  type SchemaNode = { type?: string; properties?: Record<string, SchemaNode> }
+
+  /** Dotted paths of a nested schema. A node that IS an allowlisted key is a leaf even if it has properties (`windowBounds`). */
+  function flattenSchema(
+    nodes: Record<string, SchemaNode>,
+    allowed: ReadonlySet<string>,
+    prefix = ''
+  ): string[] {
+    const paths: string[] = []
+    for (const [name, node] of Object.entries(nodes)) {
+      const at = prefix === '' ? name : `${prefix}.${name}`
+      if (node.properties && !allowed.has(at)) paths.push(...flattenSchema(node.properties, allowed, at))
+      else paths.push(at)
+    }
+    return paths
+  }
+
+  /** Every property name anywhere in the schema, however deep. */
+  function allPropertyNames(nodes: Record<string, SchemaNode>): string[] {
+    return Object.entries(nodes).flatMap(([name, node]) => [name, ...(node.properties ? allPropertyNames(node.properties) : [])])
+  }
+
   it('validates the store schema and the allowlist against each other', async () => {
     // The gate and the on-disk schema are two lists that must not drift: a
     // key the gate accepts but the schema omits would round-trip unvalidated.
     const { __storeTesting__ } = await import('../store')
-    expect(Object.keys(__storeTesting__.schema).sort()).toEqual([...KNOWN_SETTINGS_KEYS].sort())
+    const schema = __storeTesting__.schema as unknown as Record<string, SchemaNode>
+    const flat = flattenSchema(schema, new Set(KNOWN_SETTINGS_KEYS))
+    expect(flat.sort()).toEqual([...KNOWN_SETTINGS_KEYS].sort())
+  })
+
+  it('has no schema property with a dot in its name: Conf nests dotted keys, so such a property matches nothing (T-120)', async () => {
+    const { __storeTesting__ } = await import('../store')
+    const schema = __storeTesting__.schema as unknown as Record<string, SchemaNode>
+    expect(allPropertyNames(schema).filter((n) => n.includes('.'))).toEqual([])
+  })
+
+  it('the flattening itself discriminates: the dead flat layout, a missing leaf and an extra one all differ from the allowlist', () => {
+    const allowed = new Set(['theme', 'record.convertToMp4', 'windowBounds'])
+    const nested = { theme: {}, record: { properties: { convertToMp4: {} } }, windowBounds: { properties: { x: {} } } }
+    expect(flattenSchema(nested, allowed).sort()).toEqual(['record.convertToMp4', 'theme', 'windowBounds'])
+    // The dead layout flattens to the same paths - which is exactly why the dot rule above exists.
+    const dead = { theme: {}, 'record.convertToMp4': {}, windowBounds: { properties: { x: {} } } }
+    expect(flattenSchema(dead, allowed).sort()).toEqual(['record.convertToMp4', 'theme', 'windowBounds'])
+    expect(allPropertyNames(dead).filter((n) => n.includes('.'))).toEqual(['record.convertToMp4'])
+    expect(allPropertyNames(nested).filter((n) => n.includes('.'))).toEqual([])
+    // A group with a child the allowlist does not know, and a group that lost one.
+    expect(flattenSchema({ theme: {}, record: { properties: { convertToMp4: {}, extra: {} } } }, allowed).sort()).not.toEqual(
+      ['record.convertToMp4', 'theme']
+    )
+    expect(flattenSchema({ theme: {}, record: { properties: {} } }, allowed)).not.toContain('record.convertToMp4')
   })
 
   it('accepts every known key', () => {

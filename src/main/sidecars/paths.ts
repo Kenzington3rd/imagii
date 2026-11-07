@@ -1,6 +1,6 @@
 import { app } from 'electron'
 import path from 'node:path'
-import { existsSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync, statSync } from 'node:fs'
 import { CAPTIONS_DIR_NAME } from '../../shared/captions'
 
 const isPackaged = (): boolean => app.isPackaged
@@ -65,16 +65,48 @@ export function thumbsCacheDir(): string {
 export const WHISPER_EXE_NAMES = ['whisper-cli.exe', 'whisper.exe'] as const
 
 /**
- * Where the captions engine is. The first name in `WHISPER_EXE_NAMES` that
- * exists wins; when none does, the answer is the PREFERRED name's path (not
- * found), because that is the file the setup card asks the user to put there.
+ * The one folder the captions engine is asked to live in: `<userData>/bin`
+ * (T-102). The portable exe unpacks itself to %TEMP% on every launch, so the
+ * old home — `process.resourcesPath/app.asar.unpacked/resources/bin` — is
+ * inside that scratch copy: electron-builder does not ship the folder, and
+ * anything a user put there was gone after a relaunch or an update. userData
+ * is the app's own data root, it is user-writable and it survives both.
+ */
+export function userBinDir(): string {
+  return userDataPath('bin')
+}
+
+/**
+ * Make `<userData>/bin` exist, so the card's "Open folder" has somewhere to
+ * go and the user is not asked to create a path by hand. Failure-safe: an
+ * unwritable profile leaves the folder absent and the card still names it.
+ */
+export function ensureUserBinDir(): void {
+  try {
+    mkdirSync(userBinDir(), { recursive: true })
+  } catch {
+    /* a read-only profile: the resolver simply finds nothing there */
+  }
+}
+
+/**
+ * Where the captions engine is. Looked for best first: the per-user folder
+ * under both names, then the folder beside the app under both names (a dev
+ * checkout, or a build that does ship the file). The user folder wins because
+ * it is the one that outlives a relaunch. The first candidate that exists is
+ * the answer; when none does, the answer is the PREFERRED name's path in the
+ * per-user folder (not found), because that is the file the setup card asks
+ * the user to put there.
  */
 export function whisperExePath(): BinaryStatus {
-  for (const name of WHISPER_EXE_NAMES) {
-    const found = probe(resourcePath('bin', name))
-    if (found.exists) return found
+  ensureUserBinDir()
+  for (const dir of [userBinDir(), resourcePath('bin')]) {
+    for (const name of WHISPER_EXE_NAMES) {
+      const found = probe(path.join(dir, name))
+      if (found.exists) return found
+    }
   }
-  return probe(resourcePath('bin', WHISPER_EXE_NAMES[0]))
+  return probe(path.join(userBinDir(), WHISPER_EXE_NAMES[0]))
 }
 
 export function whisperModelPath(modelFile = 'ggml-base.en.bin'): BinaryStatus {

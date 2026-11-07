@@ -39,7 +39,7 @@ const { registerAudioIpc } = await import('./audio')
 async function call(channel: string, ...args: unknown[]): Promise<unknown> {
   const h = handlers.get(channel)
   if (!h) throw new Error(`${channel} was not registered`)
-  return h({ sender: { send: vi.fn() } }, ...args)
+  return h({ sender: { isDestroyed: () => false, send: vi.fn() } }, ...args)
 }
 
 const SRC = `${tmpdir()}/my voice.wav`

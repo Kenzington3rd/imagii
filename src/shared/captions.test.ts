@@ -4,18 +4,28 @@ import path from 'node:path'
 import {
   ASS_PLAY_RES_Y,
   burnInDoneMessage,
+  burnInLengthSec,
+  burnInPercent,
+  captionBasisPx,
   captionPhaseLabel,
+  captionPlayResY,
   captionsReadyMessage,
   captionSizeReadout,
+  clearedTranscriptsMessage,
+  cleanTranscriptSrt,
+  clearTranscriptsQuestion,
   DEFAULT_CAPTION_STYLE,
   effectiveCaptionPx,
   escapeSubtitlesPath,
   isShiftedSrtName,
+  isUsableFrame,
   shiftedSrtPath,
   shiftSrtToRange,
+  staleCaptionsMessage,
   tsToSeconds,
   type CaptionsProgress
 } from './captions'
+import { CAPTION_STYLE_PRESETS, captionStyleMatches, DEFAULT_OUTLINE_WIDTH, type CaptionStyle } from './captions'
 
 describe('tsToSeconds — variable-length fractional seconds (Phase 2.13)', () => {
   it('handles standard 3-digit fractions', () => {
@@ -65,6 +75,17 @@ describe('escapeSubtitlesPath — two parsers, two rounds of escaping (round 18)
 
   it('normalises backslashes and escapes a Windows drive colon', () => {
     expect(escapeSubtitlesPath('C:\\Users\\me\\a.srt')).toBe('C\\\\\\:/Users/me/a.srt')
+  })
+
+  // T-118 (7): the path is the filter's first POSITIONAL option, so ffmpeg's option parser splits
+  // an unescaped `=` into a name and a value and dies with "Option not found" (exit 8) - the
+  // Layer 5 case 'burns subtitles from a=b.srt' runs it against the real binary. `=` is in both
+  // character classes, like the other separators: twice, and not as a space is (once).
+  it('escapes an equals sign twice, like the other separators', () => {
+    expect(escapeSubtitlesPath('/a/a=b.srt')).toBe('/a/a\\\\\\=b.srt')
+    expect(escapeSubtitlesPath('/captions/Boss=Dead-2026.srt')).toBe('/captions/Boss\\\\\\=Dead-2026.srt')
+    // Every `=` in the name, not the first only (the replace is global).
+    expect(escapeSubtitlesPath('/a/x=y=z.srt')).toBe('/a/x\\\\\\=y\\\\\\=z.srt')
   })
 })
 
@@ -173,6 +194,54 @@ describe('shiftSrtToRange — the SRT on the clip clock (T-81)', () => {
     )
   })
 
+  // T-113: the Clip Kit bundles this file beside a video that is the clip AT ITS SPEED, so the
+  // cues land on the OUTPUT clock: shifted onto the clip, then divided by the speed (the
+  // export's `setpts=PTS/speed`). The burn-in has no speed and passes none.
+  describe('on the OUTPUT clock of a clip played at a speed (T-113)', () => {
+    it('divides every time by the speed after the shift', () => {
+      const srt = cue(1, '00:00:12,000', '00:00:14,000', 'a') + '\n' + cue(2, '00:00:16,000', '00:00:20,000', 'b')
+      expect(shiftSrtToRange(srt, 10, 20, 2)).toBe(
+        '1\n00:00:01,000 --> 00:00:02,000\na\n\n2\n00:00:03,000 --> 00:00:05,000\nb\n'
+      )
+      expect(shiftSrtToRange(srt, 10, 20, 0.5)).toBe(
+        '1\n00:00:04,000 --> 00:00:08,000\na\n\n2\n00:00:12,000 --> 00:00:20,000\nb\n'
+      )
+    })
+
+    it('a speed of 1 is exactly the shift it always was (and so is leaving it out)', () => {
+      const srt = cue(1, '00:00:12,000', '00:00:14,500', 'hello there')
+      expect(shiftSrtToRange(srt, 10, 20, 1)).toBe(shiftSrtToRange(srt, 10, 20))
+      expect(shiftSrtToRange(srt, 10, 20, 1)).toBe('1\n00:00:02,000 --> 00:00:04,500\nhello there\n')
+    })
+
+    it('clips to the range BEFORE dividing: a cue past the end ends where the clip ends', () => {
+      // 10 s of source at 2x is a 5 s file; the cue that runs to 23 s is cut at the clip's end.
+      expect(shiftSrtToRange(cue(1, '00:00:18,000', '00:00:23,000', 'closing'), 10, 20, 2)).toBe(
+        '1\n00:00:04,000 --> 00:00:05,000\nclosing\n'
+      )
+    })
+
+    it('a whole-file clip at 1x keeps its cues (times and text) exactly', () => {
+      const srt = cue(1, '00:00:00,200', '00:00:01,500', 'a') + '\n' + cue(2, '00:00:01,600', '00:00:02,900', 'b')
+      expect(shiftSrtToRange(srt, 0, 3, 1)).toBe(shiftSrtToRange(srt, 0, 3))
+      expect(shiftSrtToRange(srt, 0, 3, 1)).toBe(
+        '1\n00:00:00,200 --> 00:00:01,500\na\n\n2\n00:00:01,600 --> 00:00:02,900\nb\n'
+      )
+    })
+
+    it('rounds in whole milliseconds, so a third of a second does not drift', () => {
+      expect(shiftSrtToRange(cue(1, '00:00:11,000', '00:00:12,000', 'x'), 10, 20, 3)).toBe(
+        '1\n00:00:00,333 --> 00:00:00,667\nx\n'
+      )
+    })
+
+    it('rejects a speed that is not a positive number', () => {
+      for (const bad of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+        expect(() => shiftSrtToRange('', 0, 5, bad), String(bad)).toThrow(/speed/)
+      }
+    })
+  })
+
   it('rejects an invalid range', () => {
     expect(() => shiftSrtToRange('', -1, 5)).toThrow(/startSec/)
     expect(() => shiftSrtToRange('', 5, 5)).toThrow(/endSec/)
@@ -255,6 +324,166 @@ describe('effectiveCaptionPx — the size control says what it makes (T-89)', ()
   })
 })
 
+/**
+ * T-112 — with a video loaded the readout is about THAT video. It said "on 1080p"
+ * whatever was open, so a 720p recording's 32 read 120 px and drew 80, and a
+ * vertical one drew a 16:9-equivalent 120 against the same words (T-111 put the
+ * width into `effectiveCaptionPx`; this is the readout using it).
+ */
+describe('captionSizeReadout — the loaded video\'s own frame (T-112)', () => {
+  it('names the real size on the real frame: 720p, 1080p, 4K and a vertical clip', () => {
+    expect(captionSizeReadout(32, { width: 1280, height: 720 })).toBe('about 80 px tall on this video')
+    expect(captionSizeReadout(32, { width: 1920, height: 1080 })).toBe('about 120 px tall on this video')
+    expect(captionSizeReadout(32, { width: 3840, height: 2160 })).toBe('about 240 px tall on this video')
+    // 1080x1920: the 16:9-equivalent basis (T-111), 32 x 607.5 / 288 = 67.5.
+    expect(captionSizeReadout(32, { width: 1080, height: 1920 })).toBe('about 68 px tall on this video')
+  })
+
+  it('is exactly what the burn draws: the number is effectiveCaptionPx with the frame\'s width', () => {
+    for (const [width, height] of [[1280, 720], [1920, 1080], [1080, 1080], [1080, 1350], [2560, 1080]] as const) {
+      for (const size of [16, 32, 56, 96]) {
+        expect(captionSizeReadout(size, { width, height })).toBe(
+          `about ${effectiveCaptionPx(size, height, width)} px tall on this video`
+        )
+      }
+    }
+  })
+
+  it('without a video the 1080p wording stays', () => {
+    expect(captionSizeReadout(32, null)).toBe('about 120 px tall on 1080p')
+    expect(captionSizeReadout(32, undefined)).toBe('about 120 px tall on 1080p')
+  })
+
+  it('a probe that could not size the video falls back to the 1080p wording, never throws', () => {
+    expect(captionSizeReadout(32, { width: 0, height: 0 })).toBe('about 120 px tall on 1080p')
+    expect(captionSizeReadout(32, { width: 1920, height: 0 })).toBe('about 120 px tall on 1080p')
+  })
+})
+
+/**
+ * T-111 — caption size follows the 16:9 picture a frame's WIDTH would make.
+ * libass scales a force_style FontSize by frame HEIGHT / PlayResY, so a vertical
+ * clip (1080x1920) drew text 1.78x the size it has in the same proportion of a
+ * landscape one: the default 32 wrapped into an 817 px block, 43% of the frame
+ * (measured on a real render). The expected numbers are worked by hand from
+ * `basis = min(height, width * 9 / 16)` and `PlayResY = 288 * height / basis`.
+ */
+describe('caption size on a frame that is not 16:9 (T-111)', () => {
+  it('the basis is the frame\'s height on 16:9 and wider, and width x 9/16 on narrower', () => {
+    expect(captionBasisPx(1080, 1920)).toBe(1080)
+    expect(captionBasisPx(1080, 2560)).toBe(1080) // ultrawide: still the height
+    expect(captionBasisPx(2160, 3840)).toBe(2160)
+    expect(captionBasisPx(1920, 1080)).toBe(607.5) // vertical
+    expect(captionBasisPx(1080, 1080)).toBe(607.5) // square
+    expect(captionBasisPx(1350, 1080)).toBe(607.5) // 4:5
+    expect(captionBasisPx(1080, 1440)).toBe(810) // 4:3
+  })
+
+  it('with no width the height is all there is — the readout\'s 1080p behavior is unchanged', () => {
+    expect(captionBasisPx(1080)).toBe(1080)
+    expect(effectiveCaptionPx(32)).toBe(120)
+    expect(effectiveCaptionPx(32, 720)).toBe(80)
+  })
+
+  it('the same size is the same number of pixels per width on 1920x1080 and 1080x1920', () => {
+    // The invariant: glyph height as a fraction of frame WIDTH is one number.
+    const land = effectiveCaptionPx(32, 1080, 1920) / 1920
+    const vert = effectiveCaptionPx(32, 1920, 1080) / 1080
+    expect(effectiveCaptionPx(32, 1080, 1920)).toBe(120)
+    expect(effectiveCaptionPx(32, 1920, 1080)).toBe(68) // 32 x 607.5 / 288 = 67.5, not the old 213
+    expect(vert / land).toBeGreaterThan(0.9)
+    expect(vert / land).toBeLessThan(1.1)
+    // ...and it was 1.78x before: the height-only readout for the same frame.
+    expect(effectiveCaptionPx(32, 1920)).toBe(213)
+  })
+
+  it('needs no PlayResY on 16:9 or wider, so a landscape burn is exactly what it was', () => {
+    expect(captionPlayResY(1920, 1080)).toBeNull()
+    expect(captionPlayResY(1280, 720)).toBeNull()
+    expect(captionPlayResY(3840, 2160)).toBeNull()
+    expect(captionPlayResY(2560, 1080)).toBeNull()
+    // Within rounding of 16:9 (a 1918-wide crop of a 1080p frame): 288.3 rounds to 288, which is "none".
+    expect(captionPlayResY(1918, 1080)).toBeNull()
+  })
+
+  it('gives libass a PlayResY that makes its scale the 16:9-equivalent one on a narrower frame', () => {
+    expect(captionPlayResY(1080, 1920)).toBe(910) // 288 x 1920 / 607.5 = 910.2
+    expect(captionPlayResY(1080, 1080)).toBe(512) // 288 x 1080 / 607.5
+    expect(captionPlayResY(1080, 1350)).toBe(640) // 288 x 1350 / 607.5
+    expect(captionPlayResY(1440, 1080)).toBe(384) // 4:3: 288 x 1080 / 810
+    // The scale libass draws at, frameHeight / PlayResY, against the one wanted, basis / 288: within 0.1%.
+    for (const [w, h] of [[1080, 1920], [1080, 1080], [1080, 1350], [1440, 1080], [720, 1280], [1080, 2400]] as const) {
+      const playResY = captionPlayResY(w, h) as number
+      expect(h / playResY / (captionBasisPx(h, w) / 288), `${w}x${h}`).toBeGreaterThan(0.999)
+      expect(h / playResY / (captionBasisPx(h, w) / 288), `${w}x${h}`).toBeLessThan(1.001)
+    }
+  })
+
+  it('refuses a frame that is not a positive size', () => {
+    expect(() => captionPlayResY(0, 1080)).toThrow()
+    expect(() => captionPlayResY(1080, Number.NaN)).toThrow()
+    expect(() => captionBasisPx(-1, 100)).toThrow()
+    expect(() => effectiveCaptionPx(32, 1080, 0)).toThrow()
+  })
+})
+
+/**
+ * T-111 — the burn-in's percent is a measurement. It used to be `5 + 0.5 per
+ * second encoded`, capped at 99: ahead of the work on a short clip, pinned at its
+ * cap for most of a long one, and unrelated to either.
+ */
+describe('burnInLengthSec and burnInPercent — the burn-in bar measures (T-111)', () => {
+  it('the length is the source\'s own with no range', () => {
+    expect(burnInLengthSec(120, null)).toBe(120)
+  })
+
+  it('the length is the range\'s when there is one, clipped to what the source has after its start', () => {
+    expect(burnInLengthSec(120, { startSec: 10, endSec: 40 })).toBe(30)
+    expect(burnInLengthSec(120, { startSec: 100, endSec: 140 })).toBe(20) // the source ends first
+    expect(burnInLengthSec(null, { startSec: 10, endSec: 40 })).toBe(30) // an unprobed source: the range
+  })
+
+  it('the length is unknown when nothing says: an unprobed whole file, or a range past the end', () => {
+    expect(burnInLengthSec(null, null)).toBeNull()
+    expect(burnInLengthSec(0, null)).toBeNull()
+    expect(burnInLengthSec(120, { startSec: 130, endSec: 140 })).toBeNull()
+  })
+
+  it('is the encode position over the output length, as a percent', () => {
+    expect(burnInPercent(0, 60)).toBe(0)
+    expect(burnInPercent(15, 60)).toBe(25)
+    expect(burnInPercent(30, 60)).toBe(50)
+    expect(burnInPercent(45, 60)).toBe(75)
+  })
+
+  it('does not run ahead of the work: a 2-hour VOD at 10 s is not at 5%', () => {
+    // The old formula said 5 + 0.5 x 10 = 10% here and 99% an hour in.
+    expect(burnInPercent(10, 7200)).toBeCloseTo(0.139, 3)
+    expect(burnInPercent(3600, 7200)).toBe(50)
+  })
+
+  it('never reaches 100 — the file is still being finalized, and `done` is the only 100', () => {
+    expect(burnInPercent(60, 60)).toBe(99)
+    expect(burnInPercent(61, 60)).toBe(99)
+    expect(burnInPercent(1e9, 60)).toBe(99)
+  })
+
+  it('is absent when the length is unknown or the position is not a number', () => {
+    expect(burnInPercent(10, null)).toBeUndefined()
+    expect(burnInPercent(10, 0)).toBeUndefined()
+    expect(burnInPercent(10, -5)).toBeUndefined()
+    // T-115: an infinite or NaN length is not a length (10 / Infinity was a confident 0%).
+    expect(burnInPercent(10, Number.POSITIVE_INFINITY)).toBeUndefined()
+    expect(burnInPercent(10, Number.NaN)).toBeUndefined()
+    expect(burnInPercent(Number.NaN, 60)).toBeUndefined()
+    expect(burnInPercent(Number.POSITIVE_INFINITY, 60)).toBeUndefined()
+  })
+
+  it('never goes below 0', () => {
+    expect(burnInPercent(-0.033, 60)).toBe(0)
+  })
+})
+
 describe('captionPhaseLabel — plain words for each phase (T-89)', () => {
   const PHASES: Array<[CaptionsProgress['phase'], string]> = [
     ['extracting', 'Extracting audio…'],
@@ -279,21 +508,271 @@ describe('captionPhaseLabel — plain words for each phase (T-89)', () => {
   })
 })
 
+describe('clearedTranscriptsMessage — what "Clear saved transcripts" reports (T-128 (3))', () => {
+  it('names the count, in the button\'s verb, with the singular handled and no trailing period', () => {
+    expect(clearedTranscriptsMessage({ removed: 3, failed: 0 })).toEqual({ text: 'Cleared 3 saved transcripts', error: false })
+    expect(clearedTranscriptsMessage({ removed: 1, failed: 0 })).toEqual({ text: 'Cleared 1 saved transcript', error: false })
+  })
+
+  it('a press that found nothing (the count was stale) says so, as a result and not an error', () => {
+    expect(clearedTranscriptsMessage({ removed: 0, failed: 0 })).toEqual({ text: 'No saved transcripts to clear', error: false })
+  })
+
+  it('a clear that got part of the way says how far, and what to do about the rest', () => {
+    const m = clearedTranscriptsMessage({ removed: 2, failed: 1 })
+    expect(m.error).toBe(false)
+    expect(m.text).toBe('Cleared 2 of 3 saved transcripts. The rest are open in another program; close it and clear again.')
+    expect(clearedTranscriptsMessage({ removed: 1, failed: 1 }).text).toMatch(/^Cleared 1 of 2 saved transcripts\./)
+  })
+
+  it('a clear that removed nothing because every file refused is an error, in a finished sentence with its period', () => {
+    const m = clearedTranscriptsMessage({ removed: 0, failed: 2 })
+    expect(m.error).toBe(true)
+    expect(m.text).toBe("Couldn't clear the saved transcripts. Close anything that has them open, then try again.")
+  })
+})
+
+// T-135 (7): the confirm said "including the one for the video you have open" unconditionally, while its count is the whole folder's and the open
+// video may have no transcript at all.
+describe('clearTranscriptsQuestion — what the Clear confirm says it will delete (T-135 (7))', () => {
+  it('counts the folder, with the singular handled', () => {
+    expect(clearTranscriptsQuestion(3, false)).toMatch(/^This deletes the 3 saved transcripts imagii keeps on this computer/)
+    expect(clearTranscriptsQuestion(1, false)).toMatch(/^This deletes the 1 saved transcript imagii keeps on this computer/)
+  })
+
+  it('names the open video\'s transcript only when the open video has one', () => {
+    expect(clearTranscriptsQuestion(3, true)).toBe(
+      'This deletes the 3 saved transcripts imagii keeps on this computer, including the one for the video you have open. Transcribe again whenever you need one.'
+    )
+    expect(clearTranscriptsQuestion(3, false)).toBe(
+      'This deletes the 3 saved transcripts imagii keeps on this computer. Transcribe again whenever you need one.'
+    )
+    expect(clearTranscriptsQuestion(3, false), 'no claim about a video with no transcript').not.toMatch(/video you have open/)
+  })
+
+  it('is a finished sentence pair with a period, and has no hedge tacked on', () => {
+    for (const has of [true, false]) {
+      const text = clearTranscriptsQuestion(2, has)
+      expect(text.endsWith('.')).toBe(true)
+      expect(text).not.toMatch(/if it has one/)
+    }
+  })
+})
+
 describe('the captions toasts say what happened (T-89)', () => {
   it('a transcription reports lines of caption with the singular handled', () => {
-    expect(captionsReadyMessage(0)).toBe('Captions ready (0 lines)')
+    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions')
     expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
     expect(captionsReadyMessage(42)).toBe('Captions ready (42 lines)')
     expect(captionsReadyMessage(42)).not.toMatch(/segment/i)
   })
 
   it('a burn-in that put captions on the picture says so', () => {
-    expect(burnInDoneMessage(true)).toBe('Captions burned in')
+    expect(burnInDoneMessage(true, true)).toBe('Captions burned in')
   })
 
   it('a burn-in over a range nobody speaks in does NOT claim captions', () => {
-    const msg = burnInDoneMessage(false)
-    expect(msg).toBe('No captions in this range — exported without captions.')
+    const msg = burnInDoneMessage(false, true)
+    expect(msg).toBe('No captions in this range — exported without captions')
     expect(msg).not.toMatch(/burned in/i)
+  })
+})
+
+describe('isUsableFrame — a probe can answer 0 (T-113)', () => {
+  it('is true only for a width and a height that are both positive, finite numbers', () => {
+    expect(isUsableFrame({ width: 1920, height: 1080 })).toBe(true)
+    expect(isUsableFrame({ width: 1, height: 1 })).toBe(true)
+    for (const [width, height] of [[0, 0], [0, 1080], [1920, 0], [-1, 1080], [1920, -5], [Number.NaN, 1080], [1920, Number.NaN], [Number.POSITIVE_INFINITY, 1080]] as const) {
+      expect(isUsableFrame({ width, height }), `${width}x${height}`).toBe(false)
+    }
+    expect(isUsableFrame(null)).toBe(false)
+    expect(isUsableFrame(undefined)).toBe(false)
+  })
+
+  it('the size readout and the burn agree: an unusable frame is quoted on 1080p', () => {
+    expect(captionSizeReadout(32, { width: 0, height: 0 })).toBe(captionSizeReadout(32))
+    expect(captionSizeReadout(32, { width: 1920, height: Number.NaN })).toBe(captionSizeReadout(32))
+    expect(captionSizeReadout(32, { width: 1920, height: 1080 })).toBe('about 120 px tall on this video')
+  })
+})
+
+describe('staleCaptionsMessage — a transcript that finished for a video that is gone (T-113, T-174 (5))', () => {
+  it('names the video and says where the captions are: they are held, and opening it again shows them (T-174 (5); T-113 said "weren\'t added")', () => {
+    expect(staleCaptionsMessage('stream.mp4', 12)).toBe('Captions for stream.mp4 are ready. Open it again to see them.')
+  })
+
+  it('does not claim another video was opened', () => {
+    expect(staleCaptionsMessage('a.mp4', 3)).not.toMatch(/another video/i)
+  })
+})
+
+describe('cleanTranscriptSrt - the engine\'s non-speech cues are not captions (T-161 (2))', () => {
+  const cue = (n: number, from: string, to: string, ...text: string[]): string => `${n}\n00:00:${from} --> 00:00:${to}\n${text.join('\n')}\n`
+  const file = (...cues: string[]): string => cues.join('\n')
+
+  it('drops a cue that is one [tag], one (tag) or only music notes', () => {
+    const out = cleanTranscriptSrt(
+      file(
+        cue(1, '00,000', '01,000', ' [BLANK_AUDIO]'),
+        cue(2, '01,000', '02,000', '[MUSIC]'),
+        cue(3, '02,000', '03,000', '(upbeat music)'),
+        cue(4, '03,000', '04,000', '\u266A \u266A'),
+        cue(5, '04,000', '05,000', '\u266B'),
+        cue(6, '05,000', '06,000', 'hello there')
+      )
+    )
+    expect(out).toBe('1\n00:00:05,000 --> 00:00:06,000\nhello there\n')
+    expect(out).not.toMatch(/BLANK_AUDIO|MUSIC|upbeat|\u266A|\u266B/)
+  })
+
+  it('keeps a cue with words, a tag among them included', () => {
+    const out = cleanTranscriptSrt(
+      file(cue(1, '00,000', '01,000', '[laughs] that was close'), cue(2, '01,000', '02,000', 'wait (pause) what'), cue(3, '02,000', '03,000', '\u266A la la \u266A'))
+    )
+    expect(out).toContain('[laughs] that was close')
+    expect(out).toContain('wait (pause) what')
+    expect(out).toContain('\u266A la la \u266A')
+    expect(out.match(/-->/g)).toHaveLength(3)
+  })
+
+  it('reads a cue by ALL its lines: a tag line beside words stays, two tag lines go', () => {
+    const out = cleanTranscriptSrt(
+      file(
+        cue(1, '00,000', '01,000', '[MUSIC]', '[BLANK_AUDIO]'),
+        cue(2, '01,000', '02,000', '[MUSIC]', 'and we are back'),
+        cue(3, '02,000', '03,000', '(door opens)', '\u266A')
+      )
+    )
+    expect(out).toBe('1\n00:00:01,000 --> 00:00:02,000\n[MUSIC]\nand we are back\n')
+  })
+
+  it('renumbers the cues it keeps from 1, in order, and leaves their times alone', () => {
+    const out = cleanTranscriptSrt(
+      file(cue(7, '00,000', '01,000', '[MUSIC]'), cue(8, '01,500', '02,250', 'first'), cue(9, '02,250', '03,000', '[BLANK_AUDIO]'), cue(10, '04,000', '05,125', 'second'))
+    )
+    expect(out).toBe(file(cue(1, '01,500', '02,250', 'first'), cue(2, '04,000', '05,125', 'second')))
+  })
+
+  it('is empty when nothing is left, and for an empty file', () => {
+    expect(cleanTranscriptSrt(file(cue(1, '00,000', '01,000', '[BLANK_AUDIO]'), cue(2, '01,000', '02,000', '(music)')))).toBe('')
+    expect(cleanTranscriptSrt('')).toBe('')
+  })
+
+  it('reads CRLF files and a byte order mark, and leaves a clean file as it was', () => {
+    const clean = file(cue(1, '00,000', '01,000', 'one'), cue(2, '01,000', '02,000', 'two'))
+    expect(cleanTranscriptSrt(clean)).toBe(clean)
+    expect(cleanTranscriptSrt('\uFEFF' + clean.replace(/\n/g, '\r\n'))).toBe(clean)
+  })
+
+  it('a transcription that leaves no cue says so, and one or more keep the count (the toast after music or silence)', () => {
+    expect(captionsReadyMessage(0)).toBe('No speech found, so there are no captions')
+    expect(captionsReadyMessage(0)).not.toMatch(/ready/i)
+    expect(captionsReadyMessage(1)).toBe('Captions ready (1 line)')
+    expect(captionsReadyMessage(3)).toBe('Captions ready (3 lines)')
+  })
+
+  it('a block with no readable time line is not a cue and is not carried over', () => {
+    const clean = file(cue(1, '00,000', '01,000', 'one'))
+    expect(cleanTranscriptSrt('7\nsoon --> later\nnot a cue\n\n' + clean)).toBe(clean)
+  })
+
+  it('shiftSrtToRange drops a tag cue inside the range (a transcript saved before this release)', () => {
+    const old = file(cue(1, '10,000', '11,000', 'before'), cue(2, '12,000', '13,000', '[MUSIC]'), cue(3, '14,000', '15,000', 'after'))
+    const shifted = shiftSrtToRange(old, 10, 16)
+    expect(shifted).toBe(file(cue(1, '00,000', '01,000', 'before'), cue(2, '04,000', '05,000', 'after')))
+    expect(shiftSrtToRange(file(cue(1, '12,000', '13,000', '[MUSIC]')), 10, 16)).toBe('')
+  })
+})
+
+describe('burnInDoneMessage names the burn it answers (T-162 fold)', () => {
+  it('a burn with captions on it says so, ranged or not', () => {
+    expect(burnInDoneMessage(true, true)).toBe('Captions burned in')
+    expect(burnInDoneMessage(true, false)).toBe('Captions burned in')
+  })
+
+  it('an uncaptioned burn of a range says the range had none', () => {
+    expect(burnInDoneMessage(false, true)).toBe('No captions in this range — exported without captions')
+  })
+
+  it('an uncaptioned burn of the whole video says the transcript had no speech, not that a range was empty', () => {
+    const msg = burnInDoneMessage(false, false)
+    expect(msg).toBe('No speech in this transcript — exported without captions')
+    expect(msg).not.toMatch(/range/i)
+    expect(msg).not.toMatch(/burned in/i)
+  })
+})
+
+describe('the uncaptioned toast keeps a note as a second sentence (T-163 (3))', () => {
+  it('no helper sentence ends in a period, so the panel can join a note with ". " exactly as the captioned branch does', () => {
+    for (const text of [captionsReadyMessage(0), burnInDoneMessage(false, true), burnInDoneMessage(false, false)]) {
+      expect(text).not.toMatch(/\.$/)
+      expect(`${text}. Saved beside it.`).toMatch(/[^.]\. Saved beside it\.$/)
+    }
+  })
+})
+
+describe('captionStyleMatches: which preset the style in use is (T-165 fold)', () => {
+  it('each preset matches itself, and a copy of it', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      expect(captionStyleMatches(preset.style, preset.style), preset.id).toBe(true)
+      expect(captionStyleMatches({ ...preset.style }, preset.style), `${preset.id} copy`).toBe(true)
+    }
+  })
+
+  it('a change to any one field of a preset matches no preset', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      const moved: CaptionStyle[] = [
+        { ...preset.style, fontSize: preset.style.fontSize + 1 },
+        { ...preset.style, position: preset.style.position === 'top' ? 'middle' : 'top' },
+        { ...preset.style, primaryColor: '#010203' },
+        { ...preset.style, outlineColor: '#010203' },
+        { ...preset.style, outlineWidth: (preset.style.outlineWidth ?? DEFAULT_OUTLINE_WIDTH) + 1 }
+      ]
+      for (const style of moved) {
+        for (const other of CAPTION_STYLE_PRESETS) {
+          expect(captionStyleMatches(style, other.style), `${preset.id} moved, against ${other.id}: ${JSON.stringify(style)}`).toBe(false)
+        }
+      }
+    }
+  })
+
+  it('two presets never both match one style (the presets are pairwise different)', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) {
+      const matching = CAPTION_STYLE_PRESETS.filter((p) => captionStyleMatches(preset.style, p.style))
+      expect(matching.map((p) => p.id)).toEqual([preset.id])
+    }
+  })
+
+  it('the default style, which no preset is, matches none', () => {
+    for (const preset of CAPTION_STYLE_PRESETS) expect(captionStyleMatches(DEFAULT_CAPTION_STYLE, preset.style), preset.id).toBe(false)
+  })
+
+  it('an outlineWidth the style leaves out is the default weight (T-164 (2)): it equals a preset that spells that weight, and differs from one that does not', () => {
+    const reels = CAPTION_STYLE_PRESETS.find((p) => p.id === 'reels-minimal')!
+    expect(reels.style.outlineWidth, 'the fixture assumption: this preset spells the default weight').toBe(DEFAULT_OUTLINE_WIDTH)
+    const { outlineWidth: _omitted, ...saved } = reels.style
+    expect(captionStyleMatches(saved, reels.style)).toBe(true)
+    const tiktok = CAPTION_STYLE_PRESETS.find((p) => p.id === 'tiktok-bold')!
+    const { outlineWidth: _o2, ...savedTiktok } = tiktok.style
+    expect(captionStyleMatches(savedTiktok, tiktok.style), 'a style saved without a weight burns at 2, not at the preset\'s 4').toBe(false)
+  })
+
+  it('a key the preset leaves out is not compared', () => {
+    const { outlineWidth: _omitted, ...bare } = CAPTION_STYLE_PRESETS[0]!.style
+    expect(captionStyleMatches({ ...bare, outlineWidth: 9 }, bare)).toBe(true)
+  })
+})
+
+describe('staleCaptionsMessage - the two sentences of a late transcription (T-174 (5))', () => {
+  it('cues: the file is ready, and the way to it is to open it again - not "weren\'t added", not "transcribe again"', () => {
+    const text = staleCaptionsMessage('stream.mp4', 1)
+    expect(text).toBe('Captions for stream.mp4 are ready. Open it again to see them.')
+    expect(text).not.toMatch(/weren't added|Transcribe again/i)
+    expect(staleCaptionsMessage('stream.mp4', 400)).toBe(text)
+  })
+
+  it('no cues: says there was no speech in THAT file, with no period (one sentence, a result)', () => {
+    expect(staleCaptionsMessage('stream.mp4', 0)).toBe('No speech found in stream.mp4, so there are no captions')
+    expect(staleCaptionsMessage('stream.mp4', 0)).not.toMatch(/Open it again|ready/i)
   })
 })

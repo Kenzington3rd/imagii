@@ -166,13 +166,11 @@ describe('corrupt autosave: what the renderer requires', () => {
     expect(branch).not.toContain('STALE_THRESHOLD_MS')
   })
 
-  it('the fresh-restore branch still gates on age — a stale project is not offered', () => {
-    const restoreBranch = source.slice(
-      source.indexOf('if (\n        result.ok'),
-      source.indexOf('} else if (')
-    )
-    expect(restoreBranch).toContain('result.info?.ageMs !== undefined')
-    expect(restoreBranch).toContain('STALE_THRESHOLD_MS')
+  it('the fresh-restore branch offers a valid file of any age (T-160 (1))', () => {
+    // The whole condition: validates, has a project, and main sent an age to print. No comparison of the age against anything.
+    expect(source).toMatch(/if \(result\.ok && result\.project && result\.info\?\.ageMs !== undefined\) \{/)
+    // A valid file 9 days old used to print "Last autosave: 9 days ago" with no Restore and no Clear.
+    expect(source).not.toContain('STALE_THRESHOLD_MS')
   })
 
   it('Clear and Dismiss exist in the markup that branch gates', () => {

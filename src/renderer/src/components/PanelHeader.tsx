@@ -17,9 +17,14 @@ import { Icon, type IconName } from './Icon'
  *     Smart highlight finder
  *   </PanelHeader>
  *
- * When `actions` is provided, the header renders as a
- * `flex items-center justify-between` row with the heading on the left
- * and the actions on the right — the pattern panels used to hand-roll.
+ * When `actions` is provided, the header renders as a wrap-capable row
+ * (`flex flex-wrap items-center gap-x-2 gap-y-1`) with the heading on the
+ * left and the actions, in an `ml-auto` span, on the right — the pattern
+ * panels used to hand-roll. T-126 (14): the old `justify-between` row had
+ * no way to give: in a 298 px card the heading wrapped mid-word ("OUTPUT
+ * PREVIEW" on two lines) or the actions clipped. The heading never wraps
+ * now (`whitespace-nowrap`), and a row too narrow for both drops the
+ * actions WHOLE to a second row, right-aligned; one row looks as it did.
  */
 export interface PanelHeaderProps {
   /** Leading icon. Omit for headers that intentionally have none. */
@@ -33,7 +38,7 @@ export interface PanelHeaderProps {
 }
 
 const HEADING_CLASS =
-  'text-xs font-semibold uppercase tracking-wide text-ink-muted inline-flex items-center gap-1.5'
+  'text-xs font-semibold uppercase tracking-wide text-ink-muted inline-flex items-center gap-1.5 whitespace-nowrap'
 
 export function PanelHeader({
   icon,
@@ -51,9 +56,9 @@ export function PanelHeader({
     return className ? <div className={className}>{heading}</div> : heading
   }
   return (
-    <div className={`flex items-center justify-between${className ? ` ${className}` : ''}`}>
+    <div className={`flex flex-wrap items-center gap-x-2 gap-y-1${className ? ` ${className}` : ''}`}>
       {heading}
-      {actions}
+      <span className="ml-auto inline-flex items-center">{actions}</span>
     </div>
   )
 }

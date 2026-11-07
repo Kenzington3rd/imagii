@@ -1,5 +1,5 @@
 import { ipcErrorMessage } from './ipcError'
-import { userFacingError } from './userFacingError'
+import { RUNNER_PERMISSION_DENIED, userFacingError } from './userFacingError'
 
 export interface DropDiagnostic {
   hadFile: boolean
@@ -77,6 +77,31 @@ export function examineDroppedFile(file: File | undefined): DropDiagnostic {
 export type ImportKind = 'video' | 'audio'
 
 /**
+ * T-136 (14): the keywords are looked for OUTSIDE double quotes. A finished sentence from main quotes the person's file name ("Still extracting the
+ * sound from "codec_test.mp4"..."), and a name is not a cause: it was read as the unreadable-format error. A quote that is never closed removes
+ * nothing, so a cause printed after a lone quote is still found.
+ */
+function openErrorText(err: unknown): string {
+  return ipcErrorMessage(err, '').replace(/"[^"]*"/g, ' ').toLowerCase()
+}
+
+function isNotFoundText(lowered: string): boolean {
+  // T-151: `spawn <path> ENOENT` is the runner failing to start the app's own ffprobe / ffmpeg, not the person's file being gone.
+  if (/\bspawn\b[^\n]*\benoent\b/.test(lowered)) return false
+  return (
+    lowered.includes('enoent') ||
+    lowered.includes('cannot find') ||
+    lowered.includes('no such file') ||
+    lowered.includes('system cannot find')
+  )
+}
+
+/** T-150: did opening fail because the file is gone (the "imagii can't find that file" sentence)? The importers drop such a path from Recent. */
+export function isNotFoundError(err: unknown): boolean {
+  return isNotFoundText(openErrorText(err))
+}
+
+/**
  * Turn a thrown error from probe / loadSource / extraction into what the user
  * should read when a file will not open.
  *
@@ -98,19 +123,14 @@ export function describeImportError(
   filePath?: string | null,
   kind: ImportKind = 'video'
 ): string {
-  const lowered = ipcErrorMessage(err, '').toLowerCase()
+  const lowered = openErrorText(err)
   const inCloud = pathLooksLikeCloudSync(filePath ?? '')
   const known = (sentence: string): string => {
     console.error('[imagii] could not open', filePath ?? '(no path)', err)
     return sentence
   }
 
-  if (
-    lowered.includes('enoent') ||
-    lowered.includes('cannot find') ||
-    lowered.includes('no such file') ||
-    lowered.includes('system cannot find')
-  ) {
+  if (isNotFoundText(lowered)) {
     return known(
       inCloud
         ? "imagii can't find that file. It looks like a cloud-sync placeholder — right-click it in Explorer, choose Always keep on this device, then try again."
@@ -119,7 +139,9 @@ export function describeImportError(
   }
   if (
     (lowered.includes('access') && lowered.includes('denied')) ||
-    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered)
+    /\b(?:ebusy|eperm|eacces)\b|resource busy|operation not permitted/.test(lowered) ||
+    // T-139 (10): ffmpeg's / ffprobe's own word for a file it may not open, when a runner reports it (never the bare phrase: userFacingError.ts).
+    RUNNER_PERMISSION_DENIED.test(lowered)
   ) {
     return known('Windows blocked access. Close any app using the file, or check your antivirus.')
   }

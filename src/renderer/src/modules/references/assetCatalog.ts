@@ -99,7 +99,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     id: 'frame-clean-corner',
     name: 'Clean corner frame',
     description:
-      '1920×1080 transparent PNG for OBS — thin 8 px accent bars along the top and bottom edges, plus a bottom-left handle plate.',
+      '1920×1080 transparent PNG for OBS — thin 8 px accent bars along the top and bottom edges, plus a bottom-left handle plate. The sample handle does not export until you type your own.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -118,7 +118,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     id: 'frame-just-chatting',
     name: 'Just-chatting frame',
     description:
-      '1920×1080 transparent PNG for OBS — a big webcam frame with a chat strip on the right. The "CHAT" label does not export.',
+      '1920×1080 transparent PNG for OBS — a big webcam frame with a chat strip on the right. The sample "CHAT" label does not export.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -138,7 +138,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
     id: 'lower-third-clean',
     name: 'Clean lower-third',
     description:
-      'Name plate with a role line — a 1920×1080 transparent PNG for OBS or your editor. imagii does not add it to a video for you.',
+      'Name plate with a role line — a 1920×1080 transparent PNG for OBS or your editor. imagii does not add it to a video for you. The sample name and role do not export until you type your own.',
     category: 'lower-third',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -147,8 +147,8 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       background: 'transparent',
       layers: [
         rect('Plate', 80, 900, 720, 100, 'rgba(18,12,12,0.85)', '#ff3131', 2, 14),
-        txt('Name', 108, 920, 'Your Name', 38, '#ffffff'),
-        txt('Role', 108, 968, 'Your role · @handle', 18, '#ff3131')
+        asHint(txt('Name', 108, 920, 'Your Name', 38, '#ffffff')),
+        asHint(txt('Role', 108, 968, 'Your role · @handle', 18, '#ff3131'))
       ]
     }
   },
@@ -157,7 +157,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'scene-brb',
     name: 'BRB screen',
-    description: '1920×1080 full-screen "be right back" screen with your handle.',
+    description: '1920×1080 full-screen "be right back" screen with your handle. The sample handle does not export until you type your own.',
     category: 'scene-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -175,7 +175,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'scene-starting-soon',
     name: 'Starting soon',
-    description: '1920×1080 pre-stream waiting screen with a static "0:00" countdown to replace.',
+    description: '1920×1080 pre-stream waiting screen with a static countdown. The sample "0:00" does not export until you type your own.',
     category: 'scene-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -186,14 +186,14 @@ export const ASSET_CATALOG: CatalogAsset[] = [
         txt('Title', 200, 380, 'STARTING SOON', 130, '#ffffff', 'Impact, Inter, sans-serif'),
         txt('Sub', 200, 540, 'Stretch, grab water, settle in.', 36, '#ff3131'),
         rect('CountdownBg', 200, 660, 360, 120, 'rgba(255,49,49,0.18)', '#ff3131', 2, 14),
-        txt('Countdown', 240, 690, '0:00', 80, '#ff3131', 'Impact, Inter, sans-serif')
+        asHint(txt('Countdown', 240, 690, '0:00', 80, '#ff3131', 'Impact, Inter, sans-serif'))
       ]
     }
   },
   {
     id: 'scene-ending',
     name: 'Stream ending',
-    description: '1920×1080 goodbye screen with a thank-you and a socials line to fill in.',
+    description: '1920×1080 goodbye screen with a thank-you and a socials line. The sample socials line does not export until you type your own.',
     category: 'scene-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -213,7 +213,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'frame-clean-corner-2k',
     name: 'Clean corner frame (2K)',
-    description: '2560×1440 transparent PNG for OBS — the 1080p frame, for 1440p streams.',
+    description: '2560×1440 transparent PNG for OBS — the 1080p frame, for 1440p streams. The sample handle does not export until you type your own.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -231,7 +231,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'frame-clean-corner-4k',
     name: 'Clean corner frame (4K)',
-    description: '3840×2160 transparent PNG for OBS — the 1080p frame, for 4K capture.',
+    description: '3840×2160 transparent PNG for OBS — the 1080p frame, for 4K capture. The sample handle does not export until you type your own.',
     category: 'overlay-frame',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -251,7 +251,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
   {
     id: 'social-square-clip',
     name: 'Square clip card',
-    description: '1080×1080 square — a title bar and a 9:16 well for a vertical clip. The well and its label do not export.',
+    description: '1080×1080 square — a title bar and a 9:16 well for a vertical clip. The well and its label do not export. The sample title does not export until you type your own.',
     category: 'social-card',
     license: 'CC0 (imagii-authored)',
     doc: {
@@ -260,7 +260,7 @@ export const ASSET_CATALOG: CatalogAsset[] = [
       background: '#1c1313',
       layers: [
         rect('Title bar', 0, 0, 1080, 140, '#ff3131'),
-        txt('Title', 60, 40, 'CLIP TITLE HERE', 60, '#120c0c', 'Impact, Inter, sans-serif'),
+        asHint(txt('Title', 60, 40, 'CLIP TITLE HERE', 60, '#120c0c', 'Impact, Inter, sans-serif')),
         // T-91: the well was 520 wide — 13:20, not the 9:16 the description
         // promised. 450 x 800 is 9:16 exactly (and 315 keeps it centered), so a
         // vertical clip scaled to the well's height fills it with no bars.

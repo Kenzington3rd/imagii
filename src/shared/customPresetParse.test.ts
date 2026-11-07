@@ -64,7 +64,7 @@ describe('parseCustomPreset', () => {
     ).toBeNull()
   })
 
-  it('returns null when basePlatformId is not one of the five platforms (T-50)', () => {
+  it('returns null when basePlatformId is not one of the built-in presets (T-50)', () => {
     // A hand-edited file used to pass this field through as any non-empty
     // string; the manager list and the export grid then looked the platform
     // table up by it and read a property off `undefined`.
@@ -77,7 +77,7 @@ describe('parseCustomPreset', () => {
   })
 
   it('accepts every real platform as a base', () => {
-    for (const id of ['youtube', 'reels', 'tiktok', 'twitter', 'facebook']) {
+    for (const id of ['youtube', 'youtube60', 'reels', 'tiktok', 'twitter', 'facebook']) {
       const p = parseCustomPreset(JSON.stringify({ ...JSON.parse(valid), basePlatformId: id }))
       expect(p?.basePlatformId, id).toBe(id)
     }

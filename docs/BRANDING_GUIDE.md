@@ -51,9 +51,10 @@ corporation, not a hype machine.
 - **Warm, not cutesy.** Encouraging is good; baby-talk and exclamation
   spam are not.
 - **Honest about limits.** If a feature has a caveat, say it. "Off =
-  save as WebM (instant, but some apps don't accept WebM)." Copy
-  promises only what the code does: a fixed crop is a "center crop", not
-  an "auto" reframe; SafeSearch is DuckDuckGo's filter, not ours (T-85).
+  save as WebM (quick, but some apps don't accept WebM)." Copy
+  promises only what the code does: a fixed strip is "Reframe to 9:16", not
+  an "auto" reframe (and not a "center crop" either, since T-124 let the person
+  place it Left or Right); SafeSearch is DuckDuckGo's filter, not ours (T-85).
 - **Action-first in controls.** Buttons are verbs: "Start recording",
   "Save project", "Export".
 - **No emoji in the product UI** (see `STYLE_GUIDE.md`). Emoji are
@@ -67,13 +68,20 @@ corporation, not a hype machine.
   or deleted." The raw message (ffmpeg's stderr, an errno, a validator's
   field path) never reaches the toast — it goes to the console. A cancel is
   not an error: say it was canceled, neutrally, and say what survived
-  ("Export canceled. Files already finished are in your folder."). Spell it
-  "canceled".
+  ("Export canceled. Files already finished are in your folder.") - where
+  something did. A cancel with nothing finished says only that it was
+  canceled ("Export canceled."): a folder sentence there sends the person to
+  look for files that were never written (`exportCanceledMessage`,
+  `kitCanceledMessage`). Spell it "canceled".
 - A crash screen says what is safe and where it is, and never asks the user
-  to "report" anything — a local-first app has no channel to report to.
+  to "report" anything — a local-first app has no channel to report to. Where it
+  is must be true of the recovery the button does: **Reload to Home** changes the
+  screen and rebuilds nothing, so the sentence is "Your work is still open in its
+  studios" (T-125), not that it is waiting on Home.
 - Empty states invite the next action: "Drop a video here".
 - A tutorial step names a control exactly as the screen does ("Duck under
-  primary", not "Duck under voice"), says what the code does and no more,
+  your voice", not a shortened or an older name for it), says what the code
+  does and no more,
   and is two short sentences in plain words: "loudness", not "LUFS"; "the
   captions engine", not a binary's name. No "New:" tags — a shipped feature
   is not new — and no "Step 4:" numbers; the coachmark counts, and a step
@@ -87,7 +95,10 @@ corporation, not a hype machine.
 The rules a sentence on screen is held to. The voice above says how imagii
 sounds; this section says what each thing is CALLED and how a label is
 written, so two panels never name one idea two ways. `tests/unit/copyConventions.test.ts`
-scans the renderer's rendered strings for the mechanical half of it.
+scans the renderer's rendered strings for the mechanical half of it, and every string literal in the renderer,
+main, shared and preload for the two rules about words alone (US spelling, never "tick" a box: T-116 -
+"untick" sat in a main-process sentence for a round because nothing read there; T-172 - and in a renderer
+helper's returned string and a constant a toast interpolates, which the rendered-strings scan does not read).
 
 ### One name per concept
 
@@ -100,8 +111,10 @@ scans the renderer's rendered strings for the mechanical half of it.
 | **chat spike** | hype moment, chat peak | A burst of messages the Chat spike finder found. |
 | **clip** | segment, excerpt | A Video Studio unit: a trimmed range with its own export targets. |
 | **cut** | | An Audio Studio unit: a part removed when you export. |
+| **mark** | cut tag | What a cut looks like on the waveform and in its chip. The shading is the mark and is pointer-transparent (T-61); its **chip** under the waveform is the control that puts it back, so the hint ("Click its chip below to put it back"), the tutorial, the shortcut overlay ("Click a cut's chip") and both refusals (a damaged cut, and everything cut) name the chip, never "Click a mark" (T-169; T-121 said "Click a mark"). |
 | **Mood board** | Moodboard, collection | A saved set of references (two words). |
-| **Posting log** | posting diary, diary | The list of where a clip was posted. The feature and its list are both "Posting log". |
+| **Reference Search**, **Mood Boards**, **Asset Library** | Reference search, Mood boards, Asset library | The three tabs of References. Feature names used as proper names keep their capitals, as **Reference Search** does in the local-first promise above; a saved set in a sentence is still a "mood board" (T-160). |
+| **Posting log** | posting diary, diary | The list of where a clip was posted. The feature is "Posting log"; its list is headed "Logged posts (N)" (the copy sweep's deliberate choice, a header that counts what it holds), so the two names are not drifting. |
 | **Title starters** | title ideas, title generator | The posting helper that builds four title drafts. |
 | **Clip Kit** | clip kit, Clip kit | One clip exported for all five platforms plus thumbnails. |
 | **Reframe to 9:16** | Auto-reframe, smart crop | A fixed vertical strip. It tracks nothing. |
@@ -126,6 +139,9 @@ scans the renderer's rendered strings for the mechanical half of it.
 - **Units are spaced and spelled the same way everywhere**: "30 fps" (not
   "30fps"), "8 Mbps", "192 kbps", "480 px", "3 s". A bare number is not a
   value: "30" beside a "Width" label is ambiguous, "480 px" is not.
+- **A size is written with ×, not the letter x** (T-131 (15)): "1280×720",
+  "28×28", "2× scale", "1920 × 1080" (spacing per label is the label's own).
+  `copyConventions.test.ts` fails on a digit-x-digit in anything rendered.
 - **A label names the thing, not its internal id.** "Long loud stretch", not
   `sustained-loud`; "Video h264 · audio aac", not "h264 · aac"; the first 3
   seconds' loudness, not "LUFS". Where a number genuinely needs the unit
@@ -142,7 +158,7 @@ SAME verb, and the toast that follows uses its past tense.
 |---|---|---|
 | **Delete** | Destroy something saved under its own name. It always asks first, and says so when Ctrl+Z can bring it back. | Delete preset, Delete board, Delete a posting-log entry |
 | **Remove** | Take one item out of what you are editing. It lives in the document, so Undo puts it back. | Remove clip, Remove layer, Remove overlay |
-| **Clear** | Empty something that stays: the file or cache is still there, with nothing in it. | Clear the autosave, Clear thumbnail cache |
+| **Clear** | Empty something that stays: the file or cache is still there, with nothing in it. | Clear the autosave, Clear thumbnail cache, Clear saved transcripts |
 | **Discard** | Abandon something that was never saved. | Discard the recording, Close this video (its edits are discarded) |
 
 ### Toasts
@@ -154,13 +170,27 @@ SAME verb, and the toast that follows uses its past tense.
   follow it (see `STYLE_GUIDE.md`).
 - **The completion verb is "Saved" or "Exported"**, plus what and, where it
   helps, where: "Saved the GIF", "Exported 4 files". Never "done", "finished" or
-  "ready" for a file that was written.
+  "ready" for a file that was written. When the runner may have numbered the name
+  (`name (2).gif`), the toast names the file it wrote: "Saved clip_480px_15fps (2).gif" (T-112).
+- **A row that never ran says "Not run", in neutral ink** (T-112): a batch that stopped at a
+  failure marks the job that failed "Failed" and every job it never reached "Not run" — red is for the one
+  that broke, and "Canceled" stays the user's own word for their own Cancel.
 - **A toast that carries the ONLY way to do something lasts at least 8 s** and
   names the action in full: "Show in folder", never a bare "Show"; "Edit in
-  Video Studio". The default 2 s is a notification, not a place to keep a
-  button. `lib/savedToast.tsx` is the one helper that does this.
-- A canceled job is neutral ("Export canceled.") and says what survived; it is
-  never a red error toast.
+  Video Studio". react-hot-toast's own defaults are a notification, not a place
+  to keep a button: 2 s for a success toast and 4 s for a plain or an error one
+  (`AppToaster` sets no duration, T-123). `lib/savedToast.tsx` is the one helper
+  that does this. The same duration (`ACTION_TOAST_MS`) goes to a plain toast whose
+  sentence is the only place a needed fact is said (T-125): "Cleanup configured. It is
+  applied when you export…" and "Added to canvas as a reference — it won't be in your
+  export" would be gone before a person looking at the screen they just changed read them.
+- **A toast that guards the only copy of a file stays until closed** (T-142): the
+  kept-take toast ("...imagii kept your take in <folder>...") has `duration: Infinity`,
+  "Show in folder" (it does not dismiss, so it works twice) and "Close", the product's one
+  dismiss word. A path in an 8 s toast you cannot select is not a way to the file.
+  `toastKeptTake` in `lib/savedToast.tsx` is the one helper.
+- A canceled job is neutral ("Export canceled.") and says what survived, when
+  something did; it is never a red error toast.
 
 ### Voice
 
@@ -202,7 +232,8 @@ canonical values live in `tailwind.config.js` +
 
 The app icon lives in `resources/icon.png` / `icon.ico` (generated by
 `scripts/build-icon.mjs`). The in-app wordmark is simply the lowercase
-text "imagii" in Inter Semibold. There is no separate logomark beyond
+text "imagii" in Inter Semibold (Inter ships with the app: DESIGN_GUIDE, Font).
+There is no separate logomark beyond
 the app icon.
 
 ---

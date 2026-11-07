@@ -1,8 +1,13 @@
+import { useRef } from 'react'
 import toast from 'react-hot-toast'
 import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
-import { DEFAULT_DUCK_PARAMS } from '@shared/audio'
+import { DEFAULT_DUCK_PARAMS, SECOND_TRACK_PICK_NO_SOUND_MESSAGE, isNoAudioStreamError } from '@shared/audio'
+import { ERROR_TOAST_MS } from '@shared/userFacingError'
+import { readoutText } from '@shared/units'
 import { useAudioStore } from './state/audioStore'
+import { useGestureEnd } from '../../lib/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
+import { claimFirst } from '../../lib/claimFirst'
 
 const ROLE_OPTIONS: Array<{
   value: SecondaryTrackRole
@@ -42,35 +47,56 @@ function fileNameFromPath(p: string): string {
 export function SecondaryTrackPanel(): JSX.Element {
   const secondary = useAudioStore((s) => s.chain.secondaryTrack)
   const setSecondaryTrack = useAudioStore((s) => s.setSecondaryTrack)
+  const gesture = useGestureEnd(useAudioStore((s) => s.endGesture))
+
+  // T-131 (5): one chooser at a time across the three role buttons. A double-click on one opened two, and the second answer silently
+  // REPLACED the track the first had just added (with the second role's gain and duck defaults, if it landed on another button).
+  const pickingRef = useRef(false)
 
   async function pickAndAdd(role: SecondaryTrackRole): Promise<void> {
-    const filePath = await window.api.audio.pickFile()
-    if (!filePath) return
-    const opt = ROLE_OPTIONS.find((o) => o.value === role)
-    if (!opt) return
-    setSecondaryTrack({
-      filePath,
-      fileName: fileNameFromPath(filePath),
-      role,
-      gainDb: opt.defaultGain,
-      duckUnderPrimary: opt.defaultDuck
+    await claimFirst(pickingRef, async () => {
+      const filePath = await window.api.audio.pickFile()
+      if (!filePath) return
+      const opt = ROLE_OPTIONS.find((o) => o.value === role)
+      if (!opt) return
+      // T-135 (11): the file is looked at when it is picked. One with no sound stream can never be mixed (the export's `[1:a]` reference to it died
+      // late, after a minutes-long loudness pass, in a sentence about the source), so it is refused here by what it is. ONLY that verdict refuses:
+      // a probe that could not read a LENGTH (a streamed WebM) or failed another way is no verdict on the file - ffmpeg mixes those - and the
+      // export looks again. T-136 (10): the sentence is the pick's own - nothing was added, so it does not tell the person to remove anything.
+      try {
+        await window.api.audio.probe(filePath)
+      } catch (err) {
+        if (isNoAudioStreamError(err)) {
+          toast.error(SECOND_TRACK_PICK_NO_SOUND_MESSAGE, { duration: ERROR_TOAST_MS })
+          return
+        }
+      }
+      setSecondaryTrack({
+        filePath,
+        fileName: fileNameFromPath(filePath),
+        role,
+        gainDb: opt.defaultGain,
+        duckUnderPrimary: opt.defaultDuck
+      })
+      toast.success(`${opt.label} added`)
     })
-    toast.success(`${opt.label} added`)
   }
 
-  function update(patch: Partial<NonNullable<typeof secondary>>): void {
+  // T-147 (T-78): a slider passes its control's `key` and a drag on it is ONE undo step; a checkbox passes none and is a step of its own.
+  function update(patch: Partial<NonNullable<typeof secondary>>, key?: string): void {
     if (!secondary) return
-    setSecondaryTrack({ ...secondary, ...patch })
+    setSecondaryTrack({ ...secondary, ...patch }, key)
   }
 
-  function updateDuck(patch: Partial<DuckingParams>): void {
+  function updateDuck(patch: Partial<DuckingParams>, key: string): void {
     if (!secondary) return
     const current = secondary.duckParams ?? DEFAULT_DUCK_PARAMS
-    setSecondaryTrack({ ...secondary, duckParams: { ...current, ...patch } })
+    setSecondaryTrack({ ...secondary, duckParams: { ...current, ...patch } }, key)
   }
 
   return (
-    <div className="card p-4 flex flex-col gap-3" data-tutorial="audio-music">
+    // The card closes the gesture on pointer up and on blur (`useGestureEnd`, ColorGradePanel's pair): one handler for the gain, the four ducking sliders and the checkboxes.
+    <div className="card p-4 flex flex-col gap-3" data-tutorial="audio-music" {...gesture}>
       <PanelHeader icon="audio">Add a second track</PanelHeader>
       {!secondary ? (
         <>
@@ -93,12 +119,14 @@ export function SecondaryTrackPanel(): JSX.Element {
         </>
       ) : (
         <div className="flex flex-col gap-3 text-sm">
-          <div className="flex items-center justify-between">
-            <span className="font-medium truncate">
+          {/* T-126 (12): the name is what gives (it truncates); the button keeps its words on one line instead of being squeezed to two. */}
+          <div className="flex items-center justify-between gap-2">
+            {/* T-127 (15): a name that is cut with an ellipsis carries its whole self as its tooltip (the folder chip's rule). */}
+            <span className="font-medium truncate" title={`${ROLE_OPTIONS.find((o) => o.value === secondary.role)?.label}: ${secondary.fileName}`}>
               {ROLE_OPTIONS.find((o) => o.value === secondary.role)?.label}: {secondary.fileName}
             </span>
             <button
-              className="text-ink-dim hover:text-danger text-xs px-2"
+              className="shrink-0 whitespace-nowrap text-ink-dim hover:text-danger text-xs px-2"
               onClick={() => setSecondaryTrack(null)}
             >
               ✕ Remove
@@ -112,13 +140,16 @@ export function SecondaryTrackPanel(): JSX.Element {
               max={12}
               step={0.5}
               value={secondary.gainDb}
-              onChange={(e) => update({ gainDb: Number(e.target.value) })}
-              className="flex-1"
+              onChange={(e) => update({ gainDb: Number(e.target.value) }, 'secondary.gain')}
+              className="flex-1 min-w-0"
               // M11 fix (round 15)
               aria-label="Secondary track gain in decibels"
               aria-valuetext={`${secondary.gainDb >= 0 ? '+' : ''}${secondary.gainDb.toFixed(1)} decibels`}
             />
-            <span className="text-xs font-mono w-12 text-right">
+            {/* T-126 (12): "-10.0 dB" is eight characters of mono; w-12 wrapped it to two lines at every window size. It is never squeezed or
+                wrapped now, and a monospace face wider than Consolas (58 px of it in a 56 px box on Linux) widens the box instead of cutting the
+                text, so the width is a floor (`min-w`), not a fixed size. */}
+            <span className="text-xs font-mono min-w-[3.5rem] shrink-0 whitespace-nowrap text-right">
               {secondary.gainDb >= 0 ? '+' : ''}
               {secondary.gainDb.toFixed(1)} dB
             </span>
@@ -149,7 +180,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={0}
                 step={1}
                 value={secondary.duckParams?.thresholdDb ?? DEFAULT_DUCK_PARAMS.thresholdDb}
-                onChange={(thresholdDb) => updateDuck({ thresholdDb })}
+                onChange={(thresholdDb) => updateDuck({ thresholdDb }, 'secondary.threshold')}
                 hint="How loud your voice has to be before this track starts to dip."
               />
               <DuckSlider
@@ -159,7 +190,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={20}
                 step={0.5}
                 value={secondary.duckParams?.ratio ?? DEFAULT_DUCK_PARAMS.ratio}
-                onChange={(ratio) => updateDuck({ ratio })}
+                onChange={(ratio) => updateDuck({ ratio }, 'secondary.ratio')}
                 hint="How far this track dips (8:1 is a strong dip)."
               />
               <DuckSlider
@@ -169,7 +200,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={200}
                 step={1}
                 value={secondary.duckParams?.attackMs ?? DEFAULT_DUCK_PARAMS.attackMs}
-                onChange={(attackMs) => updateDuck({ attackMs })}
+                onChange={(attackMs) => updateDuck({ attackMs }, 'secondary.attack')}
                 hint="How fast this track dips once you start talking."
               />
               <DuckSlider
@@ -179,15 +210,19 @@ export function SecondaryTrackPanel(): JSX.Element {
                 max={2000}
                 step={10}
                 value={secondary.duckParams?.releaseMs ?? DEFAULT_DUCK_PARAMS.releaseMs}
-                onChange={(releaseMs) => updateDuck({ releaseMs })}
+                onChange={(releaseMs) => updateDuck({ releaseMs }, 'secondary.release')}
                 hint="How fast this track comes back up once you stop talking."
               />
             </div>
           ) : null}
-          <p className="text-xs text-ink-dim">
-            This track dips whenever you talk, so your voice cuts through on its own.
-            Common for music beds.
-          </p>
+          {/* T-122: the sentence is a promise about the export, and only Duck builds a
+              sidechaincompress; "Second mic" defaults Duck off and said it dipped anyway. */}
+          {secondary.duckUnderPrimary ? (
+            <p className="text-xs text-ink-dim">
+              This track dips whenever you talk, so your voice cuts through on its own.
+              Common for music beds.
+            </p>
+          ) : null}
         </div>
       )}
     </div>
@@ -209,11 +244,10 @@ function DuckSlider(props: DuckSliderProps): JSX.Element {
   const { label, unit, min, max, step, value, onChange, hint } = props
   return (
     <label className="flex flex-col gap-0.5" title={hint}>
-      <div className="flex items-center justify-between">
+      {/* T-126 (12): the label and the readout are 1 px apart at 2560 without a gap; one formatter draws the readout and names the value. */}
+      <div className="flex items-center justify-between gap-2">
         <span className="text-ink-muted">{label}</span>
-        <span className="font-mono text-ink-base">
-          {value} {unit}
-        </span>
+        <span className="font-mono text-ink-base whitespace-nowrap">{readoutText(value, unit)}</span>
       </div>
       <input
         type="range"
@@ -224,7 +258,7 @@ function DuckSlider(props: DuckSliderProps): JSX.Element {
         onChange={(e) => onChange(Number(e.target.value))}
         // M11 fix (round 15)
         aria-label={label}
-        aria-valuetext={`${value} ${unit}`}
+        aria-valuetext={readoutText(value, unit)}
       />
     </label>
   )

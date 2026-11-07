@@ -5,11 +5,28 @@ import { resolveExportPreset } from './presets'
 import { buildVideoFilter, buildAudioSpeedFilter } from './filters'
 import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
+import { CancelLatch, type LatchRun } from './cancelLatch'
+import { finishPartial, partialPathFor } from './partialOutput'
+import { FFMPEG_EMPTY_OUTPUT, PictureFrames, exportNoPictureMessage, wroteNoPicture } from './noPicture'
+import { ensureOutputDir, nextFreePath } from './outputPath'
+import { clipSpeed } from '../../shared/clip'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
 
 export type ProgressListener = (p: ExportProgress) => void
 
 const activeJobs = new Map<string, ChildProcess>()
+// T-98: a run per job (its probe is a pre-spawn await a Cancel must reach) and
+// one per batch (the instant between one job and the next).
+const latch = new CancelLatch()
+
+/**
+ * The run a batch holds open for as long as it works. `video:exportBatch` asks
+ * it before every job, so a Cancel that lands between two jobs — when no child
+ * is alive to kill — still stops the jobs that have not started.
+ */
+export function beginExportBatch(): LatchRun {
+  return latch.begin()
+}
 
 function safeFileBase(name: string): string {
   return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'clip'
@@ -26,19 +43,32 @@ export async function runExportJob(
   job: ExportJobSpec,
   onProgress: ProgressListener
 ): Promise<ExportResult> {
+  const run = latch.begin(job.jobId)
+  try {
+    return await encodeJob(job, onProgress, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function encodeJob(
+  job: ExportJobSpec,
+  onProgress: ProgressListener,
+  run: LatchRun
+): Promise<ExportResult> {
   // T-50: a job that carries a custom preset encodes at ITS geometry and
   // bitrates. The resolved preset is a full PlatformPreset, so every filter
   // and flag below reads it exactly as it read the platform row.
   const preset = resolveExportPreset(job.preset, job.customPreset)
-  const probe = await probeVideo(job.sourcePath)
-  const source = { width: probe.width, height: probe.height }
+  // T-98: the probe is where a Cancel pressed between two jobs lands.
+  const probe = await run.guard(probeVideo(job.sourcePath))
+  const source = { width: probe.width, height: probe.height, colorSpace: probe.colorSpace }
   const filterChain = buildVideoFilter(job.clip, preset, source, job.watermark)
-  const speedForDuration =
-    job.clip.speedMultiplier && job.clip.speedMultiplier > 0 ? job.clip.speedMultiplier : 1
+  const speed = clipSpeed(job.clip)
   // Progress is measured against OUTPUT time (ffmpeg's out_time), and a
   // 2x-speed clip produces half as much output — divide by the speed or
   // the bar stalls at 50% until the job completes (round 18).
-  const clipDuration = Math.max(0.1, (job.clip.endSec - job.clip.startSec) / speedForDuration)
+  const clipDuration = Math.max(0.1, (job.clip.endSec - job.clip.startSec) / speed)
 
   const sourceBase = path.parse(job.sourcePath).name
   // The fallback name has to distinguish two custom presets sharing a base
@@ -48,10 +78,14 @@ export async function runExportJob(
     job.outputFilename && job.outputFilename.trim()
       ? job.outputFilename
       : `${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}_${presetTag}.mp4`
-  const outputPath = path.join(job.outDir, outputName)
+  // T-106: the name the settings give is the name WANTED. A file already there is
+  // somebody's earlier export, and this job writes beside it, not over it.
+  // T-125 (10): the folder is there before the name is chosen (a remembered one may have been deleted or live on an unplugged drive).
+  await run.guard(ensureOutputDir(job.outDir))
+  const wanted = await run.guard(nextFreePath(path.join(job.outDir, outputName)))
+  // T-140 (1): ffmpeg writes a partial beside the name chosen, and the partial is swapped in only when the encode is whole (`partialOutput.ts`).
+  const partial = partialPathFor(wanted)
 
-  const speed =
-    job.clip.speedMultiplier && job.clip.speedMultiplier > 0 ? job.clip.speedMultiplier : 1
   const audioSpeed = buildAudioSpeedFilter(speed)
 
   const args: string[] = [
@@ -86,20 +120,27 @@ export async function runExportJob(
     '-progress',
     'pipe:1',
     '-nostats',
-    outputPath
+    partial
   )
 
   const startedAt = Date.now()
 
-  return new Promise<ExportResult>((resolve, reject) => {
+  const finished = new Promise<void>((resolve, reject) => {
+    // T-98: the last look before the child exists. A throw here rejects the job.
+    run.check()
     const child = spawn(ffmpegPath, args, { windowsHide: true })
     activeJobs.set(job.jobId, child)
 
     let stderrBuffer = ''
     let lastEmitted = 0
+    // T-132 (4): did ffmpeg write a picture? Its exit code does not say (a range past the picture exits 0 with a streamless stub or an
+    // audio-only mp4): the progress block's final frame count and the "Output file is empty" line do. Sticky, like the compile's guard.
+    const frames = new PictureFrames()
+    let sawEmptyOutput = false
 
     child.stdout.setEncoding('utf8')
     child.stdout.on('data', (chunk: string) => {
+      frames.feed(chunk)
       const lines = chunk.split(/\r?\n/)
       let timemark: string | undefined
       let fps: number | undefined
@@ -125,6 +166,7 @@ export async function runExportJob(
     child.stderr.setEncoding('utf8')
     child.stderr.on('data', (chunk: string) => {
       stderrBuffer += chunk
+      sawEmptyOutput ||= FFMPEG_EMPTY_OUTPUT.test(stderrBuffer)
       if (stderrBuffer.length > 16384) stderrBuffer = stderrBuffer.slice(-16384)
     })
 
@@ -135,13 +177,11 @@ export async function runExportJob(
 
     child.on('close', (code) => {
       activeJobs.delete(job.jobId)
-      if (code === 0) {
-        onProgress({ jobId: job.jobId, percent: 100 })
-        resolve({
-          jobId: job.jobId,
-          outputPath,
-          durationMs: Date.now() - startedAt
-        })
+      if (code === 0 && wroteNoPicture(sawEmptyOutput, frames)) {
+        // T-132 (4): exit 0 and no picture: `finishPartial` (below) drops the stub, like any failed job's output.
+        reject(new Error(exportNoPictureMessage(job.clip)))
+      } else if (code === 0) {
+        resolve()
       } else {
         // T-84: a child the cancel functions below killed rejects with the
         // sentinel; one that died by itself keeps its exit-code error.
@@ -149,17 +189,14 @@ export async function runExportJob(
       }
     })
   })
-}
-
-export function cancelExportJob(jobId: string): boolean {
-  const child = activeJobs.get(jobId)
-  if (!child) return false
-  killAsCancelled(child)
-  activeJobs.delete(jobId)
-  return true
+  // T-100: the half-written file is this job's wreckage; earlier jobs' files stay. The 100% and the result are announced once the file is THERE.
+  const { outputPath } = await finishPartial(finished, { run, partial, target: wanted, mode: 'beside' })
+  onProgress({ jobId: job.jobId, percent: 100 })
+  return { jobId: job.jobId, outputPath, durationMs: Date.now() - startedAt }
 }
 
 export function cancelAllExportJobs(): void {
+  latch.cancelAll()
   for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
 }

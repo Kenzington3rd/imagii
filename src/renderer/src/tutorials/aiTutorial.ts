@@ -28,7 +28,7 @@ export const aiTutorial: TutorialDef = {
     {
       id: 'done',
       title: 'All set',
-      body: 'The ? button in the header replays this tour any time.',
+      body: 'The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on.',
       placement: 'center'
     }
   ]

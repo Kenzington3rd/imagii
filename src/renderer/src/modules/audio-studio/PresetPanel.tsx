@@ -1,11 +1,13 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import type { ChainSpec } from '@shared/audio'
 import { cleanupSettings } from '@shared/audioPreset'
 import type { ChainPreset } from '@shared/workspace'
 import { useAudioStore } from './state/audioStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 
 /**
  * What Apply puts on the recording in front of the user (T-90): the preset's
@@ -22,6 +24,10 @@ export function PresetPanel(): JSX.Element {
   const patchChain = useAudioStore((s) => s.patchChain)
   const [presets, setPresets] = useState<ChainPreset[]>([])
   const [name, setName] = useState('')
+  // T-139 (9): one save at a time. `savingRef` is the claim (raised before the first await, so a held Enter in the box cannot start a second write either);
+  // `saving` is what the button draws while the write is out.
+  const savingRef = useRef(false)
+  const [saving, setSaving] = useState(false)
 
   async function refresh(): Promise<void> {
     // Round 18: swallow-and-report instead of letting a rejection escape the
@@ -29,8 +35,9 @@ export function PresetPanel(): JSX.Element {
     try {
       const list = await window.api.audio.listPresets()
       setPresets(list)
-    } catch {
-      toast.error('Could not load saved presets')
+    } catch (err) {
+      // T-164 (3): a finished sentence like its siblings' ("Couldn't save that preset."), with the cause when main gave one.
+      reportFailure(err, { failed: "Couldn't load your saved presets." })
     }
   }
 
@@ -39,6 +46,17 @@ export function PresetPanel(): JSX.Element {
   }, [])
 
   async function save(): Promise<void> {
+    await claimFirst(savingRef, async () => {
+      setSaving(true)
+      try {
+        await saveOnce()
+      } finally {
+        setSaving(false)
+      }
+    })
+  }
+
+  async function saveOnce(): Promise<void> {
     const trimmed = name.trim()
     if (!trimmed) {
       toast.error('Name your preset first')
@@ -81,11 +99,27 @@ export function PresetPanel(): JSX.Element {
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && save()}
+          // T-140 (7): a held Enter is ONE save. The first press saves and clears the box; each auto-repeat after it found no name and raised the red "Name your preset
+          // first" (the held-key class: T-120, T-133 (7), T-134 - a repeat is not a new decision).
+          onKeyDown={(e) => e.key === 'Enter' && !e.repeat && save()}
           placeholder="My mic preset"
           className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 text-xs"
         />
-        <button className="btn-primary px-3 py-1 text-xs" onClick={save}>
+        {/* T-139 (9): the second press of a double-click is not a second preset (a repeat), nor a "Name your preset first" after the first cleared the box.
+            T-140 (8): `aria-disabled` and not `disabled` while the write is out. A disabled button the keyboard just pressed is blurred by Chromium and focus falls to
+            the page, so a person who saved with Enter or Space lost their place; an aria-disabled one keeps focus and is still announced as off. It takes the press
+            all the same, and the press is a no-op: `save()` is the claim (`savingRef`), which is up for as long as `saving` is. */}
+        <button
+          className="btn-primary px-3 py-1 text-xs aria-disabled:opacity-50"
+          onClick={(e) => {
+            if (isRepeatPress(e)) return
+            void save()
+          }}
+          // T-141 (4): and a HELD Enter is one press. `aria-disabled` keeps the focus on this button (T-140 (8)), so the key's auto-repeats are keyboard clicks on it (`detail` 0,
+          // which `isRepeatPress` lets through); after the first save cleared the name each one raised the red "Name your preset first". A repeat is not a decision.
+          onKeyDown={ignoreHeldEnter}
+          aria-disabled={saving}
+        >
           Save current
         </button>
       </div>
@@ -100,7 +134,7 @@ export function PresetPanel(): JSX.Element {
               key={p.id}
               className="flex items-center gap-2 px-2 py-1.5 bg-bg-hover rounded text-xs"
             >
-              <span className="flex-1 truncate font-medium">{p.name}</span>
+              <span className="flex-1 truncate font-medium" title={p.name}>{p.name}</span>
               <button
                 className="text-accent hover:underline"
                 onClick={() => apply(p)}

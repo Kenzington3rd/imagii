@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  anyDialogClaim,
   isTopmostClaim,
   isTopDialogClaim,
   pushDialogClaim,
@@ -99,5 +100,44 @@ describe('the claim stack', () => {
     releaseDialogClaim(only)
     releaseDialogClaim(only)
     expect(isTopDialogClaim(only)).toBe(false)
+  })
+})
+
+/**
+ * T-75 (T-147): the studios' hotkeys stand down for ANY open dialog, the tutorial coachmark included. `Modal.openModalCount()` leaves the coachmark out (so the
+ * `?` overlay stays pressable during a tutorial), which let the tool letters, Delete and Ctrl+Z reach the canvas behind its scrim. Both `<Modal>` and the coachmark
+ * take a claim through `useFocusTrap`, so the claim stack is the reader that sees every dialog.
+ */
+describe('anyDialogClaim', () => {
+  it('is false with nothing open, true while any claim is held, false again once the last is released', () => {
+    expect(anyDialogClaim()).toBe(false)
+    const coachmark = pushDialogClaim()
+    expect(anyDialogClaim()).toBe(true)
+    releaseDialogClaim(coachmark)
+    expect(anyDialogClaim()).toBe(false)
+  })
+
+  it('stays true until EVERY claim is released, in whichever order they go', () => {
+    const first = pushDialogClaim()
+    const second = pushDialogClaim()
+    releaseDialogClaim(first)
+    expect(anyDialogClaim(), 'the one underneath left, the one on top is still a dialog').toBe(true)
+    releaseDialogClaim(second)
+    expect(anyDialogClaim()).toBe(false)
+    const a = pushDialogClaim()
+    const b = pushDialogClaim()
+    releaseDialogClaim(b)
+    expect(anyDialogClaim()).toBe(true)
+    releaseDialogClaim(a)
+    expect(anyDialogClaim()).toBe(false)
+  })
+
+  it('releasing a claim twice, or one that never existed, does not un-guard a dialog that is still open', () => {
+    const open = pushDialogClaim()
+    releaseDialogClaim(9999)
+    releaseDialogClaim(9999)
+    expect(anyDialogClaim()).toBe(true)
+    releaseDialogClaim(open)
+    expect(anyDialogClaim()).toBe(false)
   })
 })

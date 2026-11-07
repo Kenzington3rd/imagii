@@ -2,15 +2,27 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { unlink } from 'node:fs/promises'
 import { ffmpegPath } from '../ffmpeg/paths'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
+import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
+import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
+import { refuseOutputOverInputs } from '../ffmpeg/sameFile'
+import { nextFreePath } from '../ffmpeg/outputPath'
 import {
   aselectForCuts,
   buildChain,
   chainEndsWithLoudnorm,
+  cutsLeaveNothing,
+  EMPTY_CHAIN,
+  keptDurationSec,
   parseLoudnormJson,
   vselectForCuts,
   type LoudnormMeasurement
 } from './chain'
-import { probeAudio } from './probe'
+import { probeAudio, probeAudioChannels } from './probe'
+import { probeVideo, type ProbeResult } from '../ffmpeg/probe'
+import { EVEN_PICTURE } from '../ffmpeg/filters'
+import { canStreamCopyIntoMp4 } from '../../shared/mediaFormats'
+import { cancelAllExtractions, SURROUND_TO_STEREO_FILTER } from './extract'
+import { cancelAllPeaks, cancelPeaksJob } from './peaks'
 import type {
   AudioExportSpec,
   AudioJobProgress,
@@ -19,12 +31,29 @@ import type {
   AudioOutputFormat,
   CutRegion
 } from '../../shared/audio'
-import { DEFAULT_DUCK_PARAMS } from '../../shared/audio'
-import { assert } from '../../shared/assert'
+import {
+  DEFAULT_DUCK_PARAMS,
+  EVERYTHING_CUT_MESSAGE,
+  NoUsableDurationError,
+  SECOND_TRACK_NO_SOUND_MESSAGE,
+  isNoAudioStreamError
+} from '../../shared/audio'
+import { assertAlways } from '../../shared/assert'
 
 export type AudioProgressListener = (p: AudioJobProgress) => void
 
+/**
+ * The last stage of a manual-gain mix (T-111), and since T-123 (10) of a single-track export with any stage in its
+ * chain: peaks above -1 dBFS are limited, nothing below it moves.
+ */
+const MIX_LIMITER = 'alimiter=limit=0.891:level=disabled'
+
 const activeJobs = new Map<string, ChildProcess>()
+// T-98: an export probes the file before its first child, and the picture mux
+// probes the picture (T-131 (2); the cleaned audio when the picture cannot be
+// read) before its own; a Cancel in either wait finds no child, so the run is
+// what it marks.
+const latch = new CancelLatch()
 
 function codecArgsFor(format: AudioOutputFormat, bitrate?: string): string[] {
   switch (format) {
@@ -51,9 +80,13 @@ async function runFfmpegJob(
   totalDuration: number,
   pass: 'measure' | 'render' | 'mux',
   onProgress: AudioProgressListener,
-  collectStderr = false
+  run: LatchRun
 ): Promise<{ stderr: string }> {
-  return new Promise((resolve, reject) => {
+  return new Promise<{ stderr: string }>((resolve, reject) => {
+    run.check()
+    // T-147 (1): a pass names itself the moment it starts. The store keeps the LAST event it was sent, and a pass prints nothing until ffmpeg's first `out_time`
+    // has moved the bar by more than a point, so the row read the pass before (the render's 100% for the whole of a mux that had no total) until then.
+    onProgress({ jobId, pass, percent: 0 })
     const child = spawn(ffmpegPath, args, { windowsHide: true })
     activeJobs.set(jobId, child)
     let stderr = ''
@@ -79,9 +112,12 @@ async function runFfmpegJob(
     })
 
     child.stderr.setEncoding('utf8')
+    // T-137 (8): the same 16 KB tail every other spawn keeps, for EVERY pass. The measure pass used to keep all of it (`collectStderr`, and the cap was
+    // skipped when it was set): an hour of a damaged source's per-packet warnings in memory for a block loudnorm prints LAST and parseLoudnormJson finds
+    // in the tail (the block is under a kilobyte).
     child.stderr.on('data', (chunk: string) => {
-      if (collectStderr || stderr.length < 32768) stderr += chunk
-      if (!collectStderr && stderr.length > 16384) stderr = stderr.slice(-16384)
+      stderr += chunk
+      if (stderr.length > 16384) stderr = stderr.slice(-16384)
     })
 
     child.on('error', (err) => {
@@ -96,24 +132,112 @@ async function runFfmpegJob(
   })
 }
 
+/**
+ * A pass that writes a file the person will keep (the render, the mux): ffmpeg is handed a PARTIAL beside `target` (T-140 (1)), and the target is
+ * replaced by it only when the pass exited 0 and this job has not been cancelled. A render that stopped halfway, or that the person
+ * cancelled, is not their audio, and the file they were replacing is still theirs (`partialOutput.ts`). The argument list ends where the output
+ * path goes: `args` is everything before it, and the partial is added here. The target comes from the Save dialog (or is the re-attach's own
+ * scratch), so it is `replace`: the dialog asked. It answers the path the file LANDED at: `target`, or - when the file there is open in another app and the
+ * swap onto it is refused for good - the next free name beside it (`partialOutput.ts`), which the caller must hand on (the toast, "Show in folder" and the
+ * re-attach's second pass all need the file that exists).
+ */
+async function runFfmpegToFile(
+  args: string[],
+  target: string,
+  jobId: string,
+  totalDuration: number,
+  pass: 'render' | 'mux',
+  onProgress: AudioProgressListener,
+  run: LatchRun
+): Promise<string> {
+  const partial = partialPathFor(target)
+  const { outputPath } = await finishPartial(runFfmpegJob([...args, partial], jobId, totalDuration, pass, onProgress, run), {
+    run,
+    partial,
+    target,
+    mode: 'replace'
+  })
+  return outputPath
+}
+
+/**
+ * T-135 (11): does the second track's file have a sound stream? Only "no sound stream" is the verdict. A stream whose LENGTH the container does not
+ * give (a streamed MediaRecorder WebM) is a file ffmpeg mixes, and any other probe failure (a file that is not there, one that is not media) keeps the
+ * error it would have had: the probe's text carries the same missing-file / damaged-file patterns the export's own failure did.
+ */
+async function assertSecondTrackHasSound(filePath: string, run: LatchRun): Promise<void> {
+  try {
+    await run.guard(probeAudio(filePath))
+  } catch (err) {
+    if (isNoAudioStreamError(err)) throw new Error(SECOND_TRACK_NO_SOUND_MESSAGE)
+    if (err instanceof NoUsableDurationError) return
+    throw err
+  }
+}
+
 export async function runAudioExport(
   spec: AudioExportSpec,
   onProgress: AudioProgressListener
 ): Promise<AudioJobResult> {
+  const run = latch.begin(spec.jobId)
+  try {
+    // T-141 (1): the render is swapped over the Save dialog's name, so a name that is a file this export READS - the source, the second track mixed in - would
+    // replace it (ffmpeg's own refusal went with T-140 (1): it is handed a partial now). Asked first: before the probe, before any spawn. Inside the run, so a
+    // Cancel that lands while the paths resolve is a Cancel (T-98: it is a latch, and the run opens in the call's first synchronous step); the `finally` ends the run
+    // on a refusal, which the quit would otherwise wait on.
+    await run.guard(refuseOutputOverInputs([spec.outputPath], [spec.sourcePath, spec.chain.secondaryTrack?.filePath]))
+    return await exportAudio(spec, onProgress, run)
+  } finally {
+    run.end()
+  }
+}
+
+async function exportAudio(
+  spec: AudioExportSpec,
+  onProgress: AudioProgressListener,
+  run: LatchRun
+): Promise<AudioJobResult> {
   const startedAt = Date.now()
-  const probe = await probeAudio(spec.sourcePath)
+  const probe = await run.guard(probeAudio(spec.sourcePath))
+
+  // T-135 (11), (12): the two refusals that need no encoder, asked before the first child (before the measure pass, which on a long recording is
+  // minutes). A second track with no sound names ITSELF (its `[1:a]` reference dies with "matches no streams", which read as a source / disk
+  // problem), and a chain whose cuts remove everything is refused: ffmpeg exits 0 for it and writes a header-only file.
+  if (spec.chain.secondaryTrack) await assertSecondTrackHasSound(spec.chain.secondaryTrack.filePath, run)
+  if (cutsLeaveNothing(probe.duration, spec.chain.cutRegions)) throw new Error(EVERYTHING_CUT_MESSAGE)
 
   let measurement: LoudnormMeasurement | undefined
 
-  const chain = buildChain(spec.chain)
+  // T-123 (11): a mono source with no second track is exported as the mono file it is, so its loudnorm is
+  // measured as dual mono (the way a stereo playback hears it) on both passes. With a second track the
+  // primary is forced to stereo ahead of the mix's own last stage, which is not told.
+  const dualMono = probe.channels === 1 && !spec.chain.secondaryTrack
+  const chain = buildChain(spec.chain, undefined, dualMono)
+  // T-164 (1): an MP3 holds two channels at most, so ffmpeg folds a surround source in the s16 output conversion, where swresample NORMALISES the matrix (a
+  // front-left tone 7.8 dB down, a centre one 11 dB). The fold is made here instead, in float, as the player's own matrix (extract.ts's `SURROUND_TO_STEREO_FILTER`),
+  // and is the FIRST stage of both passes, so Even volume measures and targets the stereo file that is written. WAV, FLAC and AAC keep the file's channels.
+  // T-173 (2): a primary needs the same fold with a second track, for any format, and the comment that stood here ("with a second track the mix folds both sides itself") was half right. The mix
+  // forces both inputs to stereo (`aresample=48000,aformat=channel_layouts=stereo`); inside the graph that conversion is negotiated to float (`amix` takes nothing else), where swresample's
+  // matrix is not normalised, so the LEVEL is the player's already (executed on 7.0.2 and 6.1.1: the 7.6 dB loss is that same pair run alone into an s16 output). What the mix did not
+  // do was the MEASURING: Even volume and Match loudness measured the voice on its six channels, where BS.1770 weights a surround channel +1.5 dB and the fold drops it at 0.7071, so a
+  // voice on a surround channel landed ~4.5 dB off the balance its stereo twin gets. So a primary of more than two channels is folded by `SURROUND_TO_STEREO_FILTER` as the first
+  // stage of every pass (the measure pass, Match's voice measure and the render). The second track needs no fold of its own: its conversion is the mix's float one (the same matrix) and
+  // its Match loudnorm measures after that stereo conversion. Mono and stereo inputs get no new stage. The channel count is read the way the extract reads it (the most of any stream);
+  // a file it cannot read is left as it was. Whether the chain gets the limiter is decided on the chain below, not on this fold: nothing switched on stays a pass-through.
+  const foldToStereo =
+    (spec.format === 'mp3' || Boolean(spec.chain.secondaryTrack)) && ((await run.guard(probeAudioChannels(spec.sourcePath))) ?? 0) > 2
+  const folded = (filter: string): string => (foldToStereo ? `${SURROUND_TO_STEREO_FILTER},${filter}` : filter)
+  // T-125 (6): ffmpeg's `out_time` is a position in the file this job WRITES, which is the source less its cuts, so that is the
+  // length both bars are measured against (the measure pass is cut-first, like the render).
+  const writtenSeconds = keptDurationSec(probe.duration, spec.chain.cutRegions)
 
-  if (chain.needsTwoPass && chain.filterPass1) {
+  const measure = async (filter: string): Promise<LoudnormMeasurement | null> => {
     const args = [
       '-y',
       '-i',
       spec.sourcePath,
       '-af',
-      chain.filterPass1,
+      filter,
       '-f',
       'null',
       '-progress',
@@ -121,9 +245,27 @@ export async function runAudioExport(
       '-nostats',
       '-'
     ]
-    const { stderr } = await runFfmpegJob(args, spec.jobId, probe.duration, 'measure', onProgress, true)
-    const parsed = parseLoudnormJson(stderr)
+    const { stderr } = await runFfmpegJob(args, spec.jobId, writtenSeconds, 'measure', onProgress, run)
+    return parseLoudnormJson(stderr)
+  }
+
+  if (chain.needsTwoPass && chain.filterPass1) {
+    const parsed = await measure(folded(chain.filterPass1))
     if (parsed) measurement = parsed
+  }
+
+  // T-150 (1): "Match loudness with your voice" with Even volume OFF makes the VOICE the reference, so it is measured (the primary's own chain, cut-first like
+  // the pass above, built by the same pass-1 builder with Even volume switched on for the measuring only) and the music is brought to what it measures. The
+  // target in that chain is only a placeholder for the option's range (a typed -3 would be refused), the measurement is what is read. A mono voice is not
+  // dual-mono here: with a second track it is forced to stereo ahead of the mix, and that upmix keeps its power.
+  let matchedLufs: number | null = null
+  if (spec.chain.secondaryTrack?.matchLoudness === true && !spec.chain.loudnorm) {
+    const voiceChain = buildChain({ ...spec.chain, loudnorm: true, loudnormTargetLufs: -16 })
+    const parsed = voiceChain.filterPass1 ? await measure(folded(voiceChain.filterPass1)) : null
+    const lufs = parsed ? Number(parsed.input_i) : Number.NaN
+    // loudnorm's `I` is -70..-5; a measurement outside it is clamped. parseLoudnormJson answers null for a non-finite one (a silent voice, "-inf"), which leaves
+    // nothing to follow: the music then takes its plain gain, the way it does with Match off, rather than a target made up for it.
+    if (Number.isFinite(lufs)) matchedLufs = Math.min(-5, Math.max(-70, lufs))
   }
 
   const secondary = spec.chain.secondaryTrack
@@ -135,12 +277,17 @@ export async function runAudioExport(
   // drift. Without a secondary track the primary IS the final audio and the
   // cut stays first in its chain, ahead of the loudnorm that should measure
   // only what is kept. (The measure pass above stays cut-first on purpose:
-  // loudnorm is linear there, so a gain measured on the kept audio is the
-  // right constant to apply before or after the cut.)
+  // it measures the audio that is kept. When loudnorm takes its linear mode
+  // - only if the measured LRA is within the target LRA and the shifted true
+  // peak within TP, T-110 (bj) - pass 2 is one constant gain, and a gain
+  // measured on the kept audio is the right constant to apply before or
+  // after the cut; otherwise pass 2 runs dynamic, and the measurement is
+  // still of what is kept.)
   const cutAfterMix = Boolean(secondary)
   const finalChain = buildChain(
     cutAfterMix ? { ...spec.chain, cutRegions: [] } : spec.chain,
-    measurement
+    measurement,
+    dualMono
   )
   const mixCut = cutAfterMix ? aselectForCuts(spec.chain.cutRegions) : null
   const args: string[] = ['-y', '-i', spec.sourcePath]
@@ -151,9 +298,12 @@ export async function runAudioExport(
   if (secondary) {
     const ducking = secondary.duckUnderPrimary
     const gainDb = secondary.gainDb
-    // Match-loudness mode runs both tracks through single-pass loudnorm at the
-    // same target before mixing — handy for co-host mics or game audio that
-    // arrives at very different levels.
+    // Match loudness (T-150 (1)). Two modes, by Even volume:
+    //  - ON: the primary's chain ends in its own loudnorm (to the chosen target) and the second track is brought to the same target; the mix bus
+    //    ends in a loudnorm too (below). Handy for co-host mics or game audio that arrive at very different levels.
+    //  - OFF: the voice is the reference and is left as it is. The Even volume target box is disabled in that state, so no target is read: the second
+    //    track is brought to the voice's own measured loudness (`matchedLufs`, above), the primary gets no loudnorm and the bus ends in the limiter.
+    //    Before T-150 both tracks went to a hidden -16 here and a -22 LUFS voice came out at -16.
     //
     // Bug-fix (Phase 2.9): if ChainSpec.loudnorm is on, finalChain.filterPass2
     // already ends with a measurement-aware loudnorm. Appending a second
@@ -162,19 +312,17 @@ export async function runAudioExport(
     const matchLoudness = secondary.matchLoudness === true
     const target = spec.chain.loudnormTargetLufs ?? -16
     const primaryAlreadyLoudnormed = chainEndsWithLoudnorm(finalChain.filterPass2)
-    const primaryStage =
-      matchLoudness && !primaryAlreadyLoudnormed
-        ? `${finalChain.filterPass2},loudnorm=I=${target}:TP=-1.5:LRA=11`
-        : finalChain.filterPass2
     // M5 fix (round 15): amix requires both inputs at the same sample rate
     // and channel layout. The output is forced to 48 kHz stereo below, so
     // resample + format the secondary first. Without this, a 44.1 kHz music
     // track mixed with a 48 kHz mic either silently auto-resamples (lossy)
     // or fails the filter graph entirely.
     const secondaryNormalize = 'aresample=48000,aformat=channel_layouts=stereo'
-    const secondaryGainOrLoud = matchLoudness
-      ? `${secondaryNormalize},loudnorm=I=${target}:TP=-1.5:LRA=11`
-      : `${secondaryNormalize},volume=${gainDb}dB`
+    const matchTarget = primaryAlreadyLoudnormed ? target : matchedLufs
+    const secondaryGainOrLoud =
+      matchLoudness && matchTarget !== null
+        ? `${secondaryNormalize},loudnorm=I=${matchTarget}:TP=-1.5:LRA=11`
+        : `${secondaryNormalize},volume=${gainDb}dB`
     // Phase 3.2: replace hardcoded sidechain params with duckParams from
     // the SecondaryTrack (falls back to defaults that preserve previous
     // behavior). Threshold is dBFS in the UI; ffmpeg expects linear.
@@ -198,51 +346,62 @@ export async function runAudioExport(
     // two tracks match-loudnessed to the target mixed ~3 LU BELOW it
     // (measured: two -16 LUFS sources → -19 LUFS mix). When the user asked
     // for a loudness target, restore it with a single-pass loudnorm on the
-    // mix bus. Manual-gain mode is left un-normalized on purpose — the
-    // user is gain-staging by hand there.
-    // The cut sits ahead of that mix-bus loudnorm, which should measure only
+    // mix bus.
+    //
+    // T-111: that "1/N" is the number of inputs STILL RUNNING, not the number
+    // that started. A music bed shorter than the voice ends at, say, 3 s, and
+    // from that instant the survivor is scaled by 1 instead of 1/2: the voice
+    // steps up 6 dB in the middle of the recording (measured: -30.1 -> -24.1 dB
+    // in the voice's own band, then the player's loudness jumps with it).
+    // `normalize=0` keeps every input at the weight it was given, so the voice
+    // is one level from the first second to the last and the bed's own gain is
+    // the only thing that sets how loud it sits under it. Summing at full
+    // weight can pass full scale, so the mix bus always ends in a stage that
+    // answers for its peaks: the loudnorm above when a target was asked for
+    // (its true-peak limit is -1.5 dB), otherwise a plain limiter at -1 dBFS.
+    // `level=disabled` matters: alimiter's default re-levels its output back up
+    // toward the limit, which would turn a quiet mix into a loud one.
+    // The cut sits ahead of that last stage, which should measure and limit only
     // what is kept.
     const postMixStages = [
       mixCut,
-      matchLoudness || primaryAlreadyLoudnormed
+      primaryAlreadyLoudnormed
         ? `loudnorm=I=${target}:TP=-1.5:LRA=11`
-        : null
+        : MIX_LIMITER
     ].filter((stage): stage is string => stage !== null)
-    const postMix = postMixStages.length > 0 ? `;[premix]${postMixStages.join(',')}[mix]` : ''
-    const mixLabel = postMix ? '[premix]' : '[mix]'
+    const postMix = `;[premix]${postMixStages.join(',')}[mix]`
+    const amix = `amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1':normalize=0`
     const filterGraph = ducking
-      ? `[0:a]${primaryStage},${primaryNormalize},asplit=2[primary][primary_sc];` +
+      ? `[0:a]${folded(finalChain.filterPass2)},${primaryNormalize},asplit=2[primary][primary_sc];` +
         `[1:a]${secondaryGainOrLoud}[secondary_pre];` +
         `[secondary_pre][primary_sc]sidechaincompress=` +
         `threshold=${thresholdLinear.toFixed(4)}:` +
         `ratio=${dp.ratio}:` +
         `attack=${dp.attackMs}:` +
         `release=${dp.releaseMs}[secondary_ducked];` +
-        `[primary][secondary_ducked]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'${mixLabel}` +
+        `[primary][secondary_ducked]${amix}[premix]` +
         postMix
-      : `[0:a]${primaryStage},${primaryNormalize}[primary];` +
+      : `[0:a]${folded(finalChain.filterPass2)},${primaryNormalize}[primary];` +
         `[1:a]${secondaryGainOrLoud}[secondary];` +
-        `[primary][secondary]amix=inputs=2:duration=longest:dropout_transition=0:weights='1 1'${mixLabel}` +
+        `[primary][secondary]${amix}[premix]` +
         postMix
     args.push('-filter_complex', filterGraph, '-map', '[mix]')
   } else {
-    args.push('-af', finalChain.filterPass2)
+    // T-123 (10): the mix bus above always ends in a stage that answers for its peaks; this path did not
+    // unless Even volume was on, so +12 dB of Manual gain on a -2 dBFS source exported at 0.0 dBFS. A chain
+    // with a stage in it now ends in the same limiter, and a bare 'anull' is still a pass-through (nothing
+    // switched on is the file that went in). Even volume's own last stage is loudnorm, whose true-peak limit
+    // (-1.5 dB) is the answer, so it gets no second one.
+    const limited = !spec.chain.loudnorm && finalChain.filterPass2 !== EMPTY_CHAIN
+    args.push('-af', folded(limited ? `${finalChain.filterPass2},${MIX_LIMITER}` : finalChain.filterPass2))
   }
-  args.push(
-    ...codecArgsFor(spec.format, spec.bitrate),
-    '-ar',
-    '48000',
-    '-progress',
-    'pipe:1',
-    '-nostats',
-    spec.outputPath
-  )
-  await runFfmpegJob(args, spec.jobId, probe.duration, 'render', onProgress)
+  args.push(...codecArgsFor(spec.format, spec.bitrate), '-ar', '48000', '-progress', 'pipe:1', '-nostats')
+  const landed = await runFfmpegToFile(args, spec.outputPath, spec.jobId, writtenSeconds, 'render', onProgress, run)
   onProgress({ jobId: spec.jobId, pass: 'render', percent: 100 })
 
   return {
     jobId: spec.jobId,
-    outputPath: spec.outputPath,
+    outputPath: landed,
     durationMs: Date.now() - startedAt
   }
 }
@@ -253,28 +412,53 @@ export async function runAudioExport(
  * length), pass the same `cutRegions` here and the picture drops them too.
  *
  * T-82 — the two cases are different jobs:
- *  - No cuts: the picture is stream-copied (byte-cheap, untouched).
+ *  - No cuts: the picture is stream-copied (byte-cheap, untouched) — when an
+ *    mp4 can carry its codec (`canStreamCopyIntoMp4`, T-111); a picture in
+ *    anything else (wmv2, vp8, mpeg2...) is re-encoded the way a cut one is.
  *  - Cuts: the picture is cut with the SAME expression the audio was
  *    (`vselectForCuts`, built from the same list by the same builder), which
  *    needs a re-encode — select/setpts cannot run on copied packets.
- *    Settings match the other whole-file re-encodes (burn-in, reframe):
- *    libx264 medium, yuv420p, default CRF — no bitrate cap, so the file is
- *    not squeezed to a platform preset the user never chose; frame rate is
- *    left as the source's (see -fps_mode below).
+ *    Settings match the caption burn-in's whole-file re-encode: libx264
+ *    medium, yuv420p, default CRF — no bitrate cap, so the file is not
+ *    squeezed to a platform preset the user never chose; frame rate is left
+ *    as the source's (see -fps_mode below). (Reframe is a different job: it
+ *    re-encodes a trimmed range at 6 Mbps and 30 fps, so it is not a model
+ *    for this one.)
  *
  * `-shortest` stays on BOTH paths, and its job is not the one it used to
  * have. Before T-82 it papered over a mismatch: the audio was cut and the
  * picture was not, so it silently threw away the video's last N seconds
  * (N = the total cut length) while the sound ran N seconds ahead of the
- * picture. Now the cut picture and the cut audio are equal by construction
- * and `-shortest` hides nothing about the desync — the Layer 5 content reads
- * (burst positions, frame luma) are what prove that. What it still bounds is
- * a music bed LONGER than the picture: amix runs to its longest input, so the
- * mix is max(voice, music) minus the cuts, which overruns the cut picture
- * whenever the music outlasts the source; `-shortest` trims that tail (it
- * trims the END of the audio, it moves nothing). With no cuts it also trims
- * the few-millisecond tail difference between a video and the audio track
- * extracted from it.
+ * picture. Now the cut picture and the cut audio drop the same frames; at
+ * each cut they agree to within one 256-sample block of sound (5.3 ms at
+ * 48 kHz: `aselectForCuts` re-chunks the sound to 256 samples before `aselect`
+ * drops whole blocks, T-124 (32)), and the errors add up over several cuts
+ * (T-110(i)). That agreement is the CUTS' only, and it holds for a chain without
+ * `afftdn` or the export limiter: `afftdn` delays the sound by two hops (about 25 ms
+ * at any rate) and `alimiter` (latency off) by 5 ms, so a denoised or limited chain's
+ * sound sits that much behind the picture whatever the cuts do (T-110 (bl); the same
+ * qualification is in chain.ts's `vselectForCuts`). `-shortest` hides nothing about
+ * the desync — the Layer 5 content reads (burst positions, frame luma) are what prove that.
+ * What it still bounds is
+ * a music bed LONGER than the picture, when the mix can be longer than the
+ * voice at all. That depends on Duck (T-110(af), a product call still open):
+ * with Duck OFF, `amix=duration=longest` runs to its longest input, so the
+ * mix is max(voice, music) minus the cuts and overruns the cut picture
+ * whenever the music outlasts the source; with Duck ON the bed goes through
+ * `sidechaincompress`, which ends with its shorter input (the voice, which
+ * keys it), so the ducked bed stops where the voice does and there is no
+ * tail to trim.
+ * `-shortest` trims that tail where there is one (it trims the END of the
+ * audio, it moves nothing). With no cuts it also trims the few-millisecond
+ * tail difference between a video and the audio track extracted from it.
+ *
+ * T-131 (2): the same flag ended the output where a SHORTER sound ended. A
+ * Record take whose microphone dropped at 5 s of 12 re-attached to a 5.0 s
+ * file, the picture cut off with it (measured; the stream-copy branch too).
+ * The sound is now padded with silence to the picture's length
+ * (`apad=whole_dur=<the picture's length after the cuts>`, finite: a bare
+ * `apad` hangs `-c:v copy`), so `-shortest` ends the output at the PICTURE
+ * whichever stream is shorter, and the music-bed bound above is unchanged.
  */
 export async function runAudioMux(
   jobId: string,
@@ -284,8 +468,56 @@ export async function runAudioMux(
   onProgress: AudioProgressListener,
   cutRegions: CutRegion[] = []
 ): Promise<AudioJobResult> {
+  const run = latch.begin(jobId)
+  try {
+    // T-141 (1): the video it puts the sound on, and the sound, are read; the output replaces whatever is at its name. Inside the run, as the export's (above).
+    await run.guard(refuseOutputOverInputs([outputPath], [videoPath, audioPath]))
+    return await attachAudio(jobId, videoPath, audioPath, outputPath, onProgress, cutRegions, run)
+  } finally {
+    run.end()
+  }
+}
+
+/**
+ * `videoPath`'s probe, or null when ffprobe cannot read it (a recording with no duration). T-126 (24): the codec decides the copy, and a
+ * copy of HEVC needs a tag the others do not. T-131 (2): the length decides the pad. A picture that cannot be read is neither: it is
+ * re-encoded, and its sound is not padded (the old behavior: the output ends where the sound ends).
+ */
+async function probePicture(videoPath: string): Promise<ProbeResult | null> {
+  try {
+    return await probeVideo(videoPath)
+  } catch {
+    return null
+  }
+}
+
+async function attachAudio(
+  jobId: string,
+  videoPath: string,
+  audioPath: string,
+  outputPath: string,
+  onProgress: AudioProgressListener,
+  cutRegions: CutRegion[],
+  run: LatchRun
+): Promise<AudioJobResult> {
   const startedAt = Date.now()
   const pictureCut = vselectForCuts(cutRegions)
+  // T-111: the picture is copied only when an mp4 can carry it. A reopened project
+  // re-attaches to the ORIGINAL video (a session that imported a .wmv muxed onto
+  // the h264 working copy it had made; the saved project points at the .wmv), and
+  // `-c:v copy` of wmv2 into mp4 died with "Could not find tag for codec wmv2". Such
+  // a picture is re-encoded in this same step, exactly as a cut one is (a cut
+  // already forces it), so the pass keeps its name and its bar — "attaching to
+  // video" — and nothing is converted to a scratch file first.
+  // A video that cannot be probed is re-encoded too: ffmpeg may still read what
+  // ffprobe could not (a recording with no duration), and a copy of unknown video
+  // is the one thing that can write a file nothing plays.
+  // T-131 (2): the probe is also how long the picture is, once the cuts are taken out
+  // of it, and a cut no longer skips it.
+  const picture = await run.guard(probePicture(videoPath))
+  const copyCodec = pictureCut === null && picture !== null && canStreamCopyIntoMp4(picture.videoCodec) ? picture.videoCodec.toLowerCase() : null
+  const pictureSec = picture === null ? null : keptDurationSec(picture.duration, cutRegions)
+  const reencodePicture = copyCodec === null
   const args = [
     '-y',
     '-i',
@@ -296,29 +528,58 @@ export async function runAudioMux(
     '0:v:0',
     '-map',
     '1:a:0',
-    ...(pictureCut
+    ...(reencodePicture
       ? [
+          // T-113: libx264 + yuv420p refuse an odd width or height, and a VP8/VP9 webm
+          // (a screen recording) is where an odd size comes from. The stage is a crop (T-115):
+          // it trims one pixel off the right and bottom edge and resamples nothing, and it runs
+          // AHEAD of any cut, so the cut's `select` and `setpts` see the size the encoder will
+          // get. An even picture passes through it untouched.
           '-vf',
-          pictureCut,
+          pictureCut ? `${EVEN_PICTURE},${pictureCut}` : EVEN_PICTURE,
           '-c:v',
           'libx264',
           '-preset',
           'medium',
           '-pix_fmt',
           'yuv420p',
-          // `setpts` leaves the filter graph's output frame rate unknown, so
-          // by default ffmpeg warns "No information about the input
-          // framerate" and forces 25 fps CFR — duplicating frames, and
-          // turning a 60 fps recording into a 25 fps one. Passthrough keeps
-          // exactly the frames `select` kept, on the timestamps `setpts` gave.
+          // `setpts` leaves the filter graph's output frame rate unknown. On the bundled
+          // ffmpeg (7.0.x) the default is then a warning, "No information about the input
+          // framerate", and a forced 25 fps CFR — duplicating frames, and turning a 60 fps
+          // recording into a 25 fps one. On 6.1.1 (the shipped win32 major) there is no
+          // warning and a 60 fps source stays 60/1 (measured on both, T-122): the forced rate
+          // is the bundled major's behavior, not a rule. Passthrough keeps exactly the
+          // frames `select` kept, on the timestamps `setpts` gave (and, for a picture
+          // re-encoded only to fit an mp4, the source's own), whichever major runs it.
+          // T-121: those timestamps are the survivors' OWN, moved earlier by the time the
+          // cuts removed (`vselectForCuts`), never renumbered at the container's nominal
+          // rate - a Record WebM reads 1000/1, which collapsed the kept picture to a few ms.
           '-fps_mode',
-          'passthrough'
+          'passthrough',
+          // T-122: keep the filter graph's own time base for the encoder. On ffmpeg 6.1.1 (the shipped
+          // win32 major) a constant-rate source gets an encoder time base of 1/fps, so every retimed stamp
+          // above was ROUNDED onto the frame grid: a cut whose length is not a whole number of frames put
+          // the first survivor on the frame before it (one `pts_time` written twice, "non-strictly-monotonic
+          // PTS"). With `filter` the stamps land exactly where `setpts` put them. Verified on 6.1.1 and
+          // 7.0.2 (7.0.2 is exact either way): Layer 5, "a cut that is not a whole number of frames long".
+          '-enc_time_base:v',
+          'filter'
         ]
-      : ['-c:v', 'copy']),
+      : [
+          '-c:v',
+          'copy',
+          // T-126 (24): an HEVC picture copied into an mp4 is written with ffmpeg's default tag, `hev1`, which QuickTime, Safari and
+          // iOS refuse to play (the file opens in VLC and in Chrome, and nowhere on a Mac or an iPhone). `hvc1` is the tag they read,
+          // and a player that reads `hev1` reads `hvc1` too. The other copyable codecs keep the tag ffmpeg gives them.
+          ...(copyCodec === 'hevc' ? ['-tag:v', 'hvc1'] : [])
+        ]),
     '-c:a',
     'aac',
     '-b:a',
     '192k',
+    // T-131 (2): the sound reaches the picture's length, so the `-shortest` below ends the output at the PICTURE when the sound is the
+    // shorter stream (a take whose microphone dropped). Finite on purpose. A picture whose length is unknown is not padded.
+    ...(pictureSec === null ? [] : ['-af', `apad=whole_dur=${pictureSec.toFixed(3)}`]),
     '-shortest',
     // B7 fix (round 15): muxed MP4 also needs faststart so web players
     // (and most browser previewers) don't stall on the moov atom.
@@ -326,16 +587,17 @@ export async function runAudioMux(
     '+faststart',
     '-progress',
     'pipe:1',
-    '-nostats',
-    outputPath
+    '-nostats'
   ]
-  // A stream-copy mux is instant and needs no bar; the re-encode is minutes
-  // on a long recording, and the output is exactly as long as the (already
-  // cut) audio.
-  const total = pictureCut ? (await probeAudio(audioPath)).duration : 0
-  await runFfmpegJob(args, jobId, total, 'mux', onProgress)
+  // The bar is over the length of the file this pass WRITES: the (cut) picture's, because the sound is padded or trimmed to it (T-131 (2)); a picture whose
+  // length is unknown is measured against the cleaned audio, as it always was. BOTH branches have one. T-147 (1): the copy used to be given 0 under a comment that
+  // said a stream-copy mux is instant, and that was a guess nobody measured: the copy keeps the picture but still re-encodes the SOUND to AAC 192k, about 20x
+  // realtime on the bundled 7.0.2 (a 2-minute source muxes in 6.6 s, the AAC encode 6.0 of them), so a 2-hour VOD is minutes at "rendering 100%" with no bar.
+  // ffmpeg prints `out_time` for the copy throughout (13 progress blocks in those 6.6 s).
+  const total = pictureSec ?? (await run.guard(probeAudio(audioPath))).duration
+  const landed = await runFfmpegToFile(args, outputPath, jobId, total, 'mux', onProgress, run)
   onProgress({ jobId, pass: 'mux', percent: 100 })
-  return { jobId, outputPath, durationMs: Date.now() - startedAt }
+  return { jobId, outputPath: landed, durationMs: Date.now() - startedAt }
 }
 
 /**
@@ -346,26 +608,56 @@ export async function runAudioMux(
  *
  * The WAV is an implementation detail of this one job (~0.7 GB per hour of
  * audio), so it dies with the job: removed after the mux on success AND on
- * any failure or cancel, whichever pass it came from. It lives here, in main,
- * rather than in the renderer, because only main can delete it on every exit
- * path — and because with mux-back OFF the exported audio file IS the
+ * any failure, cancel or QUIT, whichever pass it came from. It lives here, in
+ * main, rather than in the renderer, because only main can delete it on every
+ * exit path — and because with mux-back OFF the exported audio file IS the
  * deliverable, which never goes through this function.
+ *
+ * T-127 (3): "on a quit" is true because this job holds a run of its own open
+ * until the delete below has finished (the two passes open and close theirs
+ * around each ffmpeg child, and the delete runs after the second one ends):
+ * the before-quit handler waits, bounded, for every run to end
+ * (`drainRuns`, cancelLatch.ts). Without it the process exited between the
+ * kill and the unlink and the WAV stayed beside the output.
  */
 export async function runAudioReattach(
   spec: AudioMuxSpec,
   onProgress: AudioProgressListener
 ): Promise<AudioJobResult> {
   const startedAt = Date.now()
-  const tempAudioPath = `${spec.outputPath.replace(/\.mp4$/i, '')}.cleaned.wav`
-  // The delete below is unconditional, so it must never be aimed at a file
-  // the job did not make. spec.outputPath cannot collide by construction
-  // (the suffix differs); the two inputs can, if a file already sits there.
-  assert(
-    tempAudioPath !== spec.sourcePath && tempAudioPath !== spec.videoPath,
-    `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
-  )
+  // T-142: the scratch WAV is deleted unconditionally in the `finally` below, so it takes a name NOTHING is at (`nextFreePath`: `<output>.cleaned.wav`,
+  // or `<output>.cleaned (2).wav` and on when a file is there). It used to be that one fixed name: an unrelated file the person kept at exactly
+  // `<output>.cleaned.wav` was replaced by the export pass and then deleted with the job. A free name also cannot be one of the job's inputs, so the two
+  // refusals below can no longer be reached by a name collision; they stay as the belt for the one thing the free-name check cannot see (the job's own
+  // `outputPath` aimed at an input, and a path the OS resolves to the same file).
+  const run = latch.begin(spec.jobId)
+  let tempAudioPath: string
   try {
-    await runAudioExport(
+    // In the run, so a Cancel that lands while the folder is listed is a Cancel (T-98).
+    tempAudioPath = await run.guard(nextFreePath(`${spec.outputPath.replace(/\.mp4$/i, '')}.cleaned.wav`))
+    // The delete below is unconditional, so it must never be aimed at a file
+    // the job did not make. T-114: assertAlways - as assert() this logged and CONTINUED under
+    // NODE_ENV=production and the `finally` below deleted the person's source
+    // (proven by execution; `reattachCollision.test.ts` forces production on).
+    assertAlways(
+      tempAudioPath !== spec.sourcePath && tempAudioPath !== spec.videoPath,
+      `intermediate audio path ${tempAudioPath} would overwrite a file this job reads`
+    )
+    // T-141 (1): and the same question for everything this job writes - the video, AND the scratch WAV that the `finally` below deletes unconditionally (it was
+    // asked of the source and the video only, by exact string; the second track at `<output>.cleaned.wav` was deleted with the job, and a case variant or a symlink
+    // of an input got past the string compare). It is asked in the run, so a Cancel that lands while the paths resolve is a Cancel (T-98), and BEFORE the `try` whose
+    // `finally` deletes the scratch WAV: nothing has been written, so nothing is cleaned up, and a refusal only has to end the run.
+    await run.guard(refuseOutputOverInputs([spec.outputPath, tempAudioPath], [spec.sourcePath, spec.videoPath, spec.chain.secondaryTrack?.filePath]))
+  } catch (err) {
+    run.end()
+    throw err
+  }
+  // T-140 (1): both files can land BESIDE the name asked for (that name is held open by another app), and each pass must be told where the one before
+  // it landed: the mux reads the WAV that was just written (not a stale file at `tempAudioPath`), and the answer is the video that was written.
+  let intermediate = tempAudioPath
+  let outputPath = spec.outputPath
+  try {
+    const rendered = await runAudioExport(
       {
         jobId: spec.jobId,
         sourcePath: spec.sourcePath,
@@ -375,23 +667,31 @@ export async function runAudioReattach(
       },
       onProgress
     )
-    await runAudioMux(
+    intermediate = rendered.outputPath
+    const muxed = await runAudioMux(
       spec.jobId,
       spec.videoPath,
-      tempAudioPath,
+      intermediate,
       spec.outputPath,
       onProgress,
       spec.chain.cutRegions
     )
+    outputPath = muxed.outputPath
   } finally {
-    await unlink(tempAudioPath).catch(() => {})
+    // T-142: the file the export pass LANDED (`intermediate` starts as the chosen name and becomes the landed one), never the chosen name when the render
+    // went beside it: something else is at that name (it is why the render went beside), and it is not this job's to delete.
+    await unlink(intermediate).catch(() => {})
+    run.end()
   }
-  return { jobId: spec.jobId, outputPath: spec.outputPath, durationMs: Date.now() - startedAt }
+  return { jobId: spec.jobId, outputPath, durationMs: Date.now() - startedAt }
 }
 
 export function cancelAudioJob(jobId: string): boolean {
+  // T-129: the waveform's peaks job is an audio job too, named by the same kind of id, so the one Cancel reaches it.
+  const peaks = cancelPeaksJob(jobId)
+  const marked = latch.cancel(jobId)
   const child = activeJobs.get(jobId)
-  if (!child) return false
+  if (!child) return marked || peaks
   killAsCancelled(child)
   activeJobs.delete(jobId)
   return true
@@ -403,6 +703,11 @@ export function cancelAudioJob(jobId: string): boolean {
  * keep an orphaned ffmpeg child alive after the window closes.
  */
 export function cancelAllAudioJobs(): void {
+  latch.cancelAll()
   for (const [, child] of activeJobs) killAsCancelled(child)
   activeJobs.clear()
+  // T-111: the ffmpeg that pulls a recording's sound out is an audio job too.
+  cancelAllExtractions()
+  // T-129: and so is the one that reads a file's sound for its waveform.
+  cancelAllPeaks()
 }

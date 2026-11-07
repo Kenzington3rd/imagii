@@ -58,8 +58,10 @@ describe('the kit\'s jobs, through main\'s filter graph', () => {
       const graph = graphFor(job)
       expect(graph, `${job.preset} graph`).toMatch(/drawtext=/)
       expect(graph, `${job.preset} graph carries the handle`).toContain('@kit_unit')
-      // The saved corner: top-left anchors at the 20 px padding on both axes.
-      expect(graph, `${job.preset} graph uses the saved corner`).toMatch(/:x=20:y=20:/)
+      // The saved corner: top-left anchors at the 20 px padding on the side, and at the top the flat 20 px on a landscape file or (T-130 (an))
+      // the vertical files' 288 px, which clears the platform's header.
+      const vertical = job.preset === 'reels' || job.preset === 'tiktok'
+      expect(graph, `${job.preset} graph uses the saved corner`).toMatch(vertical ? /:x=20:y=288:/ : /:x=20:y=20:/)
     }
   })
 
@@ -74,7 +76,9 @@ describe('the kit\'s jobs, through main\'s filter graph', () => {
 
   it('an unrecognised saved corner cannot reach the graph: it draws bottom-right', () => {
     for (const job of kitJobs('@a', 'sideways')) {
-      expect(graphFor(job), job.preset).toMatch(/x=w-tw-20:y=h-th-20/)
+      // ...in the corner's margin for the file's shape: 20 px, or (T-130 (an)) the vertical files' 480 px above the caption rail.
+      const vertical = job.preset === 'reels' || job.preset === 'tiktok'
+      expect(graphFor(job), job.preset).toMatch(vertical ? /x=w-tw-20:y=h-th-480/ : /x=w-tw-20:y=h-th-20/)
     }
   })
 })

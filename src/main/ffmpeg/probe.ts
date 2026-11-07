@@ -5,11 +5,18 @@ export interface ProbeResult {
   duration: number
   width: number
   height: number
+  /** 0 when the file does not say (see `probedFps`). */
   fps: number
   videoCodec: string
   audioCodec: string | null
   bitrate: number
   sizeBytes: number
+  /**
+   * The video stream's `color_space` as ffprobe prints it ('bt709', 'bt470bg', 'smpte170m', ...).
+   * Absent when the stream is untagged (ffprobe prints nothing or 'unknown'). T-118: a bt709
+   * source needs the temperature grade to convert back to bt709.
+   */
+  colorSpace?: string
 }
 
 interface FfprobeStream {
@@ -19,6 +26,7 @@ interface FfprobeStream {
   height?: number
   r_frame_rate?: string
   avg_frame_rate?: string
+  color_space?: string
 }
 
 interface FfprobeFormat {
@@ -39,6 +47,25 @@ function parseFps(rate: string | undefined): number {
   return num / den
 }
 
+/**
+ * The ceiling above which a probed "frame rate" is not one (T-120): 240 fps, the same ceiling the export
+ * gates hold a preset to (`ipc/video.ts`). A Matroska file stamps its packets in milliseconds, and one that
+ * declares no rate of its own (every MediaRecorder webm, including the copy of it that Record saves with
+ * Convert off) reads `r_frame_rate` 1000/1: that is the clock's resolution, and the Timeline's frame step
+ * (`,` and `.`) was 1 ms on it.
+ */
+export const MAX_PLAUSIBLE_FPS = 240
+
+/**
+ * The frame rate of a probed video stream, or 0 when the file does not say one: `avg_frame_rate` first,
+ * `r_frame_rate` if that is absent, and nothing at all above `MAX_PLAUSIBLE_FPS`. 0 is the "unknown" the
+ * callers already handle (the Timeline and the Player step at 30 fps, `formatFps` prints 30).
+ */
+export function probedFps(avgRate: string | undefined, realRate: string | undefined): number {
+  const fps = parseFps(avgRate) || parseFps(realRate)
+  return fps > MAX_PLAUSIBLE_FPS ? 0 : fps
+}
+
 export function probeVideo(filePath: string): Promise<ProbeResult> {
   return new Promise((resolve, reject) => {
     const args = [
@@ -50,7 +77,7 @@ export function probeVideo(filePath: string): Promise<ProbeResult> {
       '-show_streams',
       filePath
     ]
-    const p = spawn(ffprobePath, args)
+    const p = spawn(ffprobePath, args, { windowsHide: true })
     let stdout = ''
     let stderr = ''
     p.stdout.on('data', (b) => (stdout += String(b)))
@@ -93,7 +120,7 @@ export function probeVideo(filePath: string): Promise<ProbeResult> {
           reject(new Error('ffprobe returned no usable duration for the video'))
           return
         }
-        const fps = parseFps(video.avg_frame_rate) || parseFps(video.r_frame_rate)
+        const fps = probedFps(video.avg_frame_rate, video.r_frame_rate)
         resolve({
           duration,
           width: video.width ?? 0,
@@ -102,7 +129,9 @@ export function probeVideo(filePath: string): Promise<ProbeResult> {
           videoCodec: video.codec_name ?? 'unknown',
           audioCodec: audio?.codec_name ?? null,
           bitrate: Number(data.format?.bit_rate ?? 0),
-          sizeBytes: Number(data.format?.size ?? 0)
+          sizeBytes: Number(data.format?.size ?? 0),
+          // 'unknown' is ffprobe saying "no tag", the same as the key being absent.
+          ...(video.color_space && video.color_space !== 'unknown' ? { colorSpace: video.color_space } : {})
         })
       } catch (err) {
         reject(err instanceof Error ? err : new Error(String(err)))

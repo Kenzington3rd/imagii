@@ -6,14 +6,17 @@ import {
   type Locator,
   type Page
 } from '@playwright/test'
-import { spawn } from 'node:child_process'
-import { mkdirSync, existsSync, rmSync, writeFileSync } from 'node:fs'
+import { execFileSync, spawn } from 'node:child_process'
+import { mkdirSync, existsSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import os from 'node:os'
 import { fileURLToPath } from 'node:url'
-import { ffmpegPath } from '../../src/main/ffmpeg/paths'
+import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { dragThrough, dragTo } from './drag'
+import { withoutAtomicTmp } from './atomicTmp'
 import { installToastLog, readToastLog } from './toastLog'
+import { DEFAULT_WINDOW, MIN_WINDOW, expectControlsWhole, expectNoHorizontalOverflow, expectNoOverlap, expectOneLine, expectSameRow, expectSelectsWhole, setWindowSize as resizeAndSettle } from './layout'
+import { leave, retype } from './typing'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -190,7 +193,7 @@ async function dropOnVideoImporter(window: Page, filePath: string, fileName: str
 }
 
 /** Launch, walk to Video Studio, and import the fixture through the drop zone. */
-async function launchWithVideo(name: string): Promise<{ app: ElectronApplication; window: Page }> {
+async function launchWithVideo(name: string, source = fixture): Promise<{ app: ElectronApplication; window: Page }> {
   const userDataDir = path.join(root, `ud-${name}-${Date.now().toString(36)}`)
   seedUserData(userDataDir)
   const app = await launchApp(userDataDir)
@@ -201,7 +204,7 @@ async function launchWithVideo(name: string): Promise<{ app: ElectronApplication
   await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
   await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 15_000 })
   await installToastLog(window)
-  await dropOnVideoImporter(window, fixture, 'video-core.mp4')
+  await dropOnVideoImporter(window, source, path.basename(source))
   // Loaded state: the Importer is replaced by the player + Export panel.
   await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
   await expect(window.locator('video')).toHaveCount(1)
@@ -421,6 +424,11 @@ async function timelineReadouts(window: Page): Promise<[number, number, number]>
   return [parseShort(texts[0] ?? ''), parseShort(texts[1] ?? ''), parseShort(texts[2] ?? '')]
 }
 
+/** [In, Length, Out] exactly as the Timeline prints them ("0:01.9"), for the cases that are about the digits. */
+function timelineTexts(window: Page): Promise<string[]> {
+  return window.locator('[data-tutorial="video-timeline"] span.font-mono').allInnerTexts()
+}
+
 /** The OutputPreview canvas as a PNG data URL, plus its backing-store size. */
 function canvasSnapshot(window: Page): Promise<{ w: number; h: number; url: string }> {
   return window.evaluate(() => {
@@ -545,6 +553,19 @@ test.afterAll(() => {
 test.describe('Video Studio core editing surface', () => {
   // ────────────────────────────── Player (4c) ──────────────────────────────
 
+  // T-127 (15): the header's file name is cut with an ellipsis at 40 characters; its whole self is the tooltip.
+  test('the header names the open video in full as its title (T-127 (15))', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('header-title')
+    try {
+      const name = window.locator('header span.truncate').filter({ hasText: /^video-core\.mp4$/ })
+      await expect(name).toHaveCount(1)
+      await expect(name, 'the full name is the tooltip').toHaveAttribute('title', 'video-core.mp4')
+    } finally {
+      await app.close()
+    }
+  })
+
   test('player transport: play/pause button, Space, and the safe-zone overlay', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('transport')
@@ -609,11 +630,14 @@ test.describe('Video Studio core editing surface', () => {
       await window.getByRole('checkbox', { name: 'Crop', exact: true }).check()
       const preset = cropRow.getByRole('button', { name: '1:1', exact: true })
       await expect(preset).not.toHaveClass(/bg-accent/)
+      await expect(preset).toHaveAttribute('aria-pressed', 'false')
       const beforeSpace = (await videoState(window)).t
       await preset.focus()
       await window.keyboard.press('Space')
       // The button did what a keyboard user asked it to…
       await expect(preset).toHaveClass(/bg-accent/)
+      // T-113: …and says so to assistive tech, not only in its fill.
+      await expect(preset).toHaveAttribute('aria-pressed', 'true')
       // …and the transport did not move. `play()` clears `paused`
       // synchronously, so this cannot pass by being read too early.
       const afterSpace = await videoState(window)
@@ -634,6 +658,12 @@ test.describe('Video Studio core editing surface', () => {
       await expect(guides).toHaveCount(3)
       // SVG <text> has no innerText, so read the text nodes themselves.
       expect(await guides.allTextContents()).toEqual(['9:16', '1:1', '4:5'])
+      // T-112: the guides are a picture drawn over the video, not content — hidden from
+      // assistive tech (their labels read out of context as "9:16 1:1 4:5").
+      await expect(window.locator('[data-tutorial="video-player"] svg:has(> g > text)')).toHaveAttribute(
+        'aria-hidden',
+        'true'
+      )
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-01-safezones.png') })
       await window.getByRole('checkbox', { name: 'Crop guides' }).uncheck()
       await expect(guides).toHaveCount(0)
@@ -699,6 +729,50 @@ test.describe('Video Studio core editing surface', () => {
       await expect(window.locator('[data-tutorial="video-player"] .font-mono')).toContainText(
         '0:00.2'
       )
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-124 (29): Timeline and Player read no modifier at all, so Ctrl+O (a browser chord) set an Out point and was swallowed by the
+  // handler's `preventDefault`. A bare-letter shortcut is for the bare letter; the control at the end is what makes the quiet
+  // before it mean something.
+  test('Ctrl+O, Ctrl+I, Alt+. and Alt+ArrowRight are chords, not the O, I, . and arrow shortcuts: from the Player and from the Playhead slider they move nothing, and the bare O still sets the Out point (T-124 (29))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('chords')
+    try {
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const player = window.locator('[data-tutorial="video-player"] [tabindex="0"]')
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      const chords = ['Control+o', 'Control+i', 'Alt+o', 'Meta+i', 'Alt+.', 'Alt+ArrowRight']
+
+      // ── the Player's column ──
+      const parked = await seekTo(window, 0.9)
+      const before = await timelineReadouts(window)
+      await player.focus()
+      for (const chord of chords) await window.keyboard.press(chord)
+      await window.waitForTimeout(600)
+      expect(await timelineReadouts(window), 'no chord from the Player set a point').toEqual(before)
+      expect(await settledTime(window), 'and none moved the playhead').toBeCloseTo(parked, 2)
+
+      // ── the Playhead slider (a click on the track hands it the keyboard) ──
+      const at40 = await trackPointAt(window, 0.4)
+      await window.mouse.click(at40.x, at40.y)
+      await expect(slider).toBeFocused()
+      const clicked = await settledTime(window)
+      const beforeSlider = await timelineReadouts(window)
+      for (const chord of chords) await window.keyboard.press(chord)
+      await window.waitForTimeout(600)
+      expect(await timelineReadouts(window), 'no chord from the slider set a point').toEqual(beforeSlider)
+      expect(await settledTime(window), 'and none moved the playhead').toBeCloseTo(clicked, 2)
+
+      // ── the control: the bare O is still the Out point, from the same focus ──
+      await window.keyboard.press('o')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000 })
+        .toBeLessThan(FIXTURE_SECONDS)
     } finally {
       await app.close()
     }
@@ -785,6 +859,70 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
+  // T-123 (2): the Player's column stood down for ANY <input>, and "Crop guides" is a checkbox INSIDE that column: tick it
+  // (the browser leaves it focused) and `,` `.` I O and the arrows went dead, against the hint line under the player. A
+  // checkbox owns Space and nothing else.
+  test('player keyboard: a ticked Crop guides box keeps its focus and the Player\'s keys still answer, Space stays the box\'s (T-123 (2))', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('checkbox-keys')
+    try {
+      const guides = window.getByRole('checkbox', { name: 'Crop guides' })
+      const frame = 1 / FIXTURE_FPS
+      const PARK = 12 / FIXTURE_FPS
+      const focusedType = (): Promise<string | null> =>
+        window.evaluate(() => (document.activeElement as HTMLInputElement | null)?.type ?? null)
+
+      const parked = await seekTo(window, PARK)
+      await installSeekLog(window)
+      await guides.check()
+      await expect(guides).toBeChecked()
+      expect(await focusedType(), 'the trap is real: focus is on the box that was just ticked').toBe('checkbox')
+
+      // The four seek bindings, from the checkbox's focus: each is asked for exactly, and lands.
+      let at = parked
+      for (const { key, delta } of [
+        { key: '.', delta: frame },
+        { key: 'ArrowRight', delta: 0.1 },
+        { key: ',', delta: -frame },
+        { key: 'ArrowLeft', delta: -0.1 }
+      ]) {
+        await clearSeekLog(window)
+        await window.keyboard.press(key)
+        expect(await lastSeekRequest(window), `${key} from the focused checkbox seeks by ${delta}`).toBeCloseTo(at + delta, 5)
+        await expectLanded(window, at + delta, `${key} from the checkbox`)
+        at += delta
+        expect(await focusedType(), 'and the box still has the focus').toBe('checkbox')
+      }
+
+      // I and O move the clip range from there too.
+      await window.keyboard.press('i')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 })
+        .toBeGreaterThan(0.1)
+      await window.keyboard.press('o')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000 })
+        .toBeLessThanOrEqual(at + 0.15)
+
+      // Space is the checkbox's own: it unticks the box and the video does not start.
+      await guides.focus()
+      await window.keyboard.press(' ')
+      await expect(guides).not.toBeChecked()
+      expect((await videoState(window)).paused, 'Space on a checkbox is a toggle, not play').toBe(true)
+      await window.keyboard.press(' ')
+      await expect(guides).toBeChecked()
+      expect((await videoState(window)).paused).toBe(true)
+
+      // `?` opens the shortcuts from the same focus, and Escape closes it.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toBeVisible({ timeout: 10_000 })
+      await window.keyboard.press('Escape')
+      await expect(window.getByRole('dialog')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
   test('player: a tail nudge reaches the media element own duration, not ffprobe rounded one (T-52)', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('tailnudge')
@@ -856,7 +994,10 @@ test.describe('Video Studio core editing surface', () => {
        * single mouse round trip (T-55).
        */
       async function dragHandle(label: string, toRatio: number): Promise<void> {
-        const handle = window.getByRole('button', { name: label })
+        // T-119: the trim handles are aria-hidden pointer affordances now (no name to find them by);
+        // they are the timeline's two hidden buttons, start first.
+        const handles = window.locator('[data-tutorial="video-timeline"] button[aria-hidden="true"]')
+        const handle = label === 'Trim start' ? handles.first() : handles.last()
         const box = (await handle.boundingBox())!
         const readout = label === 'Trim start' ? 0 : 2
         await dragTo(
@@ -937,7 +1078,7 @@ test.describe('Video Studio core editing surface', () => {
       const trackBox = (await track.boundingBox())!
 
       async function dragStartTo(toRatio: number): Promise<void> {
-        const handle = window.getByRole('button', { name: 'Trim start' })
+        const handle = window.locator('[data-tutorial="video-timeline"] button[aria-hidden="true"]').first() // the start handle (T-119: aria-hidden, found by place)
         const box = (await handle.boundingBox())!
         await dragTo(
           window,
@@ -1067,7 +1208,7 @@ test.describe('Video Studio core editing surface', () => {
       // ── a mousedown that STARTS on a trim handle drags the handle only ──
       // The handles are the more specific gesture and they sit on top of the
       // scrub surface; the playhead must not jump to where the drag ended.
-      const handle = window.getByRole('button', { name: 'Trim end' })
+      const handle = window.locator('[data-tutorial="video-timeline"] button[aria-hidden="true"]').last() // the end handle (T-119: aria-hidden, found by place)
       const handleBox = (await handle.boundingBox())!
       const dropAt = await trackPointAt(window, 0.6)
       await dragTo(
@@ -1169,7 +1310,396 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
-  test('timeline: the playhead never lies — store churn keeps it, leaving and returning resets it (T-52)', async () => {
+  // T-119 (5): the guide's sequence is "click the track, press I". A click on the track hands the keyboard to the
+  // Playhead slider (it is the focusable element), and the slider heard only the arrows, Home and End - I / O
+  // and , / . worked from the Player's column alone, so USER_GUIDE ("`I` and `O` set them at the playhead") and
+  // the shortcut overlay promised keys that did nothing from the surface the person had just clicked. The two trim
+  // handles were `<button>`s that did nothing for Enter or Space: dead tab stops announced as actionable.
+  test('timeline: click the track, then I and O set the in and out points and , and . step a frame; the trim handles are pointer-only (T-119)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('timelinekeys')
+    try {
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+      const frame = 1 / FIXTURE_FPS
+
+      // ── click the track, press I: the in point is where the playhead went ──
+      const at40 = await trackPointAt(window, 0.4)
+      await window.mouse.click(at40.x, at40.y)
+      await expectScrubbedTo(window, dur * 0.4, 'a click at 40% of the track')
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      await expect(slider).toHaveAttribute('aria-valuenow', String(Number((await settledTime(window)).toFixed(2))))
+      await window.keyboard.press('i')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 })
+        .toBeGreaterThan(0.5)
+      let [start, length, end] = await timelineReadouts(window)
+      // Readouts truncate to a tenth, so allow that plus a frame of slack.
+      expect(Math.abs(start - dur * 0.4), `In ${start} vs the click at ${dur * 0.4}`).toBeLessThan(0.15)
+      expect(end).toBe(FIXTURE_SECONDS)
+      expect(Math.abs(length - (end - start))).toBeLessThan(0.15)
+
+      // ── click further along, press O: the out point is where the playhead went, the in point stays ──
+      const at80 = await trackPointAt(window, 0.8)
+      await window.mouse.click(at80.x, at80.y)
+      await expectScrubbedTo(window, dur * 0.8, 'a click at 80% of the track')
+      await window.keyboard.press('O')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000 })
+        .toBeLessThan(FIXTURE_SECONDS)
+      ;[start, length, end] = await timelineReadouts(window)
+      expect(Math.abs(end - dur * 0.8), `Out ${end} vs the click at ${dur * 0.8}`).toBeLessThan(0.15)
+      expect(Math.abs(start - dur * 0.4)).toBeLessThan(0.15)
+      expect(Math.abs(length - (end - start))).toBeLessThan(0.15)
+
+      // ── and a keypress is a whole undo step: Undo puts the out point back and leaves the in point where I put it
+      //    (without the end-of-gesture call the two keypresses coalesce into one step and Undo takes both) ──
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000 })
+        .toBe(FIXTURE_SECONDS)
+      ;[start] = await timelineReadouts(window)
+      expect(Math.abs(start - dur * 0.4), `In ${start} after Undo: the I keypress is its own step`).toBeLessThan(0.15)
+      // A second I with no pointer between is another step too (T-40: it used to vanish into the first one's; the
+      // run only closes on a pointer-up or an explicit end, and a keypress has no pointer-up). From the keyboard
+      // alone: Home, I (the in point goes to the start), five nudges, I again; Undo takes the in point back to
+      // where the FIRST I left it (the start), not to where it was before either.
+      await slider.focus()
+      await window.keyboard.press('Home')
+      await expectScrubbedTo(window, 0, 'Home from the slider')
+      await window.keyboard.press('i')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 })
+        .toBeLessThan(0.15)
+      for (let i = 0; i < 5; i++) await window.keyboard.press('ArrowRight')
+      await expectScrubbedTo(window, 0.5, 'five nudges from the start')
+      await window.keyboard.press('i')
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 })
+        .toBeGreaterThan(0.4)
+      await window.getByRole('button', { name: 'Undo' }).click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'Undo took the second I back to the first' })
+        .toBeLessThan(0.15)
+
+      // ── , and . step one frame from the slider ──
+      await slider.focus()
+      const parked = await settledTime(window)
+      await window.keyboard.press('.')
+      await expectScrubbedTo(window, parked + frame, '. from the slider')
+      await window.keyboard.press(',')
+      await window.keyboard.press(',')
+      await expectScrubbedTo(window, parked - frame, ', twice from the slider')
+
+      // ── the trim handles are pointer affordances: no tab stop, no name, no role in the accessibility tree ──
+      const handles = window.locator('[data-tutorial="video-timeline"] button[aria-hidden="true"]')
+      await expect(handles).toHaveCount(2)
+      for (const i of [0, 1]) {
+        await expect(handles.nth(i)).toHaveAttribute('tabindex', '-1')
+      }
+      await expect(window.getByRole('button', { name: /Trim/ })).toHaveCount(0)
+      // Tab from the slider moves on: it never lands on a handle.
+      await slider.focus()
+      await window.keyboard.press('Tab')
+      expect(
+        await window.evaluate(() => document.activeElement?.getAttribute('aria-hidden') ?? null),
+        'Tab from the Playhead slider landed on a hidden handle'
+      ).toBeNull()
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-120 (4): the guide's sequence is "click the track, then Space". The click hands the keyboard to the Playhead
+  // slider, which heard no Space: nothing played, and an unhandled Space scrolls the studio. The Player's own handler
+  // toggles through the element it owns, so the Timeline asks the Player (the transport it registers) instead of
+  // keeping a second copy of play / pause.
+  test('timeline: click the track, then Space plays and pauses the video, and the studio does not scroll (T-120)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('timelinespace')
+    try {
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+
+      const at20 = await trackPointAt(window, 0.2)
+      await window.mouse.click(at20.x, at20.y)
+      await expectScrubbedTo(window, dur * 0.2, 'a click at 20% of the track')
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      const parked = await settledTime(window)
+      expect((await videoState(window)).paused, 'nothing is playing yet').toBe(true)
+
+      // Every Space keydown's outcome, as it reaches the window after the app's handlers: was it handled?
+      await window.evaluate(() => {
+        const w = window as unknown as { __space: boolean[] }
+        w.__space = []
+        window.addEventListener('keydown', (e) => {
+          if (e.key === ' ') w.__space.push(e.defaultPrevented)
+        })
+      })
+      /** How many elements are scrolled away from their top, plus the page itself. */
+      const scrolledPx = (): Promise<number> =>
+        window.evaluate(() =>
+          [...document.querySelectorAll<HTMLElement>('*')].reduce((sum, el) => sum + el.scrollTop, 0) +
+          (document.scrollingElement?.scrollTop ?? 0)
+        )
+      const scrollBefore = await scrolledPx()
+
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(false)
+      await expect
+        .poll(async () => (await videoState(window)).t, { timeout: 10_000, message: 'the video is playing' })
+        .toBeGreaterThan(parked + 0.15)
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
+      await expect(slider, 'Space left the keyboard on the slider').toBeFocused()
+
+      expect(await window.evaluate(() => (window as unknown as { __space: boolean[] }).__space), 'both Spaces were handled').toEqual([true, true])
+      expect(await scrolledPx(), 'an unhandled Space scrolls the studio').toBe(scrollBefore)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-133 (7b): Space is a toggle, and a toggle is one decision per PRESS. The Player's and the Timeline's Space ran on every auto-repeat of a held
+  // key, so a held Space flipped play and pause at the keyboard's repeat rate (about 30 Hz: a stutter, and a stream of aborted play() calls). The
+  // nudge and frame-step keys repeat on purpose and are not touched. Playwright marks a keydown for a key that is already down as a repeat, which
+  // is what a held key does; an EVEN number of keydowns is what makes the old behavior visible (play, pause, play, pause: ends paused).
+  test('a held Space plays once, in the Player and on the Timeline; a held arrow still repeats (T-133 (7b))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('heldspace')
+    try {
+      expect(await videoState(window)).toMatchObject({ paused: true })
+      const hold = async (key: string, downs: number): Promise<void> => {
+        for (let i = 0; i < downs; i++) await window.keyboard.down(key)
+        await window.keyboard.up(key)
+      }
+
+      // The Player's column: four keydowns of one held Space are ONE press (the first), so the video is playing.
+      await window.locator('[data-tutorial="video-player"] [tabindex="0"]').focus()
+      await hold(' ', 4)
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000, message: 'a held Space started it, once' }).toBe(false)
+      await window.waitForTimeout(400)
+      expect((await videoState(window)).paused, 'and the repeats did not stop it again').toBe(false)
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
+
+      // The Timeline: click the track (the slider takes the keyboard), hold Space.
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      const at20 = await trackPointAt(window, 0.2)
+      await window.mouse.click(at20.x, at20.y)
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      await hold(' ', 4)
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000, message: 'a held Space on the track played it, once' }).toBe(false)
+      await window.waitForTimeout(400)
+      expect((await videoState(window)).paused).toBe(false)
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(true)
+
+      // The keys that repeat on purpose still do: a held ArrowRight on the slider keeps nudging (0.1 s each) past its first press.
+      const before = (await videoState(window)).t
+      await hold('ArrowRight', 4)
+      await expect
+        .poll(async () => (await videoState(window)).t - before, { timeout: 10_000, message: 'four keydowns of a held arrow moved the playhead four steps' })
+        .toBeGreaterThan(0.25)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-134 (2): I and O set a marker, and a marker is one decision per PRESS. They ran on every auto-repeat of a held key (about 30 a second): each
+  // repeat is an undo step, so a second of holding filled the store's 50-step history and evicted the person's real edits (executed against the real
+  // store: three addClip edits became un-undoable), and during playback the point drifted to the last repeat's frame. Playwright marks a keydown for a
+  // key that is already down as a repeat, which is what a held key does. The witness is Undo: after a held key ONE Undo takes the marker back to where
+  // it was (before the fix the repeats were their own steps, and the first Undo restored a point the repeat had just set again).
+  test('a held I or O marks once: one Undo takes it back, in the Player and on the Timeline (T-134 (2))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('heldmarker')
+    try {
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const hold = async (key: string, downs: number): Promise<void> => {
+        for (let i = 0; i < downs; i++) await window.keyboard.down(key)
+        await window.keyboard.up(key)
+      }
+      const near = (actual: number, wanted: number, what: string): void => {
+        expect(Math.abs(actual - wanted), `${what}: wanted about ${wanted} s, read ${actual} s`).toBeLessThan(0.25)
+      }
+      const [in0, , out0] = await timelineReadouts(window)
+      expect(in0, 'the clip starts as the whole video').toBe(0)
+
+      // ── The Player's column: In at about 0.5 s, held for four keydowns, then ONE Undo ──
+      const column = window.locator('[data-tutorial="video-player"] [tabindex="0"]')
+      await seekTo(window, dur * 0.25)
+      await column.focus()
+      await hold('i', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'the first keydown set the In point' }).toBeGreaterThan(0.3)
+      near((await timelineReadouts(window))[0], dur * 0.25, 'In from a held I in the Player')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'ONE Undo took the held I back to the start (the repeats were not steps)' })
+        .toBe(0)
+
+      // ... and Out at about 1.5 s.
+      await seekTo(window, dur * 0.75)
+      await column.focus()
+      await hold('o', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'the first keydown set the Out point' }).toBeLessThan(1.8)
+      near((await timelineReadouts(window))[2], dur * 0.75, 'Out from a held O in the Player')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'ONE Undo took the held O back to the end' })
+        .toBe(out0)
+
+      // ── The Timeline: click the track (the slider takes the keyboard), hold the key ──
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      const at25 = await trackPointAt(window, 0.25)
+      await window.mouse.click(at25.x, at25.y)
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      await expectScrubbedTo(window, dur * 0.25, 'a click at 25% of the track')
+      await hold('i', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'a held I on the track set the In point' }).toBeGreaterThan(0.3)
+      near((await timelineReadouts(window))[0], dur * 0.25, 'In from a held I on the Timeline')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'ONE Undo took the held I on the track back' })
+        .toBe(0)
+
+      const at75 = await trackPointAt(window, 0.75)
+      await window.mouse.click(at75.x, at75.y)
+      await expect(slider).toBeFocused()
+      await expectScrubbedTo(window, dur * 0.75, 'a click at 75% of the track')
+      await hold('o', 4)
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'a held O on the track set the Out point' }).toBeLessThan(1.8)
+      near((await timelineReadouts(window))[2], dur * 0.75, 'Out from a held O on the Timeline')
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'ONE Undo took the held O on the track back' })
+        .toBe(out0)
+
+      // A press at a time of the person's own is still a marker: the rule is the repeat, not the key (two separate presses are two steps).
+      await seekTo(window, dur * 0.25)
+      await column.focus()
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeGreaterThan(0.3)
+      await seekTo(window, dur * 0.4)
+      await column.focus()
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeGreaterThan(0.6)
+      await undo.click()
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'two separate presses are two steps: one Undo goes back to the first' })
+        .toBeGreaterThan(0.3)
+      expect((await timelineReadouts(window))[0]).toBeLessThan(0.7)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-120 (14): the Timeline's I and O marked the store's `currentTime`, which is written on `timeupdate` (about every
+  // 250 ms during playback), while the Player's own I and O read the element. The store's number is made stale on
+  // purpose here (the element's timeupdate is stopped before React hears it), so the two readings are a second
+  // apart and the answer cannot be an accident of when the last timeupdate happened to land.
+  test('timeline: I during playback marks the frame on screen, not the last time the store heard of (T-120)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('timelinelive')
+    try {
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+      const at5 = await trackPointAt(window, 0.05)
+      await window.mouse.click(at5.x, at5.y)
+      await expectScrubbedTo(window, dur * 0.05, 'a click at 5% of the track')
+      await expect(window.getByRole('slider', { name: 'Playhead' })).toBeFocused()
+
+      await window.evaluate(() => {
+        const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
+        if (!v) throw new Error('__imagiiVideoEl is not set')
+        // Capture phase on the element itself runs before React's listener: the store never hears a timeupdate.
+        v.addEventListener('timeupdate', (e) => e.stopImmediatePropagation(), { capture: true })
+        void v.play()
+      })
+      await expect.poll(async () => (await videoState(window)).t, { timeout: 10_000 }).toBeGreaterThan(0.9)
+      const before = (await videoState(window)).t
+      await window.keyboard.press('i')
+      const after = (await videoState(window)).t
+      await window.evaluate(() =>
+        (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl?.pause()
+      )
+      await expect
+        .poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'the in point moved to the playing frame' })
+        .toBeGreaterThan(0.7)
+      const [start] = await timelineReadouts(window)
+      // The store's playhead was still at the click (~0.1 s); the picture was at `before`..`after`. The readout
+      // truncates to a tenth, so allow that plus the key's own latency.
+      expect(start, `In ${start} vs the frame on screen at ${before}-${after}`).toBeGreaterThanOrEqual(before - 0.15)
+      expect(start).toBeLessThanOrEqual(after + 0.15)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('timeline: the arrows and , . during playback step from the frame on screen, not the last time the store heard of (T-121)', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('timelinestep')
+    try {
+      await expect
+        .poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 })
+        .toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+      // The store never hears a timeupdate, so its playhead stays wherever the last click or key left it while the
+      // picture plays on (the capture phase on the element itself runs before React's listener).
+      await window.evaluate(() => {
+        const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
+        if (!v) throw new Error('__imagiiVideoEl is not set')
+        v.addEventListener('timeupdate', (e) => e.stopImmediatePropagation(), { capture: true })
+      })
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      // QA's measurement before the fix: `.` stepped BACK 0.151 s and the right arrow moved +0.053 s (the 0.1 s
+      // nudge from a store that trailed by 0.05). The fixture is 15 fps, so a frame is 1/15 s.
+      const cases: Array<[string, number]> = [
+        ['ArrowRight', 0.1],
+        ['ArrowLeft', -0.1],
+        ['.', 1 / FIXTURE_FPS],
+        [',', -1 / FIXTURE_FPS]
+      ]
+      for (const [key, delta] of cases) {
+        // Park the store's playhead near the start with a click, then let the picture run past it.
+        const at5 = await trackPointAt(window, 0.05)
+        await window.mouse.click(at5.x, at5.y)
+        await expectScrubbedTo(window, dur * 0.05, `a click at 5% of the track before ${key}`)
+        await expect(slider).toBeFocused()
+        await window.evaluate(() => {
+          const v = (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl
+          void v?.play()
+        })
+        await expect.poll(async () => (await videoState(window)).t, { timeout: 10_000 }).toBeGreaterThan(0.9)
+        const before = (await videoState(window)).t
+        await window.keyboard.press(key)
+        await window.evaluate(() =>
+          (window as unknown as { __imagiiVideoEl?: HTMLVideoElement | null }).__imagiiVideoEl?.pause()
+        )
+        const after = (await videoState(window)).t
+        // From the frame on screen: the step plus the little the picture ran between the read and the key and the
+        // pause. From the store's stale ~0.1 s it would have landed near 0.2 s (or 0), most of a second away.
+        expect(after - before, `${key} moved the playhead from ${before} s to ${after} s`).toBeGreaterThanOrEqual(delta - 0.05)
+        expect(after - before, `${key} moved the playhead from ${before} s to ${after} s`).toBeLessThanOrEqual(delta + 0.6)
+      }
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('timeline: the playhead never lies — store churn keeps it, leaving and returning keeps it too (T-52, T-156 (2))', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('playheadsync')
     try {
@@ -1202,9 +1732,9 @@ test.describe('Video Studio core editing surface', () => {
       expect(churnedPct).toBeGreaterThan(55)
       expect(churnedPct).toBeLessThan(65)
 
-      // ── leaving and returning: the studio remounts with a NEW <video> that
-      //    starts at 0, so the marker must say 0 too. The stale store value
-      //    used to draw a playhead the video was nowhere near. ──
+      // ── leaving and returning (T-156 (2), edited in place: T-52 had this reset to 0): the studio remounts with a NEW <video>, which is
+      //    sent back to where the person left it, and the marker, the readout and the element must all say the same thing. The stale-marker
+      //    lie T-52 fixed (a marker where the video is not) is still the failure this case catches. ──
       await window.getByRole('link', { name: 'Home' }).click()
       await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
       await window.locator('a', { hasText: 'Video Studio' }).first().click()
@@ -1214,17 +1744,16 @@ test.describe('Video Studio core editing surface', () => {
       // GifPanel's "Export GIF" — hence the exact name).
       await expect(window.getByRole('button', { name: 'Export 2' })).toBeVisible()
 
-      expect((await videoState(window)).t, 'the remounted media element starts at 0').toBeLessThan(
-        SEEK_TOLERANCE
-      )
+      await expectLanded(window, 1.2, 'the remounted media element is back at 1.2 s')
       await expect
         .poll(() => playheadPercent(window), {
           timeout: 10_000,
-          message: 'the drawn playhead must follow the remounted element back to 0'
+          message: 'the drawn playhead must follow the remounted element, not rewind to 0'
         })
-        .toBeLessThan(1)
+        .toBeGreaterThan(55)
+      expect(await playheadPercent(window)).toBeLessThan(65)
       await expect(window.locator('[data-tutorial="video-player"] .font-mono')).toContainText(
-        '0:00.00'
+        '0:01.20'
       )
     } finally {
       await app.close()
@@ -1253,7 +1782,16 @@ test.describe('Video Studio core editing surface', () => {
       await expect(secondRow).toHaveClass(/border-accent/)
 
       // ── rename (T-17: the input is a sibling of the select button) ──
-      await secondRow.getByRole('textbox').fill('Intro hook')
+      // T-119 (10): the field shows where the keyboard is. It had `outline-none` and only a background
+      // change on focus (1.06:1 against the card), the one such field in the app without a ring. The ring is
+      // a box-shadow in the accent color; unfocused, there is none.
+      const rename = secondRow.getByRole('textbox')
+      const ringOf = (): Promise<string> => rename.evaluate((el) => getComputedStyle(el).boxShadow)
+      await rename.blur()
+      expect(await ringOf(), 'no ring while the field is not focused').toBe('none')
+      await rename.focus()
+      expect(await ringOf(), 'a focus ring in the accent color (#ff3131)').toContain('rgb(255, 49, 49)')
+      await rename.fill('Intro hook')
       // The store took the name: both of the row's controls re-label from it.
       await expect(clipCard.getByRole('textbox', { name: 'Rename clip Intro hook' })).toBeVisible()
       await expect(clipCard.getByRole('button', { name: 'Select clip Intro hook' })).toBeVisible()
@@ -1267,6 +1805,27 @@ test.describe('Video Studio core editing surface', () => {
       await clipCard.getByRole('button', { name: 'Select clip Clip 1' }).click()
       await expect(clipCard.locator('li').first()).toHaveClass(/border-accent/)
       await expect(secondRow).not.toHaveClass(/border-accent/)
+      // T-112: the selection is said, not only drawn — the selected row (and the button that
+      // selects it, where keyboard focus lands) is the current one; the other is not.
+      await expect(clipCard.locator('li').first()).toHaveAttribute('aria-current', 'true')
+      await expect(secondRow).not.toHaveAttribute('aria-current', /.*/)
+      await expect(clipCard.getByRole('button', { name: /^Select clip Clip 1/ })).toHaveAttribute(
+        'aria-current',
+        'true'
+      )
+      await expect(clipCard.getByRole('button', { name: /^Select clip Intro hook/ })).not.toHaveAttribute(
+        'aria-current',
+        /.*/
+      )
+      // T-112 (label in name): the button's accessible name CONTAINS the timecode it shows, so
+      // a person who says what they read ("0:00 → 0:02") reaches it.
+      for (const index of [0, 1]) {
+        const row = clipCard.locator('li').nth(index)
+        const shown = (await row.getByRole('button', { name: /^Select clip/ }).innerText()).trim()
+        expect(shown).toMatch(/^\d+:\d{2} → \d+:\d{2}$/)
+        const label = await row.getByRole('button', { name: /^Select clip/ }).getAttribute('aria-label')
+        expect(label, `the name of row ${index} contains "${shown}"`).toContain(shown)
+      }
       // Clip 1 never had its speed changed — proof the panel switched clips.
       await expect(speedReadout).toHaveText('1.00×')
 
@@ -1443,8 +2002,8 @@ test.describe('Video Studio core editing surface', () => {
       // The fifth preset, `free`, unlocks the ratio instead of writing a rect
       // — the stored box must survive the click untouched.
       const beforeFree = await cropBox(window)
-      await cropRow.getByRole('button', { name: 'free', exact: true }).click()
-      await expect(cropRow.getByRole('button', { name: 'free', exact: true })).toHaveClass(
+      await cropRow.getByRole('button', { name: 'Free', exact: true }).click()
+      await expect(cropRow.getByRole('button', { name: 'Free', exact: true })).toHaveClass(
         /bg-accent/
       )
       expect(await cropBox(window)).toEqual(beforeFree)
@@ -1765,27 +2324,77 @@ test.describe('Video Studio core editing surface', () => {
       await row.locator('select').selectOption('Impact')
       await expect(row.locator('select')).toHaveValue('Impact')
 
-      // T-17 left the numeric fields in DOM order size, x, y, start, end;
-      // start and end carry aria-labels, the first three do not.
+      // T-17 left the numeric fields in DOM order size, x, y, start, end; T-125 (23) made start and end text boxes (they take
+      // 1:30 and 2:47:13), so the number boxes are the first three.
       const numbers = row.locator('input[type="number"]')
-      await expect(numbers).toHaveCount(5)
+      await expect(numbers).toHaveCount(3)
       await numbers.nth(0).fill('72')
       await expect(numbers.nth(0)).toHaveValue('72')
 
       await row.getByPlaceholder('white or #ffcc00').fill('#ffcc00')
       await expect(row.getByPlaceholder('white or #ffcc00')).toHaveValue('#ffcc00')
 
-      await numbers.nth(1).fill('0.42')
-      await expect(numbers.nth(1)).toHaveValue('0.42')
-      await numbers.nth(2).fill('0.66')
-      await expect(numbers.nth(2)).toHaveValue('0.66')
+      // T-113: the Color box takes a name too, and keeps the code that name stands for.
+      const color = row.getByPlaceholder('white or #ffcc00')
+      await color.fill('Gold')
+      await color.press('Enter')
+      await expect(color).toHaveValue('#ffd700')
+      // A name imagii does not know is refused in a sentence, here, with the text kept to fix...
+      await color.fill('notacolor')
+      await color.blur()
+      await expect(row.getByRole('alert')).toHaveText(
+        "imagii doesn't know that color. Use a name like white or a code like #ffcc00."
+      )
+      await expect(color).toHaveValue('notacolor')
+      // T-114: the box points at its sentence, so focusing it reads the reason - and says nothing extra
+      // when there is nothing wrong.
+      await expect(color).toHaveAccessibleDescription(
+        "imagii doesn't know that color. Use a name like white or a code like #ffcc00."
+      )
+      await expect(color).toHaveAttribute('aria-invalid', 'true')
+      // ...and typing again takes the sentence away.
+      await color.fill('white')
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      await expect(color).toHaveAccessibleDescription('')
+      await color.blur()
+      await expect(color).toHaveValue('#ffffff')
+
+      // T-113: a size past the range becomes the nearest edge when typing ends, and a size
+      // inside it goes straight in (so typing 72 is never turned into 82 on the way).
+      await numbers.nth(0).fill('9999')
+      await numbers.nth(0).blur()
+      await expect(numbers.nth(0)).toHaveValue('512')
+      await numbers.nth(0).fill('3')
+      await numbers.nth(0).blur()
+      await expect(numbers.nth(0)).toHaveValue('8')
+      await numbers.nth(0).click()
+      await numbers.nth(0).press('Control+a')
+      await numbers.nth(0).pressSequentially('72')
+      await expect(numbers.nth(0)).toHaveValue('72')
+
+      // T-150 (4): the boxes are a PERCENT from the top left (0 to 100), stored as the same 0-1 fraction.
+      await numbers.nth(1).fill('42')
+      await expect(numbers.nth(1)).toHaveValue('42')
+      await numbers.nth(2).fill('66')
+      await expect(numbers.nth(2)).toHaveValue('66')
+
+      // T-114: both position boxes are named. One <label> wraps the pair, so only the first used to
+      // have a name from it and the second had none at all. T-115: the names say what the boxes ARE, including the range they
+      // take. T-150 (4): the label is "Position (%)" and both names begin with it.
+      await expect(numbers.nth(1)).toHaveAccessibleName('Position (%), from the left (0 to 100)')
+      await expect(numbers.nth(2)).toHaveAccessibleName('Position (%), from the top (0 to 100)')
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)', exact: true })).toHaveValue('42')
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)', exact: true })).toHaveValue('66')
 
       // The two time fields round-trip through the store, which re-formats
       // them to two decimals — proof the value went through the clip.
-      await row.getByRole('spinbutton', { name: 'Overlay start second' }).fill('0.4')
-      await expect(row.getByRole('spinbutton', { name: 'Overlay start second' })).toHaveValue('0.40')
-      await row.getByRole('spinbutton', { name: 'Overlay end second' }).fill('1.6')
-      await expect(row.getByRole('spinbutton', { name: 'Overlay end second' })).toHaveValue('1.60')
+      // T-123 (3): the boxes keep what is typed until typing ends, so the formatted value is what a commit shows.
+      await row.getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' }).fill('0.4')
+      await row.getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' }).press('Enter')
+      await expect(row.getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' })).toHaveValue('0.40')
+      await row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' }).fill('1.6')
+      await row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' }).press('Enter')
+      await expect(row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' })).toHaveValue('1.60')
 
       // A second overlay proves the list is per-clip, not a singleton.
       await card.getByRole('button', { name: '+ Add text' }).click()
@@ -1800,6 +2409,494 @@ test.describe('Video Studio core editing surface', () => {
       await card.locator('li').first().getByRole('button', { name: 'Remove overlay' }).click()
       await expect(card.locator('h3')).toHaveText('Text overlays (0)')
       await expect(card.locator('li')).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('text overlays: the Time boxes take typed digits (12 is 12, not 1.00), and the end never sits before the start (T-123 (3))', async () => {
+    // The Time boxes rewrote their own value to "N.00" on every keystroke (`value={n.toFixed(2)}` and `Number(typed) || 0`): typing
+    // "12" gave 1.00, because the "1" came back as "1.00" and the "2" landed after it. `fill` replaces the value in one step, so
+    // the case above never saw it. The boxes keep what is typed until typing ends, like Size and Color beside them (T-113).
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('overlay-time')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const start = row.getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' })
+      const end = row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' })
+      await expect(start).toHaveValue('0.00')
+
+      // ── typing "12": the box holds what was typed, at every step ──
+      await start.click()
+      await start.press('Control+a')
+      await start.press('Backspace')
+      await expect(start, 'emptied: nothing snaps back into it').toHaveValue('')
+      await start.press('1')
+      await expect(start).toHaveValue('1')
+      await start.press('2')
+      await expect(start, 'two keys, "12" - not "1.002", not "1.00"').toHaveValue('12')
+      // Leaving it commits: the value is formatted, and the end (which was 2 s) is lifted to the new start.
+      await leave(start)
+      await expect(start).toHaveValue('12.00')
+      await expect(end, 'the end cannot sit before the start').toHaveValue('12.00')
+
+      // ── the end box the same way; typed past the start it stays, typed before it is clamped to it ──
+      await retype(end, '15.5')
+      await expect(end).toHaveValue('15.5')
+      await leave(end)
+      await expect(end).toHaveValue('15.50')
+      await retype(end, '3')
+      await expect(end).toHaveValue('3')
+      await leave(end)
+      await expect(end, 'an end before the start is clamped to the start').toHaveValue('12.00')
+      await expect(start).toHaveValue('12.00')
+
+      // ── Enter commits too, and an empty or non-numeric box changes nothing ──
+      await retype(start, '4')
+      await start.press('Enter')
+      await expect(start).toHaveValue('4.00')
+      await expect(end).toHaveValue('12.00')
+      await start.click()
+      await start.press('Control+a')
+      await start.press('Backspace')
+      await leave(start)
+      await expect(start, 'an emptied box goes back to what it was').toHaveValue('4.00')
+
+      // ── the committed numbers are the clip's: they survive a rebuild of the row ──
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      await expect(card.locator('li')).toHaveCount(2)
+      await expect(card.locator('li').first().getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' })).toHaveValue('4.00')
+      await expect(card.locator('li').first().getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' })).toHaveValue('12.00')
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-125 (23), (27): the Timeline reads h:mm:ss from an hour up, so the boxes that take a time in the source take it written that way
+  // (a stream's own timestamps are "2:47:13"), and a text box can be typed a letter into, so it refuses one in a sentence. Each overlay
+  // field's accessible name begins with the text drawn beside it (WCAG 2.5.3): "Overlay start second" sat beside a visible "Source time".
+  test('text overlays: the Source time boxes take 1:30 and 2:47:13, refuse what is not a time, and every field is named by the text beside it (T-125 (23), (27))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('overlay-clock')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const start = row.getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' })
+      const end = row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' })
+      await expect(start).toHaveValue('0.00')
+      await expect(end).toHaveValue('2.00')
+
+      // ── m:ss and h:mm:ss are seconds in the source ──
+      await retype(start, '0:01')
+      await leave(start)
+      await expect(start, 'm:ss').toHaveValue('1.00')
+      await retype(end, '1:02:03')
+      await leave(end)
+      // T-126 (5): at rest the box says the clock from one hour up (it echoed "3723.00" beside a Timeline that reads 1:02:03), and a
+      // time typed as a stream writes it stays that way: "2:47:13" is not rewritten to "10033.00" the moment the box is left.
+      await expect(end, 'h:mm:ss, 1 h 2 min 3 s, shown as the clock').toHaveValue('1:02:03.00')
+      await retype(end, '2:47:13')
+      await leave(end)
+      await expect(end, 'a stream timestamp stays a stream timestamp').toHaveValue('2:47:13.00')
+      await retype(end, '1:02:03')
+      await leave(end)
+      await expect(end).toHaveValue('1:02:03.00')
+      await retype(start, '1:00:00')
+      await leave(start)
+      await expect(start, 'one hour').toHaveValue('1:00:00.00')
+      await expect(end, 'the end stays where it was: it is after the new start').toHaveValue('1:02:03.00')
+      await retype(end, '1:00:01.5')
+      await leave(end)
+      await expect(end, 'a fraction rides on the seconds').toHaveValue('1:00:01.50')
+      // Plain seconds still work, and an end typed before the start is held at the start.
+      await retype(end, '12.5')
+      await leave(end)
+      await expect(end, 'before the start: clamped to it').toHaveValue('1:00:00.00')
+      // And the clock re-reads as itself: leaving a box that shows "1:00:00.00" again changes nothing.
+      await retype(end, '1:00:00.00')
+      await leave(end)
+      await expect(end).toHaveValue('1:00:00.00')
+
+      // ── what is not a time is refused, in a sentence, with the text kept to fix ──
+      const REFUSAL = 'imagii could not read that time. Use seconds like 90.5, or a time like 1:30 or 2:47:13.'
+      for (const typed of ['abc', '1:75', '-5', '1:2:3:4', '1:60:00']) {
+        await retype(start, typed)
+        await leave(start)
+        await expect(row.getByRole('alert'), `"${typed}" is refused`).toHaveText(REFUSAL)
+        await expect(start, 'and kept, to fix').toHaveValue(typed)
+        await expect(start).toHaveAttribute('aria-invalid', 'true')
+        await expect(start).toHaveAccessibleDescription(REFUSAL)
+      }
+      expect(await readToastLog(window), 'a refused time is the box\'s sentence, not a toast').not.toContain(REFUSAL)
+      // The overlay kept what it had (nothing the refused text said reached it), typing again takes the sentence away, and a good time lands.
+      await start.press('Control+a')
+      await start.press('Backspace')
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      await start.press('2')
+      await leave(start)
+      // T-127 (7): the end is still at one hour, so the PAIR is the clock: the start (2 s) reads "0:02.00", not "2.00" beside a clock.
+      await expect(start).toHaveValue('0:02.00')
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      // An emptied box commits nothing and says nothing.
+      await start.click()
+      await start.press('Control+a')
+      await start.press('Backspace')
+      await leave(start)
+      await expect(start).toHaveValue('0:02.00')
+      await expect(row.getByRole('alert')).toHaveCount(0)
+
+      // ── T-127 (7): the PAIR decides the form, both ways (each box picked its own: "3590.00 -> 1:00:10.00 s") ──
+      // Over: the end is at one hour, so the start reads as the clock too and there is no "s" after the end.
+      await expect(end).toHaveValue('1:00:00.00')
+      await expect(row.getByText('s', { exact: true }), 'a clock has no unit').toHaveCount(0)
+      // Under: the end back below an hour, and both are seconds, with the unit.
+      await retype(end, '30')
+      await leave(end)
+      await expect(start, 'both under an hour: seconds').toHaveValue('2.00')
+      await expect(end).toHaveValue('30.00')
+      await expect(row.getByText('s', { exact: true }), 'and the "s" is back').toHaveCount(1)
+      // Over from the other side: the START at an hour lifts the end to it, and both are the clock again.
+      await retype(start, '1:00:00')
+      await leave(start)
+      await expect(start).toHaveValue('1:00:00.00')
+      await expect(end, 'the end is lifted to the start').toHaveValue('1:00:00.00')
+      await expect(row.getByText('s', { exact: true })).toHaveCount(0)
+      // The span of the pair across the line: 59:50 to 1:00:10 reads as one form.
+      await retype(start, '3590')
+      await leave(start)
+      await retype(end, '3610')
+      await leave(end)
+      await expect(start, 'under an hour, beside an end over it: the clock').toHaveValue('59:50.00')
+      await expect(end).toHaveValue('1:00:10.00')
+      await retype(start, '2')
+      await leave(start)
+      await expect(start).toHaveValue('0:02.00')
+
+      // ── (27) every field is named by the text drawn beside it ──
+      const labels = row.locator('label')
+      const count = await labels.count()
+      let checked = 0
+      for (let i = 0; i < count; i++) {
+        const label = labels.nth(i)
+        const visible = ((await label.locator('span.text-ink-muted').first().textContent()) ?? '').trim()
+        if (!visible) continue
+        const controls = label.locator('input, select')
+        for (let j = 0; j < (await controls.count()); j++) {
+          const escaped = visible.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')
+          await expect(controls.nth(j), `the field beside "${visible}" is named by it`).toHaveAccessibleName(new RegExp(`^${escaped}`))
+          checked += 1
+        }
+      }
+      // Font, Size (px), Color (a DraftField's own row), Position (%) twice and Source time start: six of the seven fields draw a label.
+      expect(checked, 'the loop looked at the card\'s labelled fields').toBeGreaterThanOrEqual(6)
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)', exact: true })).toBeVisible()
+      await expect(row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)', exact: true })).toBeVisible()
+      await expect(row.getByRole('textbox', { name: 'Overlay start second' }), 'the old names are gone').toHaveCount(0)
+      await expect(row.getByRole('spinbutton', { name: 'Overlay horizontal position (0 to 1)' })).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('text overlays: the position boxes take a leading decimal (.5 is 0.5%, not 100), and the draft is kept until typing ends (T-124 (15), T-150 (4))', async () => {
+    // The x / y boxes were controlled by `Math.min(1, Math.max(0, Number(e.target.value) || 0))` on every keystroke, and a number
+    // input reports "" for a lone ".", which became 0 and rewrote the box: ".5" was "05", then 1, and ".25" was 1. T-150 (4): the boxes
+    // are a percent now (0 to 100) and commit when typing ends; the discipline of the draft is the same.
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('overlay-position')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const x = row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)' })
+      const y = row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)' })
+      await expect(x).toHaveValue('10')
+      await expect(y).toHaveValue('85')
+
+      for (const [typed, shown] of [
+        ['.5', '0.5'],
+        ['12.5', '12.5'],
+        ['7', '7'],
+        ['0.5', '0.5']
+      ] as const) {
+        await x.click()
+        await x.press('Control+a')
+        await x.press('Backspace')
+        await expect(x, 'emptied: nothing snaps back into it').toHaveValue('')
+        // The lone "." is nothing a number input can report: the box must not rewrite itself to 0 (which made the next digit "05").
+        await x.press('.')
+        await expect(x, 'a lone "." is not turned into 0').toHaveValue('')
+        await x.press('Control+a')
+        await x.press('Backspace')
+        await x.pressSequentially(typed)
+        await expect(x, `"${typed}" stays as typed while the box has focus`).toHaveValue(typed)
+        await leave(x)
+        await expect(x, `"${typed}" is ${shown}`).toHaveValue(shown)
+        // ...and the overlay really has it: the box reads it back after a trip off and on.
+        await x.focus()
+        await expect(x).toHaveValue(shown)
+        await leave(x)
+      }
+
+      await retype(y, '30')
+      await expect(y).toHaveValue('30')
+      await leave(y)
+      await expect(y).toHaveValue('30')
+      // An emptied box commits nothing and goes back to what it was.
+      await x.click()
+      await x.press('Control+a')
+      await x.press('Backspace')
+      await leave(x)
+      await expect(x, 'an emptied box goes back to what it was').toHaveValue('0.5')
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-124 (18), (19): the overlay's Time boxes are seconds in the SOURCE video, and a window that never meets the selected clip draws
+  // nothing: the export finishes cleanly with the text missing and nothing says why. Nothing previews an overlay either (the player
+  // draws the picture only), which BRANDING says a control says in one line.
+  test('text overlays: the Time boxes say they are source time, a window that misses the clip is flagged, and the card says nothing previews it (T-124 (18), (19))', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('overlay-window')
+    try {
+      const card = overlayCard(window)
+      // Before an overlay exists the card has its own sentence; the no-preview line arrives with the first one.
+      await expect(card.getByText('Text appears in the exported file, not in the player.')).toHaveCount(0)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      await expect(
+        card.getByText('Text appears in the exported file, not in the player. Times are seconds in the source video, or a time like 2:47:13.'),
+        'the card says nothing previews an overlay, and what its times are'
+      ).toBeVisible()
+      await expect(row.getByText('Source time', { exact: true })).toBeVisible()
+
+      const start = row.getByRole('textbox', { name: 'Source time, start (seconds, or a time like 2:47:13)' })
+      const end = row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' })
+      const status = row.getByRole('status')
+      // The untouched overlay spans the clip (0 to 2 s here): nothing to warn about, and the live region is there but empty.
+      await expect(start).toHaveValue('0.00')
+      await expect(end).toHaveValue('2.00')
+      await expect(status).toHaveText('')
+
+      // A window after the clip: flagged, with the clip's own range, in the live region.
+      await retype(start, '5')
+      await leave(start)
+      await retype(end, '8')
+      await leave(end)
+      await expect(status, 'a window that misses the clip draws nothing, and the card says so').toHaveText(
+        "This text won't show in the export: its times fall outside the clip, which runs from 0.00 to 2.00 s of the video."
+      )
+      // Back over the clip: the warning goes.
+      await retype(start, '1')
+      await leave(start)
+      await expect(status).toHaveText('')
+      // A window that only opens as the clip ends shows nothing either (half-open against the clip's end).
+      await retype(start, '2')
+      await leave(start)
+      await expect(status).toContainText("won't show in the export")
+      // T-125 (14): an end typed before the start is clamped TO the start, and a window of no length is never on screen wherever it
+      // sits - inside the clip (start 1) as much as outside it. Its sentence is the true one ("its times fall outside the clip" is
+      // false for a window inside it), and it is the same on both sides of the clip's edge.
+      const ZERO = "This text won't show in the export: its start and end are the same, so it never shows."
+      await retype(start, '1')
+      await leave(start)
+      await retype(end, '1')
+      await leave(end)
+      await expect(end, 'the end is the start').toHaveValue('1.00')
+      await expect(status, 'inside the clip, and still a window of no length').toHaveText(ZERO)
+      await expect(status).not.toContainText('fall outside the clip')
+      await retype(start, '5')
+      await leave(start)
+      await expect(end, 'the end follows the start up').toHaveValue('5.00')
+      await expect(status, 'outside the clip, the same window of no length').toHaveText(ZERO)
+      // A window with any length goes back to the sentence about the clip (or to none).
+      await retype(end, '5.5')
+      await leave(end)
+      await expect(status).toHaveText(
+        "This text won't show in the export: its times fall outside the clip, which runs from 0.00 to 2.00 s of the video."
+      )
+      await retype(start, '0.5')
+      await leave(start)
+      await expect(status, 'a window of 5 s over a 2 s clip meets it: nothing to say').toHaveText('')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the clip speed says it is applied when you export, and that the player plays at normal speed (T-124 (19))', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('speed-disclosure')
+    try {
+      await expect(window.getByText('Speed is applied when you export. The player here always plays at normal speed.')).toBeVisible()
+      // And it is true: moving the slider does not change what the player plays.
+      const slider = window.getByRole('slider', { name: 'Clip playback speed' })
+      await slider.press('End')
+      await expect(slider).toHaveValue('4')
+      const rate = await window.evaluate(() => (document.querySelector('video') as HTMLVideoElement).playbackRate)
+      expect(rate, 'the player\'s own playback rate').toBe(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-124 (23): the Text overlays card was visibly broken at the default window. Its rows were two columns of a 230 px card: the Font
+  // select (`flex-1`, no `min-w-0`) ran under "Size", the "x / y" label (`w-12`) was squeezed onto three lines, the Time row was
+  // 41 px wider than its cell and the remove cross sat 12 px outside the card. Nothing in the behavior case could see any of it:
+  // `fill()` and `click()` scroll a control into view and do not care what it is drawn over.
+  test('the Text overlays card draws every control whole, on one line and over nothing else, at the default window and the minimum (T-124 (23))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('overlay-layout')
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      await expect(row).toHaveCount(1)
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await resizeAndSettle(app, window, size)
+        await expectNoHorizontalOverflow(card, `the Text overlays card at ${where}`)
+        const controls = row.locator('input, select, button')
+        await expectControlsWhole(card, controls.filter({ hasNot: window.locator('select') }), `the overlay's boxes and buttons at ${where}`)
+        await expectSelectsWhole(card, row.locator('select'), `the overlay's Font select at ${where}`)
+        // The labels each fit on one line: "x / y" was drawn as "x", "/", "y". T-125 (16): and "Size (px)" is one of them; T-150 (4): so is "Position (%)".
+        await expect(row.getByText('Position (%)', { exact: true }), `the Position label at ${where}`).toBeVisible()
+        await expect(row.getByText('Size (px)', { exact: true }), `the Size label says what it counts, at ${where}`).toBeVisible()
+        await expectOneLine(row.locator('label > span.text-ink-muted'), `the overlay's labels at ${where}`)
+        // And nothing is painted over anything else (the Font select ran under "Size").
+        await expectNoOverlap(row.locator('input, select, button, label > span'), `the overlay's controls at ${where}`)
+        // The remove cross is inside the card.
+        await expectControlsWhole(card, row.getByRole('button', { name: 'Remove overlay' }), `the remove cross at ${where}`)
+      }
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-overlay-layout-min.png') })
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-125 (17): the Source time row wraps in a card this narrow, and as three flex items it broke between the arrow and its box, leaving
+  // "→" at the end of the first line with "[end] s" under it. Nothing is clipped, overlapped or cut, so the other layout checks pass.
+  test('the Source time row keeps the arrow with its end box and its "s", at the default window and the minimum (T-125 (17))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('overlay-arrow')
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const problems: string[] = []
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await resizeAndSettle(app, window, size)
+        try {
+          await expectSameRow(
+            [
+              { name: 'the arrow', locator: row.locator('span.text-ink-dim', { hasText: '→' }) },
+              { name: 'the end box', locator: row.getByRole('textbox', { name: 'Source time, end (seconds, or a time like 2:47:13)' }) },
+              { name: 'the "s"', locator: row.locator('span.text-ink-dim', { hasText: /^s$/ }) }
+            ],
+            `the Source time row's end half at ${where}`
+          )
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      expect(problems, 'the arrow, the end box and "s" share a line at every window size').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-126 (3): a Source time box has no label of its own (the row's "Source time" is the caller's), and its refusal sentence used to be
+  // drawn BESIDE the box in the same flex row: an ~8-line column 70 px wide at the card's 224 px row, and for the end box a sentence
+  // between the box and its "s". Text and aria were pinned; where the sentence is drawn was not. It is now a full-width row of its own,
+  // under the box, after everything else in the row.
+  test('a refused Source time is one full-width sentence under its box, over nothing, at the default window and the minimum (T-126 (3))', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('overlay-refusal-layout')
+    try {
+      await resizeAndSettle(app, window, DEFAULT_WINDOW)
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const alert = row.getByRole('alert')
+      const REFUSAL = 'imagii could not read that time. Use seconds like 90.5, or a time like 1:30 or 2:47:13.'
+      const problems: string[] = []
+      const check = async (run: () => Promise<void>): Promise<void> => {
+        try {
+          await run()
+        } catch (e) {
+          problems.push(((e as Error).message.split('\n')[0] ?? '').replace(/\u001b\[[0-9;]*m/g, ''))
+        }
+      }
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await resizeAndSettle(app, window, size)
+        for (const which of ['start', 'end'] as const) {
+          const box = row.getByRole('textbox', { name: `Source time, ${which} (seconds, or a time like 2:47:13)` })
+          await retype(box, 'abc')
+          await leave(box)
+          const what = `the ${which} box's refusal at ${where}`
+          await expect(alert, `${what}: shown, once`).toHaveCount(1)
+          await expect(alert).toHaveText(REFUSAL)
+          const m = await alert.evaluate((el, boxSelector) => {
+            const li = el.closest('li') as HTMLElement
+            const input = li.querySelector(boxSelector) as HTMLElement
+            const lr = li.getBoundingClientRect()
+            const cs = getComputedStyle(li)
+            const inner = lr.width - parseFloat(cs.paddingLeft) - parseFloat(cs.paddingRight) - li.clientLeft * 2
+            const a = el.getBoundingClientRect()
+            const b = input.getBoundingClientRect()
+            return {
+              width: a.width,
+              inner,
+              top: a.top,
+              boxBottom: b.bottom,
+              left: a.left,
+              rowLeft: lr.left + parseFloat(cs.paddingLeft),
+              lines: a.height / (parseFloat(getComputedStyle(el).lineHeight) || 16)
+            }
+          }, `input[aria-label="Source time, ${which} (seconds, or a time like 2:47:13)"]`)
+          await check(async () => expect(m.top, `${what}: the sentence is UNDER its box, not beside it`).toBeGreaterThanOrEqual(m.boxBottom - 1))
+          await check(async () => expect(m.width, `${what}: full width (${Math.round(m.width)} px of a ${Math.round(m.inner)} px row)`).toBeGreaterThanOrEqual(m.inner * 0.9))
+          await check(async () => expect(m.left, `${what}: and starts at the row's left edge`).toBeLessThanOrEqual(m.rowLeft + 2))
+          await check(async () => expect(m.lines, `${what}: one column of at most four lines, not a sliver`).toBeLessThanOrEqual(4.5))
+          await check(() => expectControlsWhole(card, alert, `${what} (inside the card)`))
+          // And the sentence does not pull the row apart: the end box keeps its arrow and its "s" on ITS line (the sentence is drawn last), the
+          // start box keeps "Source time" on its line.
+          await check(() =>
+            expectSameRow(
+              which === 'end'
+                ? [
+                    { name: 'the arrow', locator: row.locator('span.text-ink-dim', { hasText: '→' }) },
+                    { name: 'the end box', locator: box },
+                    { name: 'the "s"', locator: row.locator('span.text-ink-dim', { hasText: /^s$/ }) }
+                  ]
+                : [
+                    { name: '"Source time"', locator: row.getByText('Source time', { exact: true }) },
+                    { name: 'the start box', locator: box }
+                  ],
+              `the ${which} half of the Source time row, with its refusal showing, at ${where}`
+            )
+          )
+          await check(() => expectNoOverlap(row.locator('input, select, button, label > span, [role="alert"]'), `the overlay's controls and sentence at ${where}`))
+          // Typing a good time takes the sentence away and leaves the row as it was.
+          await retype(box, which === 'start' ? '0' : '2')
+          await leave(box)
+          await expect(alert).toHaveCount(0)
+        }
+      }
+      expect(problems, 'a refusal is a full-width sentence under its box at every window size').toEqual([])
     } finally {
       await app.close()
     }
@@ -1826,8 +2923,10 @@ test.describe('Video Studio core editing surface', () => {
       })
       // ...and it carries the same 2 s of audio the video did.
       await expect(waveform.getByText(`/ 0:0${FIXTURE_SECONDS}.`, { exact: false })).toBeVisible()
-      // The header names the extracted file, not the mp4.
-      await expect(window.locator('header').getByText(/\.wav$/)).toBeVisible()
+      // T-108: the header names the VIDEO the sound came from. It used to show the extracted
+      // WAV's random scratch name ("aB3dE5fG7h.wav"), a file the person never chose.
+      await expect(window.locator('header').getByText('video-core.mp4', { exact: true })).toBeVisible()
+      await expect(window.locator('header').getByText(/\.wav$/)).toHaveCount(0)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'video-core-06-clean-audio.png') })
 
       // T-70: the recorder reads react-hot-toast's own `[role="status"]`
@@ -1840,7 +2939,7 @@ test.describe('Video Studio core editing surface', () => {
     }
   })
 
-  test('close asks first — dismissing keeps the video, accepting returns the drop zone', async () => {
+  test('a trimmed video: close asks first — dismissing keeps the video, accepting returns the drop zone', async () => {
     test.setTimeout(90_000)
     const { app, window } = await launchWithVideo('close')
     try {
@@ -1854,10 +2953,17 @@ test.describe('Video Studio core editing surface', () => {
         else await dialog.dismiss()
       })
 
+      // T-147 (3): the video is trimmed first, since an untouched one has nothing to lose and Close asks nothing (the case below). The real
+      // sequence the guide promises: click the track, press I.
+      const at40 = await trackPointAt(window, 0.4)
+      await window.mouse.click(at40.x, at40.y)
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeGreaterThan(0.5)
+
       // ── declined: everything stays ──
       await window.getByRole('button', { name: 'Close' }).click()
       await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
-      expect(messages[0]).toBe('Close this video? 1 clip and their edits will be discarded.')
+      expect(messages[0]).toBe('Close this video? 1 clip and its edits will be discarded.')
       await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
       await expect(window.locator('video')).toHaveCount(1)
       await expect(window.getByText('Drop a video here')).toHaveCount(0)
@@ -1872,6 +2978,54 @@ test.describe('Video Studio core editing surface', () => {
       await expect(window.getByRole('button', { name: 'Close' })).toHaveCount(0)
       await expect(window.getByRole('button', { name: 'Clean audio' })).toHaveCount(0)
       expect(messages).toHaveLength(2)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // T-125 (24): Clip Kit writes a whole posting folder (a version per platform, three thumbnails, the captions) and was the one feature
+  // nothing in the tour mentioned. The step points at the button, so the highlight must sit on it.
+  test('the Video tour introduces Clip Kit after Export, and its highlight sits on the Clip Kit button (T-125 (24))', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('tour-clipkit')
+    try {
+      await window.getByRole('button', { name: 'Show tutorial' }).click()
+      const coachmark = window.getByRole('dialog')
+      const heading = coachmark.locator('h3')
+      const seen: string[] = []
+      for (let i = 0; i < 16; i++) {
+        seen.push(((await heading.textContent()) ?? '').trim())
+        if (seen[seen.length - 1] === 'Clip Kit') break
+        await coachmark.getByRole('button', { name: /Next/ }).click()
+      }
+      expect(seen[seen.length - 1], `the tour reached a Clip Kit step (saw ${seen.join(' > ')})`).toBe('Clip Kit')
+      expect(seen[seen.length - 2], 'it follows Export').toBe('Export')
+      await expect(coachmark).toContainText(
+        "Select a clip and click 'Clip Kit' to export it for all five platforms, plus three thumbnails, into one new folder."
+      )
+      // The accent outline is drawn 8 px outside the target, and the step scrolls the target into view on arrival.
+      const button = window.getByRole('button', { name: /^Clip Kit/ })
+      await expect(button).toBeVisible()
+      await expect
+        .poll(
+          async () => {
+            const box = await button.boundingBox()
+            const ring = await window.locator('svg rect[fill="none"][rx="10"]').evaluate((el) => ({
+              x: Number(el.getAttribute('x')),
+              y: Number(el.getAttribute('y')),
+              w: Number(el.getAttribute('width')),
+              h: Number(el.getAttribute('height'))
+            }))
+            if (!box) return 'no button box'
+            const off = [ring.x - (box.x - 8), ring.y - (box.y - 8), ring.w - (box.width + 16), ring.h - (box.height + 16)]
+            return off.every((d) => Math.abs(d) <= 2) ? 'on the button' : `outline off the button by ${off.map(Math.round).join(', ')}`
+          },
+          { timeout: 10_000, intervals: [200] }
+        )
+        .toBe('on the button')
+      // And the tour carries on to its close.
+      await coachmark.getByRole('button', { name: /Next/ }).click()
+      await expect(heading).toHaveText("You're all set")
     } finally {
       await app.close()
     }
@@ -1906,4 +3060,972 @@ test.describe('Video Studio core editing surface', () => {
       await app.close()
     }
   })
+})
+
+// T-147 (3): Close asks about what would be LOST. A loaded video always has one clip, so the old test of "is there a clip" asked "1 clip and its edits will be
+// discarded" of a video nobody touched, while Audio Studio's Close asks nothing of an untouched sound.
+test.describe('T-147 (3): closing a video nobody touched asks nothing', () => {
+  test('open a video, press Close: no dialog, and the importer is back', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('close-untouched')
+    try {
+      // An unhandled dialog is auto-dismissed by Playwright, which would look like a question that was declined: the event itself is what is counted.
+      const dialogs: string[] = []
+      window.on('dialog', (dialog) => {
+        dialogs.push(dialog.message())
+        void dialog.dismiss()
+      })
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await expect(window.locator('video')).toHaveCount(0)
+      expect(dialogs, 'no dialog event fired').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-148: the first drag after another control is ONE undo step in Video Studio too. A press on a slider moves focus, and Chromium sends the slider its FIRST `input`
+// event BEFORE the control that had focus blurs; a card that closed its undo window on every blur closed it mid-drag, and the drag's second event began a second step.
+// Measured on the unchanged tree (real mouse down / moves / up): Contrast 1.00 -> 1.46 right after a Brightness drag took TWO Undos, with 0.77 (the press value) between.
+test.describe('T-148: a drag right after another control is one undo step (Video Studio)', () => {
+  /** Press at `fromFrac` of the slider's width and drag through `throughFracs`, releasing at the last; every stop is an `input` event. */
+  async function dragSlider(window: Page, slider: Locator, fromFrac: number, throughFracs: number[]): Promise<void> {
+    await slider.scrollIntoViewIfNeeded()
+    const box = await slider.boundingBox()
+    if (!box) throw new Error('the slider has no box')
+    const at = (f: number): { x: number; y: number } => ({ x: box.x + 8 + (box.width - 16) * f, y: box.y + box.height / 2 })
+    await dragThrough(window, at(fromFrac), throughFracs.map(at))
+  }
+
+  test('Color & motion: drag Brightness, then drag Contrast: ONE Undo puts Contrast back to 1.00 and the second Undo puts Brightness back', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t148-grade')
+    try {
+      const gradeCard = window.locator('.card').filter({ hasText: 'Color & motion' })
+      const readouts = gradeCard.locator('span.font-mono.w-12')
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(readouts).toHaveText(['0.00', '1.00', '1.00', '+0.00'])
+
+      await dragSlider(window, gradeCard.getByRole('slider', { name: 'Brightness' }), 0.2, [0.4, 0.6, 0.7])
+      await expect(readouts.nth(0), 'the Brightness drag moved it').not.toHaveText('0.00')
+      const brightness = (await readouts.nth(0).textContent()) ?? ''
+
+      // The press on Contrast is what moves focus off Brightness: the case that used to be two steps.
+      await dragSlider(window, gradeCard.getByRole('slider', { name: 'Contrast' }), 0.3, [0.5, 0.7, 0.9])
+      await expect(readouts.nth(1), 'the Contrast drag moved it').not.toHaveText('1.00')
+      await expect(readouts.nth(0), 'and left Brightness where it was').toHaveText(brightness)
+
+      await undo.click()
+      await expect(readouts.nth(1), 'ONE Undo is back to where the Contrast drag began (not its press value)').toHaveText('1.00')
+      await expect(readouts.nth(0), 'Brightness is untouched by that Undo').toHaveText(brightness)
+      await undo.click()
+      await expect(readouts, 'the second Undo is the Brightness drag').toHaveText(['0.00', '1.00', '1.00', '+0.00'])
+      await expect(undo, 'and nothing of either drag is left in the history').toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Clip list: click the rename field, then drag the Speed slider: ONE Undo restores the speed from before the drag', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t148-speed')
+    try {
+      const clipCard = clipListCard(window)
+      const speedReadout = clipCard.locator('span.font-mono.w-10')
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(speedReadout).toHaveText('1.00×')
+      await expect(undo).toBeDisabled()
+
+      // Focus the rename field (a click, no edit), so the press on the slider moves focus off a text field.
+      await clipCard.locator('li').first().getByRole('textbox').click()
+      await expect(clipCard.locator('li').first().getByRole('textbox')).toBeFocused()
+      await dragSlider(window, window.getByRole('slider', { name: 'Clip playback speed' }), 0.3, [0.5, 0.7, 0.9])
+      await expect(speedReadout, 'the drag moved it').not.toHaveText('1.00×')
+
+      await undo.click()
+      await expect(speedReadout, 'ONE Undo is the speed from before the drag').toHaveText('1.00×')
+      await expect(undo, 'nothing of the drag is left').toBeDisabled()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-149 (5): a MOUSE click from the Text overlay's caption into its Color box is a new edit. T-148 made the press's own blur ignored, so the release landed in the
+// newly focused text box and the T-80 "caret click" rule kept the caption's undo window open: the colour joined the caption's step (every field of one overlay shares
+// a key) and ONE Undo reverted both. A press that MOVES focus now ends the gesture; a caret click in the field that already had focus (T-80, above) still does not.
+test.describe('T-149 (5): a click from one Text overlay field into another is its own undo step', () => {
+  test('type a caption, MOUSE-click the Color box, type a colour, Tab away: ONE Undo reverts only the colour, a second the caption', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t149-fields')
+    try {
+      const card = overlayCard(window)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      const caption = row.getByPlaceholder('Caption')
+      const color = row.getByPlaceholder('white or #ffcc00')
+      await expect(caption).toHaveValue('Your text here')
+      const defaultColor = await color.inputValue()
+
+      // The caption, focused and typed the way a person does it (a real click, then keys).
+      await caption.click()
+      await caption.press('Control+a')
+      await caption.pressSequentially('FIRST BLOOD')
+      await expect(caption).toHaveValue('FIRST BLOOD')
+
+      // A REAL mouse press and release on the Color box: the press moves focus off the caption, the release lands in the newly focused text box.
+      await color.click()
+      await expect(color).toBeFocused()
+      await color.fill('#ff0000')
+      await color.press('Tab')
+      await expect(color).toHaveValue('#ff0000')
+      await expect(color, 'the box was left, so the colour was committed').not.toBeFocused()
+
+      await undo.click()
+      await expect(color, 'ONE Undo reverts only the colour').toHaveValue(defaultColor)
+      await expect(caption, 'and leaves the caption as typed').toHaveValue('FIRST BLOOD')
+      await undo.click()
+      await expect(caption, 'the second Undo is the caption').toHaveValue('Your text here')
+      await expect(color).toHaveValue(defaultColor)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-150 (4): the Text overlay's position boxes were a bare 0-1 fraction under "x / y" (0.1 over 0.85) and a typed 50 committed 1 - the far edge - with no
+// sentence. They are a PERCENT from the top left now, named by the label the row draws, and a number outside 0 to 100 is refused in a sentence and
+// stores nothing. The stored value is read from the project file Home saves (the overlay's own model is 0-1 and unchanged), not from the box.
+test.describe('T-150 (4): the Text overlay Position boxes are a percent, and a number outside 0 to 100 is refused', () => {
+  async function savedOverlay(app: ElectronApplication, window: Page, name: string): Promise<{ x: number; y: number }> {
+    const file = path.join(root, `t150-${name}-${Date.now().toString(36)}.imagii.json`)
+    await app.evaluate(({ dialog }, target) => {
+      ;(dialog as unknown as { showSaveDialog: unknown }).showSaveDialog = async () => ({ canceled: false, filePath: target })
+    }, file)
+    await window.getByRole('link', { name: 'Home' }).click()
+    await window.getByRole('button', { name: 'Save project' }).click()
+    await expect.poll(() => existsSync(file), { timeout: 15_000 }).toBe(true)
+    const saved = JSON.parse(readFileSync(file, 'utf8')) as { videoStudio: { clips: Array<{ textOverlays: Array<{ x: number; y: number }> }> } }
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(overlayCard(window)).toBeVisible()
+    const overlay = saved.videoStudio.clips[0]!.textOverlays[0]!
+    return { x: overlay.x, y: overlay.y }
+  }
+
+  test('the label says Position (%), 50 is half way (stored 0.5), and 150 and -5 are refused in a sentence with the overlay unmoved', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t150-position')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      const row = card.locator('li')
+      await expect(row.getByText('Position (%)', { exact: true }), 'the label says what the boxes are').toBeVisible()
+      await expect(row.getByText('x / y', { exact: true }), 'the bare x / y label is gone').toHaveCount(0)
+      const left = row.getByRole('spinbutton', { name: 'Position (%), from the left (0 to 100)', exact: true })
+      const top = row.getByRole('spinbutton', { name: 'Position (%), from the top (0 to 100)', exact: true })
+      await expect(left).toHaveValue('10')
+      await expect(top).toHaveValue('85')
+      expect(await savedOverlay(app, window, 'default'), 'the default is the same 0-1 fraction as before').toEqual({ x: 0.1, y: 0.85 })
+
+      // 50 is HALF WAY: stored 0.5 (it used to commit 1, the far edge, with no sentence).
+      await retype(left, '50')
+      await leave(left)
+      await expect(left).toHaveValue('50')
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      expect(await savedOverlay(app, window, 'centre')).toEqual({ x: 0.5, y: 0.85 })
+
+      // 150 is refused with the sentence, the text stays to be fixed, and the overlay does not move.
+      await retype(left, '150')
+      await leave(left)
+      await expect(row.getByRole('alert')).toHaveText('Position is a percent from the top left, from 0 to 100.')
+      await expect(left).toHaveValue('150')
+      await expect(left).toHaveAttribute('aria-invalid', 'true')
+      expect(await savedOverlay(app, window, 'refused'), 'the refused 150 stored nothing: not 1, not 0.15').toEqual({ x: 0.5, y: 0.85 })
+
+      // (The trip to Home above remounted the card, so every box starts clean.) Enter commits too, a negative is refused the same way, and each box
+      // carries its own sentence.
+      await expect(row.getByRole('alert')).toHaveCount(0)
+      await retype(top, '-5')
+      await top.press('Enter')
+      await expect(row.getByRole('alert')).toHaveCount(1)
+      await expect(top).toHaveAttribute('aria-invalid', 'true')
+      await retype(left, '150')
+      await leave(left)
+      await expect(row.getByRole('alert')).toHaveCount(2)
+      await retype(left, '25')
+      await leave(left)
+      await expect(row.getByRole('alert'), 'a corrected box clears its own sentence').toHaveCount(1)
+      await retype(top, '100')
+      await top.press('Enter')
+      await expect(row.getByRole('alert'), 'the edge is a value').toHaveCount(0)
+      expect(await savedOverlay(app, window, 'edges')).toEqual({ x: 0.25, y: 1 })
+
+      // The sentence is a row of its own under the boxes: nothing in the card overflows or is overlapped at the minimum window.
+      await retype(left, '999')
+      await leave(left)
+      await expect(row.getByRole('alert')).toBeVisible()
+      await expectNoHorizontalOverflow(card, 'the Text overlays card with a refused Position')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-152 (4): the O key at 0:00 made a clip of no length ([0, 0]) and the I key at the end made another ([D, D]); main refuses a range like that with a developer
+// sentence, so Export said only "Export failed.". `applyRange` now keeps the Timeline drag's own 0.1 s between In and Out. The Clips list prints whole seconds
+// ("0:00 → 0:00" for 0.1 s too), so the length is read where it is printed to the tenth: the Timeline's In / Length / Out.
+test.describe('T-152 (4): the I and O keys never make a clip with no length', () => {
+  const playerFocus = (window: Page): Promise<void> => window.locator('[data-tutorial="video-player"] [tabindex="0"]').focus()
+  const mp4s = (dir: string): string[] => withoutAtomicTmp(readdirSync(dir)).filter((f) => f.endsWith('.mp4'))
+
+  test('O at 0:00 keeps 0.1 s (In 0:00.0, Length 0:00.1, Out 0:00.1), Ctrl+Z gives the whole clip back, and Export writes a 0.1 s file', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t152-out')
+    try {
+      expect(await settledTime(window)).toBe(0)
+      await playerFocus(window)
+      await window.keyboard.press('o')
+      await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([0, 0.1, 0.1])
+
+      // The output the person asked for is real: the range reaches ffmpeg and a file comes out.
+      const outDir = path.join(root, `out-t152-${Date.now().toString(36)}`)
+      mkdirSync(outDir, { recursive: true })
+      await app.evaluate(({ dialog }, dir) => {
+        ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+      }, outDir)
+      await window.locator('[data-tutorial="video-export"]').getByRole('button', { name: /^Export/ }).click()
+      await expect.poll(() => mp4s(outDir), { timeout: 90_000, intervals: [500] }).toHaveLength(1)
+      const seconds = Number(
+        execFileSync(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(outDir, mp4s(outDir)[0]!)]).toString().trim()
+      )
+      expect(seconds, 'the file is the 0.1 s the range holds, not empty and not the whole clip').toBeGreaterThan(0)
+      expect(seconds).toBeLessThan(1)
+      expect((await readToastLog(window)).some((m) => /Export failed/.test(m)), 'no "Export failed."').toBe(false)
+
+      // One key press, one Undo step: Ctrl+Z puts the whole clip back.
+      await playerFocus(window)
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([0, FIXTURE_SECONDS, FIXTURE_SECONDS])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('I at the end of the video keeps 0.1 s (In 0:01.9, Length 0:00.1, Out 0:02.0)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t152-in')
+    try {
+      await seekTo(window, FIXTURE_SECONDS)
+      await playerFocus(window)
+      await window.keyboard.press('i')
+      await expect.poll(() => timelineReadouts(window), { timeout: 10_000 }).toEqual([FIXTURE_SECONDS - 0.1, 0.1, FIXTURE_SECONDS])
+      // T-153 (9): and the digits are the ones printed: Length reads 0:00.1 (the float is 0.10000000000000009 here, which was always read right; the
+      // 10 s case that read "Length 0:00.0" is in the T-153 describe below), and In and Out agree with each other.
+      expect(await timelineTexts(window)).toEqual(['0:01.9', '0:00.1', '0:02.0'])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a mid-clip I and O are still exactly where the playhead was (the floor changes nothing there)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t152-mid')
+    try {
+      await seekTo(window, 0.4)
+      await playerFocus(window)
+      await window.keyboard.press('i')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000 }).toBeCloseTo(0.4, 0)
+      const [start] = await timelineReadouts(window)
+      expect(start).toBeGreaterThanOrEqual(0.3)
+      expect(start).toBeLessThanOrEqual(0.5)
+      await seekTo(window, 1.2)
+      await playerFocus(window)
+      await window.keyboard.press('o')
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000 }).toBeGreaterThanOrEqual(1.1)
+      const [, length, end] = await timelineReadouts(window)
+      expect(end).toBeLessThanOrEqual(1.3)
+      expect(length).toBeGreaterThan(0.5)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-153 (8) + (9) + the Export panel's status region.
+//   (8) a project file whose clips carry no length ([0, 0], [D, D]; v1.6.0's I and O keys wrote them) restores with the 0.1 s floor, and Export writes both;
+//   (9) every tenths readout truncates float error into a whole digit: 1.2 read 0:01.1, 4.1 read 0:04.0, and I at the end of a 10 s video read "Length 0:00.0";
+//   fold: unchecking the last platform announces why Export went dark, in a status region that was already on the page.
+test.describe('T-153: clips that load with length, clocks that read true, Export says why it is off', () => {
+  const clip = (id: string, name: string, startSec: number, endSec: number) => ({
+    id,
+    name,
+    startSec,
+    endSec,
+    cropRect: null,
+    textOverlays: [],
+    selectedPresets: ['youtube']
+  })
+
+  /** Launch on Home with a seeded profile, write `clips` into a project file over the fixture, and open it through the real Open project button. */
+  async function openProjectWith(name: string, clips: ReturnType<typeof clip>[]): Promise<{ app: ElectronApplication; window: Page }> {
+    const userDataDir = path.join(root, `ud-${name}-${Date.now().toString(36)}`)
+    seedUserData(userDataDir)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+    const projectPath = path.join(root, `${name}-${Date.now().toString(36)}.imagii.json`)
+    writeFileSync(
+      projectPath,
+      JSON.stringify({
+        schemaVersion: 2,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        videoStudio: { sourcePath: fixture, clips, selectedClipId: clips[0]?.id ?? null, watermark: null, srtPath: null }
+      }),
+      'utf8'
+    )
+    await app.evaluate(({ dialog }, picked) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+    }, projectPath)
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+    await installToastLog(window)
+    await expect(window.locator('video')).toHaveCount(1, { timeout: 30_000 })
+    return { app, window }
+  }
+
+  test('(8) a project whose clips are [0, 0] and [D, D] opens with [0, 0.1] and [D - 0.1, D], and Export writes a file for each', async () => {
+    test.setTimeout(150_000)
+    const { app, window } = await openProjectWith('t153-floor', [clip('a', 'Start', 0, 0), clip('b', 'End', FIXTURE_SECONDS, FIXTURE_SECONDS)])
+    try {
+      await expect.poll(() => timelineReadouts(window), { timeout: 15_000 }).toEqual([0, 0.1, 0.1])
+      await window.getByRole('button', { name: 'Select clip End' }).click()
+      await expect.poll(() => timelineReadouts(window), { timeout: 15_000 }).toEqual([FIXTURE_SECONDS - 0.1, 0.1, FIXTURE_SECONDS])
+
+      const outDir = path.join(root, `out-t153-${Date.now().toString(36)}`)
+      mkdirSync(outDir, { recursive: true })
+      await app.evaluate(({ dialog }, dir) => {
+        ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [dir] })
+      }, outDir)
+      await window.locator('[data-tutorial="video-export"]').getByRole('button', { name: 'Export 2' }).click()
+      const mp4s = (): string[] => withoutAtomicTmp(readdirSync(outDir)).filter((f) => f.endsWith('.mp4'))
+      await expect.poll(mp4s, { timeout: 120_000, intervals: [500] }).toHaveLength(2)
+      for (const file of mp4s()) {
+        const seconds = Number(execFileSync(ffprobePath, ['-v', 'error', '-show_entries', 'format=duration', '-of', 'csv=p=0', path.join(outDir, file)]).toString().trim())
+        expect(seconds, `${file} is the 0.1 s the floor holds, not empty and not the whole clip`).toBeGreaterThan(0)
+        expect(seconds).toBeLessThan(1)
+      }
+      expect((await readToastLog(window)).some((m) => /Export failed/.test(m)), 'no "Export failed."').toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(9) the Timeline reads the tenths that were saved: 1.1 to 1.9 is In 0:01.1, Length 0:00.8, Out 0:01.9, and 0.2 to 1.2 is 0:00.2, 0:01.0, 0:01.2; the playhead at 1.2 reads 0:01.2', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await openProjectWith('t153-tenths', [clip('a', 'Late', 1.1, 1.9), clip('b', 'Early', 0.2, 1.2)])
+    try {
+      await expect.poll(() => timelineTexts(window), { timeout: 15_000 }).toEqual(['0:01.1', '0:00.8', '0:01.9'])
+      await window.getByRole('button', { name: 'Select clip Early' }).click()
+      await expect.poll(() => timelineTexts(window), { timeout: 15_000 }).toEqual(['0:00.2', '0:01.0', '0:01.2'])
+      // The slider's valuetext is the same readout: 18 frames at 15 fps is exactly 1.2 s.
+      await seekTo(window, 1.2)
+      await expect(window.locator('[data-tutorial="video-timeline"]').getByRole('slider', { name: 'Playhead' })).toHaveAttribute('aria-valuetext', '0:01.2')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(9) I at the end of a 10 s video is In 0:09.9, Length 0:00.1, Out 0:10.0 (it read 0:09.8, 0:00.0)', async () => {
+    test.setTimeout(150_000)
+    const tenSeconds = path.join(root, 'source', 'video-core-10s.mp4')
+    const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=10', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', tenSeconds])
+    expect(made.code, made.stderr.slice(-400)).toBe(0)
+    const { app, window } = await launchWithVideo('t153-ten', tenSeconds)
+    try {
+      await seekTo(window, 10)
+      await window.locator('[data-tutorial="video-player"] [tabindex="0"]').focus()
+      await window.keyboard.press('i')
+      await expect.poll(() => timelineTexts(window), { timeout: 10_000 }).toEqual(['0:09.9', '0:00.1', '0:10.0'])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(fold) unchecking the last platform puts why Export is off inside a status region that was already on the page', async () => {
+    test.setTimeout(90_000)
+    const WHY = 'Check at least one platform below to export.'
+    const { app, window } = await launchWithVideo('t153-status')
+    try {
+      const card = window.locator('[data-tutorial="video-export"]')
+      const region = card.locator('[role="status"]')
+      // Mounted while there is nothing to say: that is what makes a live region speak when its text arrives.
+      await expect(region).toHaveCount(1)
+      await expect(region).toHaveText('')
+      const before = await region.elementHandle()
+      await card.locator('label').filter({ has: window.getByText('YouTube', { exact: true }) }).getByRole('checkbox').uncheck()
+      await expect(region).toHaveText(WHY)
+      expect(await before?.evaluate((el) => el.isConnected), 'the same element that was there before, not a new one').toBe(true)
+      await expect(card.getByRole('button', { name: 'Export', exact: true })).toBeDisabled()
+      await card.locator('label').filter({ has: window.getByText('YouTube', { exact: true }) }).getByRole('checkbox').check()
+      await expect(region).toHaveText('')
+      await expect(region).toHaveCount(1)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-154 (7), (9) and the shortcuts-dialog fold
+// ═══════════════════════════════════════════════════════════════════════════
+// (7) the Player's keyboard stop was a bare focusable <div>: no role, no name. It is a named group now, with the keys it answers in `aria-keyshortcuts`.
+// (9) a text overlay's ✕: the list reflows when the first row goes and the next row's ✕ is under the pointer, so a double-click removed two overlays.
+// (fold) the `?` dialog's descriptions start at one left edge (a two-column grid), on /image as well as /video.
+test.describe('T-154 (7), (9), fold: the Player has a name, an overlay ✕ is one press, the shortcuts read in a column', () => {
+  test('the Player\'s keyboard stop is the group "Video player" and lists the keys it answers (and not the timeline\'s Home / End)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t154-player-name')
+    try {
+      const player = window.getByRole('group', { name: 'Video player' })
+      await expect(player).toHaveCount(1)
+      await expect(player, 'it is still the tab stop that owns the shortcuts').toHaveAttribute('tabindex', '0')
+      await expect(player).toHaveAttribute('aria-keyshortcuts', 'Space ArrowLeft ArrowRight , . I O')
+      await player.focus()
+      await expect(player).toBeFocused()
+      // The keys really do reach it: Space from the group plays the video.
+      await window.keyboard.press(' ')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(false)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a real double-click on the first overlay\'s ✕ removes ONE overlay of two', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t154-overlay-dblclick')
+    try {
+      const card = overlayCard(window)
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      await card.getByRole('button', { name: '+ Add text' }).click()
+      await expect(card.locator('h3')).toHaveText('Text overlays (2)')
+      await card.locator('li').first().getByPlaceholder('Caption').fill('KEEP ME')
+      await card.locator('li').nth(1).getByPlaceholder('Caption').fill('FIRST GONE')
+      // A second overlay below it: the first row's ✕ is what is pressed; the one that moves up under the pointer is the other.
+      await card.locator('li').first().getByRole('button', { name: 'Remove overlay' }).dblclick()
+      await expect(card.locator('h3')).toHaveText('Text overlays (1)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still one a moment later').toHaveText('Text overlays (1)')
+      await expect(card.locator('li').first().getByPlaceholder('Caption')).toHaveValue('FIRST GONE')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('on /video and /image at 1024x640 every description in the `?` dialog starts at the same left edge, right of every chip', async () => {
+    test.setTimeout(150_000)
+    const { app, window } = await launchWithVideo('t154-kbd-column')
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      for (const [hash, heading] of [['#/video', 'Video Studio'], ['#/image', 'Stream Graphics']] as const) {
+        await window.evaluate((h) => {
+          window.location.hash = h
+        }, hash)
+        await expect(window.getByRole('heading', { level: 1, name: heading, exact: true })).toBeVisible({ timeout: 30_000 })
+        await window.keyboard.press('?')
+        const dialog = window.getByRole('dialog')
+        await expect(dialog).toContainText('Keyboard shortcuts')
+        const rows = dialog.getByRole('listitem')
+        expect(await rows.count(), `${hash} lists several shortcuts`).toBeGreaterThan(4)
+        const edges = await rows.evaluateAll((lis) =>
+          lis.map((li) => ({
+            chipRight: (li.querySelector('kbd') as HTMLElement).getBoundingClientRect().right,
+            descLeft: (li.querySelector('span') as HTMLElement).getBoundingClientRect().left
+          }))
+        )
+        const lefts = new Set(edges.map((e) => Math.round(e.descLeft)))
+        expect(lefts.size, `${hash}: one left edge for every description (${[...lefts].join(', ')})`).toBe(1)
+        const widest = Math.max(...edges.map((e) => e.chipRight))
+        expect(edges[0]?.descLeft, 'and it is right of the widest chip').toBeGreaterThan(widest)
+        await window.keyboard.press('?')
+        await expect(dialog).toHaveCount(0)
+      }
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-155 (3): "+ Add clip" and "+ Add text" are one add per press
+// ═══════════════════════════════════════════════════════════════════════════
+// Both ran again on the second press of a double-click and on every auto-repeat of a held Enter (Enter on a focused button clicks it on keydown; each repeat is a keyboard
+// click). A fresh press is still an add. (The Stream Graphics "+ Add text" / "Start with text" and a layer's Duplicate are in image.spec.ts.)
+test.describe('T-155 (3): + Add clip and + Add text (Video Studio) are one add per press', () => {
+  test('a real double-click and a held Enter on + Add clip each add ONE clip', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t155-add-clip')
+    try {
+      await window.waitForTimeout(800)
+      const card = clipListCard(window)
+      const add = card.getByRole('button', { name: '+ Add clip' })
+      await expect(card.locator('h3')).toHaveText('Clips (1)')
+      await add.dblclick()
+      await expect(card.locator('h3')).toHaveText('Clips (2)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still two a moment later').toHaveText('Clips (2)')
+      await add.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(card.locator('h3')).toHaveText('Clips (3)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still three a moment later').toHaveText('Clips (3)')
+      // A fresh press is still an add.
+      await add.click()
+      await expect(card.locator('h3')).toHaveText('Clips (4)')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a real double-click and a held Enter on + Add text each add ONE overlay', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t155-add-overlay')
+    try {
+      await window.waitForTimeout(800)
+      const card = overlayCard(window)
+      const add = card.getByRole('button', { name: '+ Add text' })
+      await expect(card.locator('h3')).toHaveText('Text overlays (0)')
+      await add.dblclick()
+      await expect(card.locator('h3')).toHaveText('Text overlays (1)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still one a moment later').toHaveText('Text overlays (1)')
+      await add.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(card.locator('h3')).toHaveText('Text overlays (2)')
+      await window.waitForTimeout(800)
+      await expect(card.locator('h3'), 'still two a moment later').toHaveText('Text overlays (2)')
+      await add.click()
+      await expect(card.locator('h3')).toHaveText('Text overlays (3)')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-156 (2): the Player's source effect ran on MOUNT and wrote 0 to the transport and the store, so a person at 2:41:00 of a long VOD who visited Home,
+// Audio Studio or References came back to 0:00 (clips and scans survived; the place did not). A remount now restores the store's position the way a
+// parked seek is restored; a different file (Close, then another drop: `clearSource` / `loadSource` zero the store) still starts at 0.
+test.describe('T-156 (2): coming back to Video Studio keeps the playhead where it was', () => {
+  /** The Player's own clock readout ("0:01.00 / 0:02.02") as seconds elapsed. */
+  async function readoutSeconds(window: Page): Promise<number> {
+    const text = (await window.getByText(/^\d+:\d\d\.\d\d \/ \d+:\d\d\.\d\d$/).textContent()) ?? ''
+    const [m, s] = text.split(' / ')[0]!.split(':')
+    return Number(m) * 60 + Number(s)
+  }
+
+  test('Home and back keeps 1.0 s on the readout and the media element; a different file starts at 0:00', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t156-keeps-place')
+    try {
+      const other = path.join(root, 'source', 'video-core-other.mp4')
+      await makeFixtureMp4(other)
+      const frame = 1 / FIXTURE_FPS
+      await seekTo(window, 1)
+      await expect.poll(() => readoutSeconds(window), { timeout: 10_000, message: 'the readout follows the seek' }).toBeGreaterThan(1 - frame)
+
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('video')).toHaveCount(0)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible()
+      await expect.poll(async () => Math.abs((await readoutSeconds(window)) - 1) < frame, { timeout: 10_000, message: 'the readout reads 1.0 s after the round trip' }).toBe(true)
+      await expect.poll(async () => Math.abs((await settledTime(window)) - 1) < frame, { timeout: 10_000, message: 'the media element sits at 1.0 s' }).toBe(true)
+      await expect.poll(async () => Math.abs(Number(await window.getByRole('slider', { name: 'Playhead' }).getAttribute('aria-valuenow')) - 1) < frame, { timeout: 10_000, message: 'the Timeline playhead reads 1.0 s' }).toBe(true)
+
+      // A different file: Close (clearSource), then a drop of another path. Nothing carries over.
+      window.on('dialog', (dialog) => void dialog.accept())
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, other, path.basename(other))
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/^0:00\.00 \/ \d+:\d\d\.\d\d$/)).toBeVisible({ timeout: 10_000 })
+      expect(await settledTime(window)).toBeLessThan(frame)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-157 (3): "Pause" over a stopped video after the preview copy lands. `playing` was written only by the element's play / pause / ended events, and a
+// `src` change (what `previewUrl` does when "Make a preview copy" finishes) resets the element to paused with NO `pause` event - so a person who pressed
+// Play to hear a ProRes file's sound while the copy was made saw "Pause" (and its title) over a stopped picture.
+test.describe('T-157 (3): the Play button follows the element when its src is swapped', () => {
+  test('a playing video whose src is swapped for another file (the way the preview copy swaps it) reads Play within a second', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t157-src-swap')
+    try {
+      const other = path.join(root, 'source', 'video-core-t157-other.mp4')
+      await makeFixtureMp4(other)
+      const transport = window.getByRole('button', { name: /^(Play|Pause)$/ })
+      await expect(transport).toHaveAttribute('aria-label', 'Play')
+      await transport.click()
+      await expect(transport).toHaveAttribute('aria-label', 'Pause', { timeout: 10_000 })
+      // The swap is the element's `src` property, which is all `previewUrl` changes in the Player; no store hook is exposed to a test.
+      const wasPlaying = await window.evaluate((p) => {
+        const v = (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl
+        const playing = !v.paused
+        v.src = window.api.video.fileUrl(p)
+        return playing
+      }, other)
+      expect(wasPlaying, 'the video was playing when its src was swapped').toBe(true)
+      await expect.poll(async () => (await window.evaluate(() => (window as unknown as { __imagiiVideoEl: HTMLVideoElement }).__imagiiVideoEl.paused)), { timeout: 5_000 }).toBe(true)
+      await expect(transport, 'the button says Play over the stopped video').toHaveAttribute('aria-label', 'Play', { timeout: 1_000 })
+      await expect(transport).toHaveAttribute('title', 'Play (Space)')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-161 (5): Close names what is lost. A session with only a scan's results is a loss (T-147 (3)), but the question read "1 clip and its edits will be discarded" -
+// of a video whose clip nobody touched. The video is opened, Scan VOD is run over it for real, nothing is edited, and Close is pressed.
+test.describe('T-161 (5): Close after a scan with no edits names the scan, not edits', () => {
+  test('open a video, run Scan VOD, edit nothing, press Close: the question names the scan\'s results; declining keeps the scan, accepting returns the importer', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t161-close-scan')
+    try {
+      const messages: string[] = []
+      let answer: 'accept' | 'dismiss' = 'dismiss'
+      window.on('dialog', async (dialog) => {
+        messages.push(dialog.message())
+        if (answer === 'accept') await dialog.accept()
+        else await dialog.dismiss()
+      })
+      const card = window.locator('[data-tutorial="video-highlights"]')
+      await card.getByRole('button', { name: 'Scan VOD' }).click()
+      // The scan ends (found or none); its button turns into Re-scan once the results are stored.
+      await expect(card.getByRole('button', { name: 'Re-scan' })).toBeVisible({ timeout: 60_000 })
+
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
+      expect(messages[0]).toBe("Close this video? The scan's results will be discarded.")
+      expect(messages[0], 'nothing was edited and the question does not say so').not.toMatch(/edit|clip/)
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(card.getByRole('button', { name: 'Re-scan' }), 'declined: the scan is still there').toBeVisible()
+
+      answer = 'accept'
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      expect(messages).toHaveLength(2)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-166 (3): a crop, color or In/Out edit that changes nothing pushed an undo step that undoes nothing. The witness is the studio's own Undo button: it
+// stays disabled on an untouched video after each no-op, and lights for a real edit (the control, so a button that is always disabled cannot pass).
+test.describe('T-166 (3): an edit that changes nothing does not light Undo', () => {
+  test('open a video, tick then untick Crop, press Reset with no crop, and Reset color on the default grade: Undo stays disabled; a real crop lights it', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t166-noop-undo')
+    try {
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await expect(undo).toBeDisabled()
+      const cropToggle = window.getByRole('checkbox', { name: 'Crop', exact: true })
+
+      await cropToggle.check()
+      await expect(window.getByRole('button', { name: 'Reset', exact: true })).toBeVisible()
+      await cropToggle.uncheck()
+      await expect(cropToggle).not.toBeChecked()
+      await expect(undo, 'ticking then unticking Crop on an uncropped clip changed nothing').toBeDisabled()
+
+      await cropToggle.check()
+      await window.getByRole('button', { name: 'Reset', exact: true }).click()
+      await expect(undo, 'Reset with no crop changed nothing').toBeDisabled()
+
+      await window.getByRole('button', { name: 'Reset color' }).click()
+      await expect(undo, 'Reset color on the default grade changed nothing').toBeDisabled()
+
+      // Control: a real edit lights it.
+      await window.getByRole('button', { name: '16:9', exact: true }).click()
+      await expect(undo).toBeEnabled()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// T-168 (4) + fold: a running job says whose it is. The Export queue is a module store, so a batch started on A is still the panel's rows after A is closed
+// and B is opened - "Exporting…" over A's rows and a Cancel nobody could attribute. And the GIF, Compile and Picture-in-picture cards said a bare "Exporting…" /
+// "Stitching…" / "Compositing…". Main's handlers are replaced by ones that answer when the test says (the suite's pattern), so each job is still running when it is read.
+test.describe('T-168 (4): a running job says whose it is', () => {
+  /** Replace main's handler for `channel` with one that waits for `releaseHeld(channel)`, then answers with `answer`. */
+  async function holdInMain(app: ElectronApplication, channel: string, answer: unknown): Promise<void> {
+    await app.evaluate(
+      ({ ipcMain }, arg) => {
+        const g = globalThis as unknown as { __held?: Record<string, () => void> }
+        g.__held = g.__held ?? {}
+        const gate = new Promise<void>((resolve) => {
+          ;(g.__held as Record<string, () => void>)[arg.channel] = resolve
+        })
+        ipcMain.removeHandler(arg.channel)
+        ipcMain.handle(arg.channel, async () => {
+          await gate
+          return arg.answer
+        })
+      },
+      { channel, answer }
+    )
+  }
+  async function releaseHeld(app: ElectronApplication, channel: string): Promise<void> {
+    await app.evaluate((_electron, ch) => {
+      const g = globalThis as unknown as { __held: Record<string, () => void> }
+      g.__held[ch]?.()
+    }, channel)
+  }
+  /** Every FOLDER chooser answers `dir`; every FILE chooser answers `file`. */
+  async function stubChoosers(app: ElectronApplication, dir: string, file: string): Promise<void> {
+    await app.evaluate(({ dialog }, arg) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async (...args: unknown[]) => {
+        const options = (args.length > 1 ? args[1] : args[0]) as { properties?: string[] } | undefined
+        const folder = (options?.properties ?? []).includes('openDirectory')
+        return { canceled: false, filePaths: [folder ? arg.dir : arg.file] }
+      }
+    }, { dir, file })
+  }
+
+  test('an export started on A, A closed and B opened: the panel names A as the owner of the running batch, above its rows, and the line goes when the batch ends', async () => {
+    test.setTimeout(120_000)
+    const outDir = path.join(root, `out-t168-export-${Date.now().toString(36)}`)
+    mkdirSync(outDir, { recursive: true })
+    const fileA = path.join(root, 'source', 'stream-a.mp4')
+    const fileB = path.join(root, 'source', 'stream-b.mp4')
+    writeFileSync(fileA, readFileSync(fixture))
+    writeFileSync(fileB, readFileSync(fixture))
+    const { app, window } = await launchWithVideo('t168-other-video', fileA)
+    try {
+      window.on('dialog', (dialog) => void dialog.accept())
+      await stubChoosers(app, outDir, fileA)
+      await holdInMain(app, 'video:exportBatch', [])
+      const card = window.locator('[data-tutorial="video-export"]')
+      const OTHER = 'Started on another video: export of stream-a.mp4.'
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await card.getByRole('button', { name: /^Export 1/ }).click()
+      await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(card.getByRole('progressbar', { name: 'Clip 1 · YouTube' }), 'the rows are on screen on A').toBeVisible()
+      await expect(card.getByText(OTHER), 'control: on the video the batch was made from there is nothing to explain').toHaveCount(0)
+
+      // A is closed and B is opened while the batch is still held in main.
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, fileB, 'stream-b.mp4')
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(card.getByRole('button', { name: 'Exporting…' }), 'the batch still runs under B').toBeDisabled({ timeout: 30_000 })
+
+      const line = card.getByText(OTHER, { exact: true })
+      await expect(line, 'the running batch is named, with the file the person knows it by').toBeVisible()
+      await expect(line).toHaveAttribute('title', OTHER)
+      const queue = card.getByRole('heading', { name: 'Queue' })
+      await expect(queue).toBeVisible()
+      const lineBox = await line.boundingBox()
+      const queueBox = await queue.boundingBox()
+      expect(lineBox && queueBox && lineBox.y < queueBox.y, 'the line is above the Queue').toBe(true)
+
+      // The batch ends: the rows leave B's panel and so does the line.
+      await releaseHeld(app, 'video:exportBatch')
+      await expect(card.getByRole('button', { name: /^Export 1/ })).toBeEnabled({ timeout: 15_000 })
+      await expect(line, 'a finished batch is not "running"').toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the GIF, Compile and Picture-in-picture cards say what the running job is for: the clip, the video, the base file', async () => {
+    test.setTimeout(180_000)
+    const outDir = path.join(root, `out-t168-busy-${Date.now().toString(36)}`)
+    mkdirSync(outDir, { recursive: true })
+    const { app, window } = await launchWithVideo('t168-busy-labels')
+    try {
+      await stubChoosers(app, outDir, fixture)
+      const done = { outputPath: path.join(outDir, 'held.out') }
+      const gif = window.locator('.card').filter({ hasText: 'Export as GIF' })
+      const compile = window.locator('.card').filter({ hasText: 'Compile clips (' })
+      const pip = window.locator('.card').filter({ hasText: 'Picture-in-picture composite' })
+
+      // ── GIF: the clip ──
+      await holdInMain(app, 'video:exportGif', done)
+      await gif.getByRole('button', { name: 'Export GIF' }).click()
+      await expect(gif.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      const gifLine = gif.getByText('Exporting Clip 1…', { exact: true })
+      await expect(gifLine, 'the GIF card names its clip').toBeVisible()
+      await expect(gifLine).toHaveAttribute('title', 'Clip 1')
+      await expect(gif.getByRole('button', { name: 'Cancel', exact: true }), 'the Cancel is still there').toBeVisible()
+      await releaseHeld(app, 'video:exportGif')
+      await expect(gif.getByRole('button', { name: 'Export GIF' })).toBeEnabled({ timeout: 15_000 })
+      await expect(gifLine, 'the line goes with the job').toHaveCount(0)
+
+      // ── Compile: the video it stitches from ──
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await holdInMain(app, 'video:concat', done)
+      await compile.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expect(compile.getByRole('button', { name: 'Stitching…' })).toBeDisabled()
+      const compileLine = compile.getByText('Stitching video-core.mp4…', { exact: true })
+      await expect(compileLine, 'the Compile card names the video').toBeVisible()
+      await expect(compileLine).toHaveAttribute('title', 'video-core.mp4')
+      await expect(compile.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+      await releaseHeld(app, 'video:concat')
+      await expect(compile.getByRole('button', { name: 'Compile 2 clips', exact: true })).toBeEnabled({ timeout: 15_000 })
+      await expect(compileLine).toHaveCount(0)
+
+      // ── Picture-in-picture: the base file ──
+      await holdInMain(app, 'video:pipComposite', done)
+      await pip.getByRole('button', { name: 'Base: none' }).click()
+      await pip.getByRole('button', { name: 'Overlay: none' }).click()
+      await pip.getByRole('button', { name: 'Composite', exact: true }).click()
+      await expect(pip.getByRole('button', { name: 'Compositing…' })).toBeDisabled()
+      const pipLine = pip.getByText('Compositing video-core.mp4…', { exact: true })
+      await expect(pipLine, 'the Picture-in-picture card names its base').toBeVisible()
+      await expect(pipLine).toHaveAttribute('title', 'video-core.mp4')
+      await expect(pip.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible()
+      await releaseHeld(app, 'video:pipComposite')
+      await expect(pip.getByRole('button', { name: 'Composite', exact: true })).toBeEnabled({ timeout: 15_000 })
+      await expect(pipLine).toHaveCount(0)
+    } finally {
+      await app.close()
+    }
+  })
+
+  // The busy line names the RUN's video, not the open one: Compile and Picture-in-picture started on A, A closed, B opened (a job outlives its video).
+  test('Compile and Picture-in-picture started on A, A closed and B opened: B\'s cards name A\'s files, not B\'s', async () => {
+    test.setTimeout(180_000)
+    const outDir = path.join(root, `out-t168-other-${Date.now().toString(36)}`)
+    mkdirSync(outDir, { recursive: true })
+    const fileA = path.join(root, 'source', 'busy-a.mp4')
+    const fileB = path.join(root, 'source', 'busy-b.mp4')
+    writeFileSync(fileA, readFileSync(fixture))
+    writeFileSync(fileB, readFileSync(fixture))
+    const { app, window } = await launchWithVideo('t168-busy-other', fileA)
+    try {
+      window.on('dialog', (dialog) => void dialog.accept())
+      await stubChoosers(app, outDir, fileA)
+      const done = { outputPath: path.join(outDir, 'held.out') }
+      const compile = window.locator('.card').filter({ hasText: 'Compile clips (' })
+      const pip = window.locator('.card').filter({ hasText: 'Picture-in-picture composite' })
+      await clipListCard(window).getByRole('button', { name: '+ Add clip' }).click()
+      await holdInMain(app, 'video:concat', done)
+      await holdInMain(app, 'video:pipComposite', done)
+      await compile.getByRole('button', { name: 'Compile 2 clips', exact: true }).click()
+      await expect(compile.getByRole('button', { name: 'Stitching…' })).toBeDisabled()
+      await pip.getByRole('button', { name: 'Base: none' }).click()
+      await pip.getByRole('button', { name: 'Overlay: none' }).click()
+      await pip.getByRole('button', { name: 'Composite', exact: true }).click()
+      await expect(pip.getByRole('button', { name: 'Compositing…' })).toBeDisabled()
+
+      await window.getByRole('button', { name: 'Close' }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+      await dropOnVideoImporter(window, fileB, 'busy-b.mp4')
+      await expect(window.locator('video')).toHaveCount(1)
+      await expect(window.locator('header').getByText('busy-b.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+
+      const compileLine = compile.getByText('Stitching busy-a.mp4…', { exact: true })
+      await expect(compileLine, 'Compile names the video the job was started on').toBeVisible()
+      await expect(compileLine).toHaveAttribute('title', 'busy-a.mp4')
+      await expect(compile.getByText(/busy-b\.mp4/), 'and not the open one').toHaveCount(0)
+      const pipLine = pip.getByText('Compositing busy-a.mp4…', { exact: true })
+      await expect(pipLine, 'Picture-in-picture names the base the job was started on').toBeVisible()
+      await expect(pipLine).toHaveAttribute('title', 'busy-a.mp4')
+      await expect(pip.getByText(/busy-b\.mp4/)).toHaveCount(0)
+
+      await releaseHeld(app, 'video:concat')
+      await releaseHeld(app, 'video:pipComposite')
+      await expect(compileLine).toHaveCount(0, { timeout: 15_000 })
+      await expect(pipLine).toHaveCount(0, { timeout: 15_000 })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-171 Track A (6): the Export panel's other-video line fits ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// T-168 (4)'s line was one `truncate` line ending in "started on another video.", so a long or OBS-style name cut the clause away (and an OBS name was cut inside its date-time). The line is now
+// "Started on another video: export of <file>." on at most two lines, the clause first. Main's `video:exportBatch` is held (T-168 (4)'s approach) so the batch is still running when it is read.
+test.describe('T-171 Track A (6): the Export panel\'s other-video line fits', () => {
+  const OBS = '2026-11-05 21-14-08.mp4'
+  const LONG = `LONG_Season_Finale_${'x'.repeat(120 - 'LONG_Season_Finale_'.length - '.mp4'.length)}.mp4`
+
+  for (const [what, nameA] of [['an OBS name', OBS], ['a 120-character name', LONG]] as const) {
+    test(`${what} at the default window: ${what === 'an OBS name' ? 'the whole sentence is on screen, on at most two lines' : 'the clause is on screen first'}`, async () => {
+      test.setTimeout(120_000)
+      const outDir = path.join(root, `out-t171-export-${Date.now().toString(36)}`)
+      mkdirSync(outDir, { recursive: true })
+      const fileA = path.join(root, 'source', nameA)
+      const fileB = path.join(root, 'source', 't171-export-b.mp4')
+      writeFileSync(fileA, readFileSync(fixture))
+      writeFileSync(fileB, readFileSync(fixture))
+      const { app, window } = await launchWithVideo('t171-export-fit', fileA)
+      try {
+        window.on('dialog', (dialog) => void dialog.accept())
+        await app.evaluate(({ dialog, ipcMain }, arg) => {
+          ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [arg.dir] })
+          const g = globalThis as unknown as { __t171x: () => void }
+          const gate = new Promise<void>((resolve) => {
+            g.__t171x = resolve
+          })
+          ipcMain.removeHandler('video:exportBatch')
+          ipcMain.handle('video:exportBatch', async () => {
+            await gate
+            return []
+          })
+        }, { dir: outDir })
+        const card = window.locator('[data-tutorial="video-export"]')
+        const SENTENCE = `Started on another video: export of ${nameA}.`
+        await card.getByRole('button', { name: 'Choose folder…' }).click()
+        await card.getByRole('button', { name: /^Export 1/ }).click()
+        await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+
+        await window.getByRole('button', { name: 'Close' }).click()
+        await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+        await dropOnVideoImporter(window, fileB, 't171-export-b.mp4')
+        await expect(window.locator('video')).toHaveCount(1)
+        await expect(card.getByRole('button', { name: 'Exporting…' }), 'the batch still runs under B').toBeDisabled({ timeout: 30_000 })
+
+        const line = card.getByText(/Started on another video/)
+        await expect(line).toHaveCount(1)
+        await line.scrollIntoViewIfNeeded()
+        await expect(line).toHaveAttribute('title', SENTENCE)
+        const m = await line.evaluate((el) => {
+          const r = el.getBoundingClientRect()
+          return { text: el.textContent ?? '', sw: el.scrollWidth, cw: el.clientWidth, sh: el.scrollHeight, ch: el.clientHeight, h: r.height, lh: parseFloat(getComputedStyle(el).lineHeight), right: r.right }
+        })
+        const cardBox = (await card.boundingBox())!
+        expect(m.text, 'the clause is the first thing it says').toBe(SENTENCE)
+        expect(m.h, 'at most two lines').toBeLessThanOrEqual(2 * m.lh + 1)
+        expect(m.right, 'inside the card').toBeLessThanOrEqual(cardBox.x + cardBox.width + 1)
+        await expect(line, 'the clause is on screen').toBeInViewport()
+        if (nameA === OBS) {
+          expect(m.sw, 'nothing is cut sideways').toBeLessThanOrEqual(m.cw)
+          expect(m.sh, 'nothing is cut below (no ellipsis): the whole sentence is on screen').toBeLessThanOrEqual(m.ch)
+        }
+        await app.evaluate(() => (globalThis as unknown as { __t171x: () => void }).__t171x())
+        await expect(card.getByRole('button', { name: /^Export 1/ })).toBeEnabled({ timeout: 15_000 })
+      } finally {
+        await app.close().catch(() => undefined)
+      }
+    })
+  }
 })

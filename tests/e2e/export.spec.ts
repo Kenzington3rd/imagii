@@ -6,6 +6,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { PLATFORM_PRESETS } from '../../src/main/ffmpeg/presets'
+import { withEverything } from './atomicTmp'
 import { installToastLog, readToastLog } from './toastLog'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
@@ -229,17 +230,18 @@ test.describe('imagii Video Studio import -> export', () => {
       // The renderer got video:jobComplete back — the "Show" reveal button
       // only renders once a queue row carries an outputPath. `exact` because
       // the page also carries "Show tutorial" / "Show setup instructions".
+      // T-146: scoped to the Export panel's row - the finished toast carries a Show in folder of its own now.
       await expect(
-        window.getByRole('button', { name: 'Show in folder', exact: true })
+        window.locator('[data-tutorial="video-export"]').getByRole('button', { name: 'Show in folder', exact: true })
       ).toBeVisible({ timeout: 30_000 })
       await window.screenshot({ path: path.join(SCREENSHOTS, 'export-02-complete.png') })
 
       const toasts = await readToastLog(window)
       expect(toasts).toContain('Video loaded')
-      expect(toasts).toContain('Exported 1 file')
+      expect(toasts).toEqual(expect.arrayContaining([expect.stringContaining('Exported 1 file')]))
 
       // Exactly one artifact, named by the default filename template.
-      expect(readdirSync(outDir)).toEqual([expectedName])
+      expect(withEverything(readdirSync(outDir))).toEqual([expectedName])
 
       // ── ffprobe accepts the bytes ──
       const probe = await ffprobeJson(expectedPath)

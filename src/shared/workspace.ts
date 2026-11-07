@@ -37,15 +37,33 @@ export interface PlaceRecord {
  *   3 — adds the optional `place` record (T-47: session continuity). Older
  *       snapshots have no place and restore exactly as they always did;
  *       migration is a version bump with no data change.
+ *   4 — adds `audioStudio.extractedFromVideo` (T-99). When it is true the audio
+ *       studio's source was pulled out of a video, and `sourcePath` is that
+ *       VIDEO: the audio file itself is a scratch WAV under the OS temp folder
+ *       that the next launch deletes, so a project must never point at it. Open
+ *       extracts the sound again. Older snapshots have no marker and keep the
+ *       shape they were written in (`sourcePath` the audio file, and for an
+ *       extraction `fromVideoPath` beside it); migration is a version bump.
+ *   5 — adds `videoStudio.convertedForImport` (T-107). When it is true the video
+ *       studio's source was converted to an mp4 working copy on import (flv, ts,
+ *       wmv, mpg, 3gp ...), and `sourcePath` is the ORIGINAL file: the working
+ *       copy lives under the OS temp folder, which the next launch prunes, so a
+ *       project must never point at it. Open converts again. Older snapshots have
+ *       no marker and keep the shape they were written in (`sourcePath` the
+ *       working copy, which may or may not still be there); migration is a
+ *       version bump.
  */
 export interface ImagiiProject {
-  schemaVersion: 1 | 2 | 3
+  schemaVersion: 1 | 2 | 3 | 4 | 5
   savedAt: number
   appVersion: string
   /** Where the user was when this snapshot was taken (v3+). */
   place?: PlaceRecord
   videoStudio?: {
+    /** The video file — or, with `convertedForImport`, the ORIGINAL it was converted from. */
     sourcePath: string | null
+    /** v5+: `sourcePath` is a file that needs the import conversion, done again on open. */
+    convertedForImport?: boolean
     clips: Clip[]
     selectedClipId: string | null
     watermark?: WatermarkSpec | null
@@ -54,7 +72,13 @@ export interface ImagiiProject {
     srtPath?: string | null
   }
   audioStudio?: {
+    /** The audio file — or, with `extractedFromVideo`, the video it was taken from. */
     sourcePath: string | null
+    /** v4+: `sourcePath` is a video whose sound is extracted again on open. */
+    extractedFromVideo?: boolean
+    /** v1-3 only: for an extraction, the video, written beside the (temp) WAV in
+     *  `sourcePath`. Read, never written — see schema 4. If the WAV is gone on open,
+     *  the sound is extracted again from this video (T-107). */
     fromVideoPath?: string | null
     chain: ChainSpec
   }
@@ -78,19 +102,11 @@ export interface RecordingSource {
   type: 'screen' | 'window'
 }
 
-export interface RecordingSpec {
-  webmBytes: ArrayBuffer
-  filename: string
-  sourceLabel?: string
-  durationMs?: number
-  convertToMp4: boolean
-}
-
 /**
  * Round 18 H1: options for `recording:finalize` in the streaming save
- * protocol (begin → appendChunk* → finalize). Same fields the legacy
- * one-shot RecordingSpec carries, minus the giant webmBytes payload —
- * bytes travel per-chunk via `recording:appendChunk` instead.
+ * protocol (begin → appendChunk* → finalize). The bytes travel per-chunk via
+ * `recording:appendChunk`, never in the spec (T-101 deleted the one-shot
+ * `RecordingSpec` that carried the whole recording as one ArrayBuffer).
  */
 export interface RecordingFinalizeSpec {
   filename: string
@@ -99,7 +115,10 @@ export interface RecordingFinalizeSpec {
 }
 
 export interface RecordingResult {
+  /** The file that exists. When the file chosen in the Save dialog was open in another app (the swap onto it is refused), this is the next free name beside it. */
   outputPath: string
+  /** T-140 (1): the path that was chosen, present only when `outputPath` is not it, so the toast can say why. */
+  requestedPath?: string
   sizeBytes: number
   format: 'webm' | 'mp4'
   durationMs: number

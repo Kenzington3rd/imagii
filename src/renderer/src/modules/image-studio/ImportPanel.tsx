@@ -1,7 +1,7 @@
-import { useEffect, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
-import { makeImageLayer, makeTextLayer, useCanvasStore } from './state/canvasStore'
+import { makeImageLayer, textLayerFor, useCanvasStore } from './state/canvasStore'
 import { TemplatesDialog } from './TemplatesDialog'
 import {
   getTemplatesByCategory,
@@ -12,9 +12,15 @@ import {
 } from './templates'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
+import { anyDialogClaim } from '../../hooks/useFocusTrap'
+import { loadImage, storedDataUrl } from '../../lib/boundedImage'
+import { claimFirst } from '../../lib/claimFirst'
+import { inputTypeOf, isTextEntryTarget } from '../../lib/keyOwnership'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
-import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
+import { SpecCard } from '../../components/SpecCard'
 
+import { placementFor, storedImageMaxDim } from '@shared/imageBounds'
 import { isImageFilename } from '@shared/mediaFormats'
 
 function cloneDoc<T>(obj: T): T {
@@ -31,15 +37,6 @@ function readFileAsDataUrl(file: File): Promise<string> {
     reader.onload = () => resolve(String(reader.result))
     reader.onerror = () => reject(reader.error ?? new Error('Read failed'))
     reader.readAsDataURL(file)
-  })
-}
-
-function loadImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
-  return new Promise((resolve, reject) => {
-    const img = new Image()
-    img.onload = () => resolve({ width: img.naturalWidth, height: img.naturalHeight })
-    img.onerror = () => reject(new Error('Decode failed'))
-    img.src = dataUrl
   })
 }
 
@@ -67,12 +64,21 @@ export function ImportPanel(): JSX.Element {
     }
     try {
       const dataUrl = await readFileAsDataUrl(file)
-      const dims = await loadImageDimensions(dataUrl)
-      const maxDim = 800
-      const scale = Math.min(1, maxDim / Math.max(dims.width, dims.height))
-      const w = dims.width * scale
-      const h = dims.height * scale
-      addLayer({ ...makeImageLayer(dataUrl, w, h), name: file.name })
+      const img = await loadImage(dataUrl)
+      const dims = { width: img.naturalWidth, height: img.naturalHeight }
+      // T-137 (6): the document keeps a copy bounded in size, not the file: a project that holds a few 4000 px PNGs is over the size limit (autosave stops,
+      // Save writes a file Open refuses). PNG unless the picture came as a JPEG and is opaque, so transparency is never lost.
+      // T-138 (2): the bound is the document's, read now (after the load, from whatever canvas is open when the picture lands): twice its longer side, never
+      // under 1600 px. A layer is freely resizable, so the 800 px it is first PLACED at is not the largest it is shown at, and a fixed 1600 px copy of a picture
+      // enlarged to fill a 1920 / 2560 / 3840 px overlay was exported upscaled.
+      // T-139 (4): and the copy has a byte budget (`STORED_IMAGE_MAX_BYTES`): a picture within the bound whose file is over it is re-encoded rather than kept
+      // as it came, an opaque one as a JPEG, and a copy still over (or a transparent one) steps the bound down until it fits.
+      // T-139 (2): and the same document sizes WHERE it lands: wholly on the canvas, so a 512 px picture on the 112 px emote is the emote, not a corner of it.
+      const { width: docWidth, height: docHeight } = useCanvasStore.getState().doc
+      const storedMax = storedImageMaxDim(docWidth, docHeight)
+      const stored = storedDataUrl(img, dataUrl, storedMax, file.type === 'image/jpeg')
+      const place = placementFor(dims.width, dims.height, docWidth, docHeight)
+      addLayer({ ...makeImageLayer(stored, place.width, place.height, place.x, place.y), name: file.name })
       toast.success(`Added ${file.name}`)
     } catch (err) {
       reportFailure(err, { failed: "Couldn't import that image." })
@@ -80,7 +86,31 @@ export function ImportPanel(): JSX.Element {
   }
 
   useEffect(() => {
+    // T-154 (5): a `paste` event carries no `repeat`, and a held Ctrl+V fires one per key repeat - an image layer each. The chord's KEYDOWN knows: a repeat of it
+    // marks the paste that follows as a repeat. A fresh keydown (or the key's release, or losing the window) clears it, so a second deliberate Ctrl+V pastes again.
+    let pasteHeld = false
+    function onKeyDown(e: KeyboardEvent): void {
+      // T-155 (2): the chord is the paste key by POSITION as well as by letter (`code` is KeyV on a Cyrillic or Greek layout, where `key` is that layout's letter), and Shift+Insert.
+      const isV = e.code === 'KeyV' || e.key.toLowerCase() === 'v'
+      if (((e.ctrlKey || e.metaKey) && isV) || (e.shiftKey && e.key === 'Insert')) pasteHeld = e.repeat
+    }
+    function onKeyUp(e: KeyboardEvent): void {
+      if (e.code === 'KeyV' || e.key.toLowerCase() === 'v' || e.key === 'Insert') pasteHeld = false
+    }
     function onPaste(e: ClipboardEvent): void {
+      // T-163 (4): a dialog (or the coachmark) is a claim over the window, as for every other studio key (ImageStudio, RecordStudio, undo/redo): a picture pasted behind the
+      // Variants scrim added a layer and dropped the previews. No `preventDefault`, so a text field inside a dialog still pastes its text.
+      if (anyDialogClaim()) return
+      // T-164 (7): a text field the person is typing in owns the paste, as it owns every other studio key (`focusOwnsKey`): a clipboard holding text AND a picture (an
+      // office app writes both) added a layer and swallowed the text. No `preventDefault`, so the field gets its text.
+      // T-165 (1): but only when the clipboard HAS text for the field to take: a snipped screenshot (a picture and no text) pasted with focus back in Properties' Name or Text box
+      // (after an alt-tab) added nothing and said nothing, where before T-164 it added the picture. So the guard asks the clipboard, and a picture alone falls through to the loop below.
+      const clipboardHasText = Array.from(e.clipboardData?.types ?? []).includes('text/plain')
+      if (clipboardHasText && e.target instanceof HTMLElement && isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return
+      if (pasteHeld) {
+        e.preventDefault()
+        return
+      }
       const items = e.clipboardData?.items
       if (!items) return
       for (const item of Array.from(items)) {
@@ -93,9 +123,32 @@ export function ImportPanel(): JSX.Element {
           }
         }
       }
+      // T-165 (fold): a clipboard with words and no picture, and no text field to take them (a field returned above), did nothing and said nothing beside "Drop, paste (Ctrl+V), or
+      // pick a file." With a canvas open the words become the "+ Add text" layer (selected, one undo step); on the empty start screen there is no canvas to put them on, so it says so.
+      // The layer count is read now, not from the render's closure: this listener is installed once.
+      // T-166 (1): and the layer is made FOR these words (`textLayerFor(doc, words)`: sized to fit the page, placed wholly inside it, inked against what is under them), not for "Text".
+      const words = (e.clipboardData?.getData('text/plain') ?? '').trim()
+      if (!words) return
+      if (useCanvasStore.getState().doc.layers.length > 0) {
+        addLayer({ ...textLayerFor(useCanvasStore.getState().doc, words), text: words })
+        e.preventDefault()
+      } else {
+        toast.error('Paste a picture to start from it, or pick a template to add your text to.')
+      }
     }
+    const releaseHeld = (): void => {
+      pasteHeld = false
+    }
+    window.addEventListener('keydown', onKeyDown, true)
+    window.addEventListener('keyup', onKeyUp, true)
+    window.addEventListener('blur', releaseHeld)
     window.addEventListener('paste', onPaste)
-    return () => window.removeEventListener('paste', onPaste)
+    return () => {
+      window.removeEventListener('keydown', onKeyDown, true)
+      window.removeEventListener('keyup', onKeyUp, true)
+      window.removeEventListener('blur', releaseHeld)
+      window.removeEventListener('paste', onPaste)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -106,19 +159,32 @@ export function ImportPanel(): JSX.Element {
     files.forEach((f) => void ingestFile(f))
   }
 
+  // T-154 (5): one chooser at a time. The second press of a double-click lands in the moment before the OS draws the first chooser and opened a second one;
+  // the claim is given back when the chooser answers (a file) or is dismissed (`cancel`), so a person who cancels can open it again.
+  // simplification: a chooser that ends with neither event (none known on this Chromium) would leave the buttons idle until the studio is reopened.
+  const pickingRef = useRef(false)
   async function pickFile(): Promise<void> {
-    const input = document.createElement('input')
-    input.type = 'file'
-    input.accept = 'image/*'
-    input.onchange = () => {
-      const file = input.files?.[0]
-      if (file) void ingestFile(file)
-    }
-    input.click()
+    await claimFirst(
+      pickingRef,
+      () =>
+        new Promise<void>((resolve) => {
+          const input = document.createElement('input')
+          input.type = 'file'
+          input.accept = 'image/*'
+          input.onchange = () => {
+            const file = input.files?.[0]
+            if (file) void ingestFile(file)
+            resolve()
+          }
+          input.oncancel = () => resolve()
+          input.click()
+        })
+    )
   }
 
+  // T-140 (2): the word is sized, placed and inked for the document that is open when the button is pressed (it was a fixed (120, 120) in the app's near-black).
   function addText(): void {
-    addLayer(makeTextLayer(120, 120))
+    addLayer(textLayerFor(useCanvasStore.getState().doc))
   }
 
   if (layers.length > 0) {
@@ -139,7 +205,15 @@ export function ImportPanel(): JSX.Element {
           <button className="btn-ghost px-3 py-1" onClick={pickFile}>
             + Import image
           </button>
-          <button className="btn-ghost px-3 py-1" onClick={addText}>
+          <button
+            className="btn-ghost px-3 py-1"
+            // T-155 (3): a double-click or a held Enter is one add, not two or twenty.
+            onClick={(e) => {
+              if (isRepeatPress(e)) return
+              addText()
+            }}
+            onKeyDown={ignoreHeldEnter}
+          >
             + Add text
           </button>
           <button
@@ -183,27 +257,13 @@ export function ImportPanel(): JSX.Element {
             </PanelHeader>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
               {items.map((t) => (
-                <button
+                <SpecCard
                   key={t.id}
+                  name={t.name}
+                  description={t.description}
+                  doc={t.doc}
                   onClick={() => applyTemplate(t)}
-                  className="card p-3 text-left hover:border-accent transition-colors"
-                >
-                  <div
-                    className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"
-                    style={{
-                      aspectRatio: `${t.doc.width} / ${t.doc.height}`,
-                      background:
-                        t.doc.background === 'transparent'
-                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
-                          : t.doc.background
-                    }}
-                  />
-                  <div className="text-sm font-medium">{t.name}</div>
-                  <div className="text-xs text-ink-muted mt-1">{t.description}</div>
-                  <div className="text-xs text-ink-dim mt-1 font-mono">
-                    {t.doc.width} × {t.doc.height}
-                  </div>
-                </button>
+                />
               ))}
             </div>
           </section>
@@ -230,7 +290,14 @@ export function ImportPanel(): JSX.Element {
             <button className="btn-primary" onClick={pickFile}>
               Import image
             </button>
-            <button className="btn-ghost" onClick={addText}>
+            <button
+              className="btn-ghost"
+              onClick={(e) => {
+                if (isRepeatPress(e)) return
+                addText()
+              }}
+              onKeyDown={ignoreHeldEnter}
+            >
               Start with text
             </button>
           </div>

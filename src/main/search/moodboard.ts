@@ -4,8 +4,11 @@ import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { nanoid } from 'nanoid'
 import { moodboardsDir, thumbsCacheDir } from '../sidecars/paths'
+import { isOutsideFolder } from '../pathConfine'
 import type { MoodBoardCollection, MoodBoardItem, SearchResult } from '../../shared/search'
 import { parseCollection } from '../../shared/moodboardParse'
+import { SAFE_ID_RE } from '../../shared/pathSafety'
+import { writeFileAtomic } from '../fsAtomic'
 
 async function ensureDirs(): Promise<void> {
   await mkdir(moodboardsDir(), { recursive: true })
@@ -26,18 +29,20 @@ function withCollectionLock<T>(collectionId: string, fn: () => Promise<T>): Prom
   const prev = collectionLocks.get(collectionId) ?? Promise.resolve()
   const next = prev.then(fn, fn)
   collectionLocks.set(collectionId, next)
-  // Drop the map entry once the chain drains so the map can't grow forever.
-  void next.finally(() => {
+  // Drop the map entry once the chain drains so the map can't grow forever. T-139 (1): settled on EITHER outcome with `then(release, release)`: a
+  // `finally` on a rejected promise is a new promise that rejects too, with nobody listening - every failed board write was also an unhandled rejection.
+  const release = (): void => {
     if (collectionLocks.get(collectionId) === next) collectionLocks.delete(collectionId)
-  })
+  }
+  void next.then(release, release)
   return next
 }
 
 /**
  * INIT-C (round 15): renderer-supplied `id` strings reach path.join() —
- * gate with the nanoid alphabet so `../` can't escape the moodboards dir.
+ * gate with the nanoid alphabet (`SAFE_ID_RE`, shared/pathSafety.ts) so `../`
+ * can't escape the moodboards dir.
  */
-const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
 function assertSafeId(id: unknown, name: string): asserts id is string {
   if (typeof id !== 'string' || !SAFE_ID_RE.test(id)) {
     throw new Error(`${name} must match nanoid alphabet`)
@@ -50,12 +55,12 @@ function assertSafeId(id: unknown, name: string): asserts id is string {
  * still happily serve any absolute path that survives that gate (e.g.
  * a path under userData/recordings). M2 fix (round 15): unset the field
  * whenever the path escapes thumbsCacheDir so the UI shows a placeholder
- * rather than serving the wrong file. Same shape as captions:copySrtTo.
+ * rather than serving the wrong file. Same shape as captions:writeKitSrt.
  */
 function confineThumbPath(item: MoodBoardItem): MoodBoardItem {
   if (!item.cachedThumbPath) return item
-  const rel = path.relative(thumbsCacheDir(), item.cachedThumbPath)
-  if (rel.startsWith('..') || path.isAbsolute(rel)) {
+  // T-117: a real parent segment, not a name that starts with two dots.
+  if (isOutsideFolder(thumbsCacheDir(), item.cachedThumbPath)) {
     return { ...item, cachedThumbPath: undefined }
   }
   return item
@@ -105,11 +110,9 @@ export async function createCollection(name: string): Promise<MoodBoardCollectio
     items: [],
     createdAt: Date.now()
   }
-  await writeFile(
-    path.join(moodboardsDir(), `${collection.id}.json`),
-    JSON.stringify(collection, null, 2),
-    'utf8'
-  )
+  // T-139 (1): every board write in this file is `writeFileAtomic` (create, rename, add, remove, restore). A board file truncated by a write that failed
+  // part-way does not parse, and `readCollection` drops what does not parse: the board vanished from the list with all its items.
+  await writeFileAtomic(path.join(moodboardsDir(), `${collection.id}.json`), JSON.stringify(collection, null, 2))
   return collection
 }
 
@@ -160,11 +163,7 @@ export async function restoreCollections(
     }
     keep.add(collection.id)
     await withCollectionLock(collection.id, () =>
-      writeFile(
-        path.join(dir, `${collection.id}.json`),
-        JSON.stringify(collection, null, 2),
-        'utf8'
-      )
+      writeFileAtomic(path.join(dir, `${collection.id}.json`), JSON.stringify(collection, null, 2))
     )
   }
 
@@ -190,36 +189,66 @@ export async function renameCollection(id: string, name: string): Promise<MoodBo
     const collection = await readCollection(file)
     if (!collection) return null
     collection.name = name.trim() || collection.name
-    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    await writeFileAtomic(file, JSON.stringify(collection, null, 2))
     return collection
   })
 }
 
+/**
+ * T-151 (2): cacheThumb runs inside the board's lock, and the References chain (T-150) queues every later board edit and Undo behind it, so one thumbnail
+ * host that accepts and never answers (or streams forever) froze them all with no feedback. The fetch has a deadline for the whole answer, body included,
+ * and a byte cap counted as the body streams in. A miss of any kind returns undefined: the item is saved without a cached thumbnail and its tile draws the
+ * source URL (MoodBoardPanel falls back to `item.thumbnail`).
+ */
+export const THUMB_FETCH_TIMEOUT_MS = 10_000
+export const THUMB_MAX_BYTES = 8 * 1024 * 1024
+
 async function cacheThumb(thumbnailUrl: string): Promise<string | undefined> {
   try {
-    const res = await net.fetch(thumbnailUrl)
-    if (!res.ok) return undefined
-    const buffer = Buffer.from(await res.arrayBuffer())
+    const res = await net.fetch(thumbnailUrl, { signal: AbortSignal.timeout(THUMB_FETCH_TIMEOUT_MS) })
+    if (!res.ok || !res.body) return undefined
+    const reader = res.body.getReader()
+    const chunks: Uint8Array[] = []
+    let total = 0
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      total += value.byteLength
+      if (total > THUMB_MAX_BYTES) {
+        await reader.cancel().catch(() => undefined)
+        return undefined
+      }
+      chunks.push(value)
+    }
     const filename = `${nanoid(12)}.jpg`
     const filePath = path.join(thumbsCacheDir(), filename)
-    await writeFile(filePath, buffer)
+    await writeFile(filePath, Buffer.concat(chunks))
     return filePath
   } catch {
     return undefined
   }
 }
 
+/**
+ * T-149 (4): `added` is decided HERE, under the board's lock - true only when this call pushed a new item (false for a duplicate or a board that is not there).
+ * The renderer used to infer it from an item-count compare of two re-reads, which two presses in flight (a double-click) both passed.
+ */
+export interface AddToCollectionResult {
+  collection: MoodBoardCollection | null
+  added: boolean
+}
+
 export async function addToCollection(
   collectionId: string,
   result: SearchResult
-): Promise<MoodBoardCollection | null> {
+): Promise<AddToCollectionResult> {
   assertSafeId(collectionId, 'addToCollection collectionId')
   return withCollectionLock(collectionId, async () => {
     const file = path.join(moodboardsDir(), `${collectionId}.json`)
-    if (!existsSync(file)) return null
+    if (!existsSync(file)) return { collection: null, added: false }
     const collection = await readCollection(file)
-    if (!collection) return null
-    if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return collection
+    if (!collection) return { collection: null, added: false }
+    if (collection.items.some((i) => i.fullUrl === result.fullUrl)) return { collection, added: false }
     const cachedThumbPath = await cacheThumb(result.thumbnail)
     const item: MoodBoardItem = {
       id: nanoid(10),
@@ -232,8 +261,8 @@ export async function addToCollection(
       addedAt: Date.now()
     }
     collection.items.push(item)
-    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
-    return collection
+    await writeFileAtomic(file, JSON.stringify(collection, null, 2))
+    return { collection, added: true }
   })
 }
 
@@ -253,7 +282,7 @@ export async function removeFromCollection(
     // remove that comes back without its picture is not an undo.
     // `sweepOrphanThumbs()` reclaims it on the next launch.
     collection.items = collection.items.filter((i) => i.id !== itemId)
-    await writeFile(file, JSON.stringify(collection, null, 2), 'utf8')
+    await writeFileAtomic(file, JSON.stringify(collection, null, 2))
     return collection
   })
 }

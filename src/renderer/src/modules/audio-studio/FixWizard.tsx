@@ -1,7 +1,9 @@
-import { useState } from 'react'
+import { useEffect, useId, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore } from './state/audioStore'
 import { Modal } from '../../components/Modal'
+import { ACTION_TOAST_MS } from '../../lib/savedToast'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { EMPTY_ANSWERS, fixPatch, fixSummary, type FixAnswers } from './fixWizard'
 
 const QUESTIONS = [
@@ -24,7 +26,7 @@ const QUESTIONS = [
   },
   {
     id: 'use',
-    question: 'What is this clip mostly?',
+    question: 'What is this sound mostly?',
     options: [
       { value: 'voice', label: 'Talking / voice' },
       { value: 'music', label: 'Music' },
@@ -40,8 +42,26 @@ interface FixWizardProps {
 
 export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null {
   const patchChain = useAudioStore((s) => s.patchChain)
+  // T-112: the notch the Cleanup panel is on; the wizard keeps it and the summary names it.
+  const mains = useAudioStore((s) => (s.chain.humHz === 50 ? 50 : 60))
   const [answers, setAnswers] = useState<FixAnswers>(EMPTY_ANSWERS)
   const [step, setStep] = useState(0)
+  // T-147 (6b): the visible heading's id. A step's options are a group NAMED by it and the summary's Apply is DESCRIBED by the list under it, so a screen reader that is
+  // moved onto the first option (the effect below) hears the question with it ("Is there background noise?, group, None to speak of, button"), not a bare "Sounds dry,
+  // button". Only one step is mounted at a time, so one id serves them all. Declared with the other hooks, ahead of the early return.
+  const headingId = useId()
+  const summaryId = useId()
+
+  // T-119: every answer replaces the buttons the person just pressed (a different list of options, or the
+  // summary), so the focused element is unmounted and keyboard focus fell to the page behind the dialog;
+  // the focus trap only places focus when the dialog OPENS. Put it on the new step's first option, or on
+  // Apply for the summary - the Tutorial coachmark's pattern for the same problem (its Next button). Declared
+  // before the early return (hooks), and after the Modal child's own mount focus in effect order, so it also
+  // decides where the first question opens: on its first answer, not on Close.
+  const focusRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    if (open) focusRef.current?.focus()
+  }, [open, step])
 
   if (!open) return null
 
@@ -70,7 +90,7 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
   if (step >= QUESTIONS.length) {
     // T-90: built once. The list below is rendered FROM this object and Apply
     // patches this same object, so the two cannot disagree (see fixWizard.ts).
-    const patch = fixPatch(answers)
+    const patch = fixPatch(answers, mains)
     return (
       <Modal
         open={open}
@@ -78,11 +98,12 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
         title="Ready to apply"
         className="w-full max-w-md p-6 ring-1 ring-accent/40"
       >
+        <div onKeyDown={ignoreHeldEnter}>
         <h2 className="text-lg font-semibold mb-2">Ready to apply</h2>
-          <p className="text-sm text-ink-muted mb-4">
+          <p id={`${summaryId}-lead`} className="text-sm text-ink-muted mb-4">
             Based on your answers, imagii will set:
           </p>
-          <ul className="text-sm flex flex-col gap-1 mb-4">
+          <ul id={summaryId} className="text-sm flex flex-col gap-1 mb-4">
             {fixSummary(patch).map((line) => (
               <li key={line}>· {line}</li>
             ))}
@@ -105,15 +126,23 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
             Start over
           </button>
           <button
+            ref={focusRef}
             className="btn-primary px-4 py-2 text-sm"
+            aria-describedby={`${summaryId}-lead ${summaryId}`}
             onClick={() => {
               patchChain(patch)
-              toast.success('Cleanup configured. Tweak from the side panels if needed.')
+              // T-125 (19): this sentence is the only place that says the cleanup waits for the export, and a success toast
+              // lasts 2 s: a person reading the wizard's last screen looks up after it has gone. Held as long as an action toast.
+              toast.success(
+                'Cleanup configured. It is applied when you export, so tweak it from the side panels if needed.',
+                { duration: ACTION_TOAST_MS }
+              )
               close()
             }}
           >
             Apply
           </button>
+        </div>
         </div>
       </Modal>
     )
@@ -128,6 +157,7 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
       title={q.question}
       className="w-full max-w-md p-6 ring-1 ring-accent/40"
     >
+      <div onKeyDown={ignoreHeldEnter}>
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs uppercase tracking-wide text-accent font-semibold">
           Quick fix · {step + 1} of {QUESTIONS.length}
@@ -141,12 +171,16 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
           Close
         </button>
       </div>
-      <h2 className="text-lg font-semibold mb-4">{q.question}</h2>
-      <div className="flex flex-col gap-2">
-        {q.options.map((opt) => (
+      <h2 id={headingId} className="text-lg font-semibold mb-4">{q.question}</h2>
+      <div role="group" aria-labelledby={headingId} className="flex flex-col gap-2">
+        {q.options.map((opt, i) => (
           <button
             key={String(opt.value)}
-            onClick={() => {
+            ref={i === 0 ? focusRef : undefined}
+            onClick={(e) => {
+              // T-131 (4): the second press of a double-click lands on the NEXT question's button (it draws where this one was) and
+              // answered that too - "Quick fix 3 of 3" from one double-click. A repeat is not a new answer (T-120's held Enter, for clicks).
+              if (isRepeatPress(e)) return
               if (q.id === 'noise') answer('backgroundNoise', opt.value as FixAnswers['backgroundNoise'])
               else if (q.id === 'echoy') answer('echoy', opt.value as FixAnswers['echoy'])
               else if (q.id === 'use') answer('primaryUse', opt.value as FixAnswers['primaryUse'])
@@ -156,6 +190,7 @@ export function FixWizard({ open, onClose }: FixWizardProps): JSX.Element | null
             {opt.label}
           </button>
         ))}
+      </div>
       </div>
     </Modal>
   )

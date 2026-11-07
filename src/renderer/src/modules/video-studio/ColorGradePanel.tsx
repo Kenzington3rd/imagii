@@ -1,6 +1,7 @@
 import { DEFAULT_COLOR_GRADE, type ColorGrade } from '@shared/clip'
 import { useVideoStore } from './store/videoStore'
 import { PanelHeader } from '../../components/PanelHeader'
+import { useGestureEnd } from '../../lib/gestureEnd'
 
 export function ColorGradePanel(): JSX.Element | null {
   const clips = useVideoStore((s) => s.clips)
@@ -8,7 +9,7 @@ export function ColorGradePanel(): JSX.Element | null {
   const setClipColorGrade = useVideoStore((s) => s.setClipColorGrade)
   const setClipAutoZoom = useVideoStore((s) => s.setClipAutoZoom)
   const setClipHypeShake = useVideoStore((s) => s.setClipHypeShake)
-  const endGesture = useVideoStore((s) => s.endGesture)
+  const gesture = useGestureEnd(useVideoStore((s) => s.endGesture))
   const clip = clips.find((c) => c.id === selectedClipId)
   if (!clip) return null
   const grade: ColorGrade = clip.colorGrade ?? DEFAULT_COLOR_GRADE
@@ -25,11 +26,8 @@ export function ColorGradePanel(): JSX.Element | null {
     // handlers sit on the panel rather than on each control because pointerup
     // and focusout bubble: one pair covers the four sliders, the two
     // checkboxes and the Reset button, and any control added later.
-    <div
-      className="card p-3 flex flex-col gap-3 text-sm"
-      onPointerUp={endGesture}
-      onBlur={endGesture}
-    >
+    // T-148: the one shared hook (`useGestureEnd`): a blur while the pointer is down is the press moving focus, not the end of the drag.
+    <div className="card p-3 flex flex-col gap-3 text-sm" {...gesture}>
       <PanelHeader icon="palette">Color & motion</PanelHeader>
       {/* T-92: the player shows the source as it was imported; the grade is
           applied by the encoder, so the sliders move nothing the person can
@@ -131,7 +129,7 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
-        className="flex-1"
+        className="flex-1 min-w-0"
         // M11 fix (round 15): the visible value span is a sibling — screen
         // readers wouldn't otherwise read it. aria-valuetext exposes the
         // formatted value; aria-label keeps the slider self-identifying when
@@ -139,7 +137,7 @@ function Slider({
         aria-label={label}
         aria-valuetext={formatValue(value)}
       />
-      <span className="font-mono w-12 text-right">{formatValue(value)}</span>
+      <span className="font-mono w-12 shrink-0 whitespace-nowrap text-right">{formatValue(value)}</span>
     </label>
   )
 }

@@ -2,6 +2,8 @@ import { useState } from 'react'
 import type { Tool } from './state/canvasStore'
 import { useCanvasStore } from './state/canvasStore'
 import { Icon, type IconName } from '../../components/Icon'
+import { DraftField } from '../../components/DraftField'
+import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface ToolDef {
   id: Tool
@@ -21,6 +23,10 @@ const TOOLS: ToolDef[] = [
   { id: 'line', label: 'Line', icon: 'line', shortcut: 'L', advanced: true },
   { id: 'pencil', label: 'Pencil', icon: 'pencil', shortcut: 'P', advanced: true }
 ]
+
+/** The grid size the box takes (px): the 2 to 200 its attributes say, enforced when typing ends. */
+const GRID_SIZE_MIN = 2
+const GRID_SIZE_MAX = 200
 
 export function Toolbar(): JSX.Element {
   const tool = useCanvasStore((s) => s.tool)
@@ -48,6 +54,7 @@ export function Toolbar(): JSX.Element {
               tool === t.id ? 'bg-accent text-bg-base' : 'hover:bg-bg-hover'
             }`}
             onClick={() => setTool(t.id)}
+            aria-pressed={tool === t.id}
             title={`${t.label}${t.shortcut ? ` (${t.shortcut})` : ''}`}
           >
             <span className="inline-flex items-center gap-1.5">
@@ -83,12 +90,18 @@ export function Toolbar(): JSX.Element {
         />
         Snap
       </label>
-      <input
+      {/* T-123 (4): kept until typing ends; `Number(typed) || 2` appended "40" to an emptied box as 240. */}
+      <DraftField
         type="number"
-        min={2}
-        max={200}
-        value={gridSize}
-        onChange={(e) => setGridSize(Number(e.target.value) || 2)}
+        min={GRID_SIZE_MIN}
+        max={GRID_SIZE_MAX}
+        value={String(gridSize)}
+        live={(typed) => isTypedInRange(typed, GRID_SIZE_MIN, GRID_SIZE_MAX)}
+        commit={(typed) => {
+          const n = clampTyped(typed, GRID_SIZE_MIN, GRID_SIZE_MAX)
+          if (n !== null) setGridSize(n)
+          return null
+        }}
         className="bg-bg-base rounded px-2 py-1 w-16 text-sm"
         title="Grid size (px)"
         // M11 fix (round 15): bare title doesn't show on the spinner — give AT

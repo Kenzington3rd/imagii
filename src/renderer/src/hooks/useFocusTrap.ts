@@ -25,11 +25,13 @@ import { useCallback, useEffect, useRef, type RefObject } from 'react'
  * opened; releasing by identity is right whichever one goes first.
  *
  * This is deliberately NOT `Modal.openModalCount()`. That count answers a
- * different question — "does a <Modal> own the window", the guard T-68 put on
- * the studios' bare-letter hotkeys and T-72 taught the `?` overlay to exempt
- * itself from — and the coachmark stays out of it so `?` can still be pressed
- * while a tutorial is up. The two questions have different answers and each
- * one has its own reader.
+ * different question — "does a <Modal> own the window" — and the coachmark
+ * stays out of it so the `?` overlay (T-72) can still be pressed while a
+ * tutorial is up. The two questions have different answers and each one has
+ * its own reader. T-147 (T-75): the studios' own hotkeys (the tool letters,
+ * Delete, Ctrl+Z, Record's Escape) ask THIS one, `anyDialogClaim()`: they
+ * stand down for any open dialog including the coachmark, whose scrim covers
+ * the canvas they would act on. The `?` overlay keeps the Modal count.
  */
 const FOCUSABLE_SELECTOR = [
   'a[href]',
@@ -63,6 +65,14 @@ export function pushDialogClaim(): number {
 /** Drop a claim by identity — see the note above on why not by depth. */
 export function releaseDialogClaim(id: number): void {
   claims = claims.filter((c) => c !== id)
+}
+
+/**
+ * Is any dialog open, a `<Modal>` or the tutorial coachmark (both take a claim through `useFocusTrap`, and nothing else in the app is a dialog)? Read at event
+ * time by a studio's window-level hotkeys: a dialog is a claim over the whole window, and the keys behind its scrim are not the person's to press (T-68, T-75).
+ */
+export function anyDialogClaim(): boolean {
+  return claims.length > 0
 }
 
 /** Read at event time by a dialog's own key handler. */
@@ -104,7 +114,13 @@ export function useFocusTrap(
     previouslyFocused.current = (document.activeElement as HTMLElement | null) ?? null
     const root = containerRef.current
     if (root) {
-      const first = root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
+      // T-114: a dialog can name the control it should open on (`data-initial-focus`) - the safe
+      // answer of a question. Without one, the first thing in the DOM that takes focus, which for the
+      // safe-zone question was the scrollable list of clips ABOVE its two buttons: Enter on arrival
+      // scrolled nothing and decided nothing.
+      const first =
+        root.querySelector<HTMLElement>('[data-initial-focus]') ??
+        root.querySelector<HTMLElement>(FOCUSABLE_SELECTOR)
       if (first) {
         first.focus()
       } else {

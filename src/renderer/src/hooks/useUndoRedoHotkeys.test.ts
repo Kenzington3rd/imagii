@@ -7,7 +7,15 @@ import { undoRedoIntent } from './useUndoRedoHotkeys'
  * comes from one shared hook used by all three studios, so this pins the
  * decision every one of them makes.
  */
-const base = {
+const base: {
+  key: string
+  ctrlKey: boolean
+  metaKey: boolean
+  shiftKey: boolean
+  tagName: string
+  inputType?: string | null
+  modalOpen: boolean
+} = {
   key: 'z',
   ctrlKey: false,
   metaKey: false,
@@ -57,6 +65,31 @@ describe('undoRedoIntent', () => {
       expect(undoRedoIntent({ ...base, ctrlKey: true, shiftKey: true, tagName })).toBeNull()
     }
   )
+
+  // T-123 (2): the guard asked "is it an INPUT?", and after a checkbox was ticked or a slider dragged the browser
+  // leaves that control focused, so Ctrl+Z went dead for as long as it stayed there (tick Hum removal, press
+  // Ctrl+Z: nothing). A checkbox and a slider have no undo of their own; only a text field does.
+  it.each(['checkbox', 'range', 'radio', 'color', 'file', 'button'])(
+    'fires from a focused <input type=%s>: it has no undo stack of its own (T-123 (2))',
+    (inputType) => {
+      expect(undoRedoIntent({ ...base, ctrlKey: true, tagName: 'INPUT', inputType })).toBe('undo')
+      expect(undoRedoIntent({ ...base, key: 'y', ctrlKey: true, tagName: 'INPUT', inputType })).toBe('redo')
+      expect(undoRedoIntent({ ...base, ctrlKey: true, shiftKey: true, tagName: 'INPUT', inputType })).toBe('redo')
+    }
+  )
+
+  it.each(['text', 'number', 'search', 'email', 'password', 'date', null, undefined])(
+    'still never fires from a text input (type %s): it owns its own undo stack',
+    (inputType) => {
+      expect(undoRedoIntent({ ...base, ctrlKey: true, tagName: 'INPUT', inputType })).toBeNull()
+      expect(undoRedoIntent({ ...base, key: 'y', ctrlKey: true, tagName: 'INPUT', inputType })).toBeNull()
+    }
+  )
+
+  it('a checkbox does not lift the other guards: a Modal still wins, and a bare Z is still nothing', () => {
+    expect(undoRedoIntent({ ...base, ctrlKey: true, tagName: 'INPUT', inputType: 'checkbox', modalOpen: true })).toBeNull()
+    expect(undoRedoIntent({ ...base, tagName: 'INPUT', inputType: 'checkbox' })).toBeNull()
+  })
 
   // T-68 regression: the studio's document belongs to the studio, and while
   // a dialog is up the window belongs to the dialog. Undoing behind the
