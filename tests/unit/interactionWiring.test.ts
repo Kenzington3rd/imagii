@@ -5012,3 +5012,40 @@ describe('T-177 Track A - one typed target is one undo step; a drop with no file
     expect(strip(read('modules/audio-studio/AudioImporter.tsx'))).toMatch(/if \(diag\.reason === 'no-file'\) \{\s*toast\.error\(diag\.hint \?\? 'No file dropped\.'\)\s*return\s*\}/)
   })
 })
+
+describe('round 127 Track A (T-178): the last silent drop zone, and an autosave that fails says so', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('(1) Stream Graphics\' one drop handler (the import bar AND the empty state\'s card) toasts the shared no-file hint as an error and returns before the loop', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    const drop = panel.slice(panel.indexOf('function onDrop('), panel.indexOf('// T-154 (5): one chooser at a time'))
+    expect(drop).toMatch(/setDragOver\(false\)\s*const files = Array\.from\(e\.dataTransfer\.files\)\s*if \(files\.length === 0\) \{\s*toast\.error\(examineDroppedFile\(undefined\)\.hint \?\? 'No file dropped\.'\)\s*return\s*\}\s*files\.forEach\(\(f\) => void ingestFile\(f\)\)/)
+    expect(panel).toMatch(/import \{ examineDroppedFile \} from '@shared\/importDiagnostics'/)
+    // One source for the sentence, as in the other two importers; and both zones still read the one handler.
+    expect(panel).not.toContain('No file was dropped')
+    expect(panel.match(/onDrop=\{onDrop\}/g), 'the import bar and the empty-state card').toHaveLength(2)
+  })
+
+  it('(2) a refused write and a thrown one both go through ONE once-per-episode toast on its own id; a success ends the episode; "no studio state" is not a failure', () => {
+    const hook = strip(read('hooks/useAutosave.ts'))
+    expect(hook).toContain("export const AUTOSAVE_FAILED_TOAST_ID = 'autosave-failed'")
+    expect(hook).toMatch(/function tellWriteFailed\(why: unknown\): void \{\s*if \(memory\.toldWriteFailed\) return\s*memory\.toldWriteFailed = true\s*reportFailure\(why, \{ failed: "Autosave couldn't save your work\.", id: AUTOSAVE_FAILED_TOAST_ID \}\)\s*\}/)
+    expect(hook).toMatch(/if \(result\.ok\) \{\s*memory\.lastHash = serialized\s*memory\.lastWriteTime = now\s*memory\.toldWriteFailed = false\s*\} else \{/)
+    expect(hook).toMatch(/if \(!\/no studio state\/\.test\(result\.reason\)\) \{\s*console\.warn\('\[autosave\] write rejected:', result\.reason\)\s*tellWriteFailed\(result\.reason\)\s*\}/)
+    expect(hook).toMatch(/catch \(err\) \{\s*console\.warn\('\[autosave\] write threw', err\)\s*tellWriteFailed\(err\)\s*\}/)
+    expect(hook.match(/tellWriteFailed\(/g), 'declared once, called for a refusal and for a throw').toHaveLength(3)
+    // The over-size path keeps its own flag, id and sentence.
+    expect(hook).toContain("reportFailure(tooLarge, { failed: 'Autosave is paused.', id: AUTOSAVE_TOO_LARGE_TOAST_ID })")
+  })
+  it('(2 addendum) the crash screen reads the getter, not a copy of the flag, and the getter answers the running autosave\'s episode flag', () => {
+    const boundary = strip(read('components/ErrorBoundary.tsx')).replace(/\s+/g, ' ')
+    expect(boundary).toContain("import { autosaveIsFailing } from '../hooks/useAutosave'")
+    expect(boundary).toContain("{autosaveIsFailing() ? \"Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy.\" : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}")
+    expect(boundary, 'no flag of its own').not.toMatch(/toldWriteFailed/)
+    const hook = strip(read('hooks/useAutosave.ts'))
+    expect(hook).toMatch(/export function autosaveIsFailing\(\): boolean \{\s*return activeMemory\?\.toldWriteFailed === true\s*\}/)
+    expect(hook).toMatch(/export function startAutosave\(memory: AutosaveMemory\): \(\) => void \{\s*activeMemory = memory/)
+    expect(hook).toMatch(/if \(activeMemory === memory\) activeMemory = null/)
+  })
+})
+

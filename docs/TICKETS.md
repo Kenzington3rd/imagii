@@ -9053,7 +9053,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open.
+- **Status:** done (round 127 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9629,6 +9629,38 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 127 — T-178, both counted items, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of 6db9877.
+Track A: Stream Graphics' import bar and empty-state card say "No file
+was dropped. Try the file picker instead." (the shared
+`examineDroppedFile` hint, the other importers' error toast) for a
+drop that carries no file — every drop zone in the app now says so
+(T-177 (2)'s sibling, which the T-177 ticket should have swept); an
+autosave write that main refuses (not the expected "no studio state")
+or that throws raises one "Autosave couldn't save your work." with the
+plain cause where it is known (a full disk reads "Your disk is full.
+Free up some space and try again.") per failure episode, on its own
+toast id, and the next successful write ends the episode; and, asked
+for at adjudication from the worker's own found-not-fixed, the crash
+screen no longer says "imagii saves it every few seconds" while an
+episode is open (`autosaveIsFailing()`; "…but autosave couldn't save
+it recently. Reload to Home, then use Save project to keep a copy.").
+The autosave e2e needs no product hook: a directory named
+autosave.json blocks main's real rename. Deviations, accepted: a
+docClaims cite and an image.spec comment moved in place; the episode
+flag lives on the running autosave's memory (the getter reads it
+through the active pointer, false once stopped); a new
+ErrorBoundary.test.tsx. Ledger: 31 mutation rows plus the reds, all
+restored identical (an equivalent mutant and a wiring-only `return`
+disclosed; two first-run survivors strengthened and killed). Expedited
+personally: one independent mutation at a seam no ledger row names —
+the toast losing its cause → four behavioural unit cases and a wiring
+pin red — restored byte-identical, sha256 verified; on the landed
+tree: verify x2 (211 files, 6747 tests, both runs), test:media 515
+passed, 17 skipped of 532 on 7.0.2, FULL Playwright 818 passed, 57.6
+min. Applied to 6db9877 by `git apply` with every file byte-identical
+to the expedited tree.
 
 Round 126 — T-177, both counted items, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of 4742320.

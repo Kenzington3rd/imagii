@@ -31,7 +31,7 @@ import {
   setWindowSize as resizeAndSettle
 } from './layout'
 import { leave, retype } from './typing'
-import { installToastLog, readToastLog } from './toastLog'
+import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 import { ATOMIC_TMP, withoutAtomicTmp } from './atomicTmp'
 import { heldRenameCount, holdAtomicRenames, releaseAtomicRenames } from './slowWrites'
 
@@ -1982,7 +1982,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:80).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:81).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -7002,6 +7002,137 @@ test.describe('round 123 Track A - a Pencil stroke is a Pencil in the Layers pan
       expect(await layerNames(window), 'the Pencil\'s row says Pencil; the Line\'s row did not change').toEqual(['Pencil', 'Line', 'Text'])
       await expect(field(window, 'Name'), 'the stroke is selected after drawing: its Name field says Pencil').toHaveValue('Pencil')
       await expect(layerRow(window, 'Polygon')).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// round 127 Track A (T-178 (1)): Stream Graphics was the last of the three drop zones that said nothing for a drop carrying no file (a link, selected text, a browser element):
+// `Array.from(e.dataTransfer.files)` was empty, the loop ran nothing and the highlight cleared. Video and Audio Studio say the shared `examineDroppedFile` hint; this panel's
+// import bar and its empty-state card share ONE handler, so one branch covers both, and both are driven here with a REAL DragEvent over a real DataTransfer.
+test.describe('round 127 Track A (T-178 (1)): Stream Graphics says so for a drop that carries no file', () => {
+  const SENTENCE = 'No file was dropped. Try the file picker instead.'
+
+  /** A real drop of a link and its text on `.card` of the import zone (the bar when layers are open, the "Or start blank" card on the empty state). Returns how many files it carried. */
+  async function dropLinkOnly(window: Page): Promise<number> {
+    return window.evaluate(() => {
+      const host = document.querySelector('[data-tutorial="image-import"]')
+      if (!host) throw new Error('image import zone not found')
+      const zone = host.classList.contains('card') ? host : host.querySelector('div.card')
+      if (!zone) throw new Error('image drop zone not found')
+      const transfer = new DataTransfer()
+      transfer.setData('text/uri-list', 'https://example.com/overlay.png')
+      transfer.setData('text/plain', 'https://example.com/overlay.png')
+      zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+      return transfer.files.length
+    })
+  }
+
+  test('the import bar (a canvas with layers): the sentence once, as an error, no layer added, no page error; a picture dropped after it still imports', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t178-bar-nofile')
+    const { window } = studio
+    try {
+      const pageErrors: string[] = []
+      window.on('pageerror', (err) => pageErrors.push(err.message))
+      await startBlank(window)
+      expect(await dropLinkOnly(window), 'the transfer carries no file').toBe(0)
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [100] }).toEqual([SENTENCE])
+      expect((await readToastEntries(window))[0]?.hasIcon, 'an error toast, not a plain one').toBe(true)
+      await expectLayerCount(window, 1)
+      await window.waitForTimeout(800)
+      expect(await readToastLog(window), 'one sentence, nothing after it').toEqual([SENTENCE])
+      expect(pageErrors).toEqual([])
+
+      // Control: a picture dropped on the same bar still imports, and does not say it again.
+      await dropPng(window, readFileSync(studio.fixturePng).toString('base64'), 'after-link.png')
+      await expectLayerCount(window, 2)
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Added after-link.png')
+      expect((await readToastLog(window)).filter((t) => t === SENTENCE), 'the picture drop does not say it again').toHaveLength(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('the empty-state card (no layers): the same sentence once, as an error, the start screen stays, no page error', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t178-empty-nofile')
+    const { window } = studio
+    try {
+      const pageErrors: string[] = []
+      window.on('pageerror', (err) => pageErrors.push(err.message))
+      expect(await dropLinkOnly(window), 'the transfer carries no file').toBe(0)
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [100] }).toEqual([SENTENCE])
+      expect((await readToastEntries(window))[0]?.hasIcon, 'an error toast, not a plain one').toBe(true)
+      await expect(window.getByText('Pick a template to start'), 'nothing was added: still the start screen').toBeVisible()
+      await expect(window.locator(LAYERS)).toHaveCount(0)
+      await window.waitForTimeout(800)
+      expect(await readToastLog(window), 'one sentence, nothing after it').toEqual([SENTENCE])
+      expect(pageErrors).toEqual([])
+
+      // Control: a picture dropped on the card still imports.
+      await dropPng(window, readFileSync(studio.fixturePng).toString('base64'), 'after-link-empty.png')
+      await expectLayerCount(window, 1)
+      expect((await readToastLog(window)).filter((t) => t === SENTENCE), 'the picture drop does not say it again').toHaveLength(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// round 127 Track A (T-178 (2)): an autosave write main refuses was a console line, so the safety net could be off for good with nothing on screen while the crash screen says
+// "imagii saves it every few seconds". The REAL write is made to refuse with no hook in the product: a DIRECTORY named autosave.json is in the way of the rename that
+// publishes the file (EISDIR on Linux, EPERM on Windows), exactly what a locked or unwritable target looks like to main. Removing it lets the next write land.
+test.describe('round 127 Track A (T-178 (2)): an autosave main cannot write says so once, and again after it has worked', () => {
+  const FAILED = /^Autosave couldn't save your work\./
+
+  test('blocked: one toast (an error) however many edits follow; unblocked: the file is written and nothing is said; blocked again: told again', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t178-autosave-failed')
+    const { window } = studio
+    const autosaveDir = path.join(studio.root, 'userData', 'autosave')
+    const target = path.join(autosaveDir, 'autosave.json')
+    const told = async (): Promise<number> => (await readToastLog(window)).filter((t) => FAILED.test(t)).length
+    const written = (): boolean => {
+      try {
+        return readFileSync(target, 'utf8').length > 0
+      } catch {
+        return false
+      }
+    }
+    const pageErrors: string[] = []
+    window.on('pageerror', (err) => pageErrors.push(err.message))
+    try {
+      mkdirSync(target, { recursive: true })
+      await startBlank(window)
+      await expect.poll(told, { timeout: 60_000, intervals: [500], message: 'the refused write is told' }).toBe(1)
+      const entry = (await readToastEntries(window)).find((t) => FAILED.test(t.text))
+      expect(entry?.hasIcon, 'an error toast, not a plain one').toBe(true)
+
+      // More edits while it stays blocked: still the one toast. It is let expire first (a repeat on the same id while the card is up replaces it and shows nothing new),
+      // so a second toast would be a second card; and the folder is still in the way, so the premise holds.
+      await expect(window.getByText(FAILED), 'the card is gone before the next attempt').toHaveCount(0, { timeout: 20_000 })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 2)
+      await window.waitForTimeout(13_000)
+      expect(await told(), 'told once per episode, not once per attempt').toBe(1)
+      expect(written(), 'and nothing was written').toBe(false)
+
+      // Unblocked: the next edit writes the file, and a success says nothing.
+      rmSync(target, { recursive: true, force: true })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 3)
+      await expect.poll(written, { timeout: 60_000, intervals: [500], message: 'autosave wrote the project once the way was clear' }).toBe(true)
+      expect(await told(), 'a success is not announced').toBe(1)
+
+      // Blocked again: the episode ended with the success, so this one is told.
+      rmSync(target, { force: true })
+      mkdirSync(target, { recursive: true })
+      await window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(window, 4)
+      await expect.poll(told, { timeout: 60_000, intervals: [500], message: 'a later failure is told again' }).toBe(2)
+      expect(pageErrors).toEqual([])
     } finally {
       await closeStudio(studio)
     }

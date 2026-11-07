@@ -4442,3 +4442,43 @@ test.describe('round 124 Track B (T-175 (3)): opening a different video asks bef
     }
   })
 })
+
+// round 127 Track A (T-178 (2) addendum): the crash screen promises "imagii saves it every few seconds"; once autosave has failed it says what is true instead. The failure
+// is made by the filesystem, as in image.spec.ts (a directory where autosave.json goes, put there after launch so the restore banner never sees it).
+test.describe('round 127 Track A (T-178 (2)): the crash screen does not promise an autosave that is failing', () => {
+  test('autosave refused, then a studio throws: the screen says autosave could not save and points at Save project; no "every few seconds"', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t178-crash-autosave-failing')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      mkdirSync(autosaveFile(userDataDir), { recursive: true })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByText('Layers (1)')).toBeVisible({ timeout: 20_000 })
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => /^Autosave couldn't save your work\./.test(t)).length, { timeout: 60_000, intervals: [500] })
+        .toBe(1)
+
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      await expect(
+        alert.getByText("Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy.")
+      ).toBeVisible()
+      expect(await alert.innerText()).not.toMatch(/every few seconds/)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

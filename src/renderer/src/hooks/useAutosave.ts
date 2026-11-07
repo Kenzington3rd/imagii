@@ -14,6 +14,8 @@ export const AUTOSAVE_MAX_WAIT_MS = 30_000
 
 /** The toast id of "autosave is paused" (T-137 (6)): one card, whatever raises it. */
 export const AUTOSAVE_TOO_LARGE_TOAST_ID = 'autosave-too-large'
+/** The toast id of "Autosave couldn't save your work." (T-178 (2)): one card per episode of failed writes. */
+export const AUTOSAVE_FAILED_TOAST_ID = 'autosave-failed'
 
 /**
  * The stamp a capture is compared under (T-137 (7)): a fixed 13-digit number, the length of a real `Date.now()` until the year 2286, so the compared text is
@@ -164,6 +166,16 @@ export interface AutosaveMemory {
   lastHash: string
   /** True while the person has been told the project is over the size limit and it still is (T-137 (6)): one toast per episode, not one per attempt. */
   toldTooLarge?: boolean
+  /** True while the person has been told a write failed and none has succeeded since (T-178 (2)): one toast per episode, ended by the next successful write. */
+  toldWriteFailed?: boolean
+}
+
+/** The memory of the autosave that is running, so the crash screen can ask whether a failure episode is open (T-178 (2) addendum). */
+let activeMemory: AutosaveMemory | null = null
+
+/** True while a write has failed and none has succeeded since (the episode `tellWriteFailed` opened): autosave is NOT keeping the work safe right now. */
+export function autosaveIsFailing(): boolean {
+  return activeMemory?.toldWriteFailed === true
 }
 
 /**
@@ -180,12 +192,14 @@ export interface AutosaveMemory {
  *     burst) and minimum interval between writes (5 s)
  *   - global hold (active while a project is being applied; see `applyProjectHeld`)
  *
- * Failures are silent — they're surfaced to the console but never thrown.
+ * Failures are never thrown. A refused or failed write is a console line and, once per episode, a toast (T-178 (2)): the first failure after a success
+ * (or after the app started) says autosave couldn't save, with the plain cause where there is one; the next successful write ends the episode.
  *
  * This is the hook's whole effect as a plain function (T-136 (3)), returning the unsubscribe: the schedule and the playhead rule are
  * behavior that needs a clock and the real stores, and the vitest environment has no DOM to mount a hook in.
  */
 export function startAutosave(memory: AutosaveMemory): () => void {
+  activeMemory = memory
   const scheduler = createSaveScheduler(() => {
     void doSave()
   })
@@ -196,6 +210,13 @@ export function startAutosave(memory: AutosaveMemory): () => void {
       return
     }
     scheduler.schedule()
+  }
+
+  /** T-178 (2): the safety net is off and the crash screen says it saves every few seconds. Once per episode; the next successful write ends it. */
+  function tellWriteFailed(why: unknown): void {
+    if (memory.toldWriteFailed) return
+    memory.toldWriteFailed = true
+    reportFailure(why, { failed: "Autosave couldn't save your work.", id: AUTOSAVE_FAILED_TOAST_ID })
   }
 
   async function doSave(): Promise<void> {
@@ -244,14 +265,17 @@ export function startAutosave(memory: AutosaveMemory): () => void {
       if (result.ok) {
         memory.lastHash = serialized
         memory.lastWriteTime = now
+        memory.toldWriteFailed = false
       } else {
         // "no studio state" is an expected condition early in the session — don't spam console
         if (!/no studio state/.test(result.reason)) {
           console.warn('[autosave] write rejected:', result.reason)
+          tellWriteFailed(result.reason)
         }
       }
     } catch (err) {
       console.warn('[autosave] write threw', err)
+      tellWriteFailed(err)
     }
   }
 
@@ -267,6 +291,7 @@ export function startAutosave(memory: AutosaveMemory): () => void {
   const offResume = onAutosaveResume(scheduleSave)
 
   return () => {
+    if (activeMemory === memory) activeMemory = null
     offResume()
     unsubVideo()
     unsubAudio()

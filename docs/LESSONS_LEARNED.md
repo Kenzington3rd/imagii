@@ -14,6 +14,27 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-07 - T-178 (round 127), Track A: a gesture gets its answer on every surface that takes it, and a safety net that fails says so
+
+The sixty-fourth sweep, Track A (items 1 and 2).
+
+### (1) [LOW] - Stream Graphics said nothing when a drop carried no file
+
+- **Bug.** A link, selected text or a browser element dropped on the import bar (or on the empty state's "Or start blank" card) cleared the highlight and did nothing else. Video Studio and Audio Studio say "No file was dropped. Try the file picker instead."; this panel's own unsupported-type drop toasts too.
+- **Root cause.** `Array.from(e.dataTransfer.files)` is empty for such a drop, so `files.forEach(ingestFile)` ran nothing. T-177 (2) fixed the video importer and added a case for the audio one, but swept "the importers" by the studios that have one, not by the drop zones the app has: there are three, and the third was a panel inside a studio.
+- **Fix.** `onDrop` toasts `examineDroppedFile(undefined).hint` (as an error, at the default duration, as the other two do) and returns before the loop. Both zones use the one handler, so one branch covers both.
+- **Test.** image.spec.ts "round 127 Track A (T-178 (1))" (a real `DragEvent` over a real `DataTransfer` holding only a link and its text, on the bar and on the empty-state card: the sentence once, as an error, nothing added, no page error, then a picture drop still imports; red on the unchanged build: no toast); interactionWiring.test.ts "round 127 Track A (T-178)" (the branch with its `return`, the single source of the sentence, both zones on the one handler). The `return` is an equivalent mutant at runtime (the loop over no files does nothing), so only the wiring pin kills its removal.
+- **Lesson.** **When a fix lands for a gesture, grep for every place that takes the gesture, not for the screens that share a name.** `onDrop=` and `ondrop` find the drop zones; "Importer" finds two of three. The audit that closes a class is a search for the handler, with the answer pinned where each one lives.
+
+### (2) [LOW-MED] - An autosave write that failed was a console line
+
+- **Bug.** A refused write (a full disk, a folder imagii cannot write to, a locked file) or one that threw left the safety net off with nothing on screen, while the crash screen and the guide both say imagii saves the work every few seconds.
+- **Root cause.** `doSave` handled `{ ok: false }` and a throw with `console.warn`, written when "no studio state" was the only refusal anyone had seen. T-137 (6) gave the over-size refusal a toast and left the others, so autosave had one failure that spoke and several that did not.
+- **Fix.** One function, `tellWriteFailed`, called by both paths: the first failure of an episode raises `reportFailure(why, { failed: "Autosave couldn't save your work.", id: AUTOSAVE_FAILED_TOAST_ID })` (the plain cause follows where `userFacingError` knows the shape: a full disk reads "Your disk is full. Free up some space and try again."), later failures stay quiet, and the next successful write ends the episode so a later failure is told again. "No studio state" is excluded: it is expected early in a session. The over-size toast keeps its own flag, id and sentence.
+- **Test.** useAutosave.test.ts "a write that fails says so once per episode (T-178 (2))" (the sentence with the cause, id and duration; a second failure quiet; a success then a failure told again; "no studio state" silent and not an episode boundary; a throw; a reason with no cause; the over-size toast separate in both orders), image.spec.ts "round 127 Track A (T-178 (2))" (main's real write refused by a directory in the way of the rename, no hook in the product: one toast, still one after more edits, the file written and nothing said once the way is clear, told again when it is blocked again), interactionWiring.test.ts (the shared function, the flag cleared only by a success, the exclusion, the id).
+- **Addendum.** The crash screen still told the person "imagii saves it every few seconds" while an autosave failure episode was open: the same promise, made in a second place. `autosaveIsFailing()` (the running autosave's episode flag, read at render) now picks the true sentence, which points at Save project. Covered by ErrorBoundary.test.tsx, the getter cases in useAutosave.test.ts, a wiring pin, and home-chrome.spec.ts "round 127 Track A (T-178 (2))". Lesson in one line: **when a failure becomes known, grep the product's copy for the promise it breaks.**
+- **Lesson.** **A failure channel that is only the console is a decision that the person will never know; the audit is every `catch` and every `ok: false` on the path that makes a promise.** The promise here is in the product's own copy ("saves it every few seconds"): when a screen makes it, the code that keeps it owns the failure. And an episode flag has two edges, so test both: the mutation that never sets it (a toast per attempt) and the one that never clears it (silence after the first) look identical in a single-failure test.
+
 ## 2026-11-07 - T-177 (round 126), Track A: a control that commits as you type takes the key its siblings have, and a drop that carries no file gets an answer
 
 The sixty-third sweep, Track A (items 1 and 2).

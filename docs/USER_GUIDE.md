@@ -711,6 +711,8 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    what the file won't have. Shapes, bars and borders are part of the design and always export.
    **Or start blank** is always the blank page, 1200×800 and white, even after you have removed
    every layer of a template (Undo brings the template back).
+   (A link, a browser thumbnail or selected text dragged onto the import bar or the **Or start blank**
+   card carries no file. imagii says **No file was dropped. Try the file picker instead.** and adds nothing.)
 2. Edit with the toolbar: **Select**, **Rectangle**, **Ellipse**, and (under
    **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
    **+ Add text** (and **Start with text**) puts the word "Text" wholly inside the canvas, 60 px in
@@ -856,7 +858,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   written at that moment is not kept (its half-written file is removed). If a studio
   hits an error instead and shows the crash screen, nothing has restarted: **Reload to Home**
   only changes the screen, so the studio you were in is still open with your work in it, and
-  no restore banner is offered. The banner
+  no restore banner is offered. If autosave had been failing, the crash screen says so instead of
+  promising it saves every few seconds, and points you at **Save project**. The banner
   is not shown over work you have already started in this session, so a restore
   never lands on top of it; and work that arrives while you are looking at Home (a
   sound or a converted video that finishes after you came back) takes the banner away
@@ -870,6 +873,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   If you come back to Home before it has, the banner reads **Restoring…** with
   **Restore** and **Clear** off, so a second press cannot start it again, and it goes
   when the restore is done.
+  If imagii cannot write the autosave (the disk is full, or the folder or file is held by another program), it
+  says **Autosave couldn't save your work.** once, with the cause where it knows it, so you can
+  save the project yourself; it keeps trying, and tells you again only if a later write fails after one has worked.
   A project over 50 MB is not autosaved: imagii says autosave is paused and why, once,
   and starts again by itself when the project is under the limit. Changes that are not
   part of the project (a grid you switch on, the results of a scan) do not write the file

@@ -21,6 +21,7 @@ import { reportFailure } from '../../lib/reportFailure'
 import { SpecCard } from '../../components/SpecCard'
 
 import { placementFor, storedImageMaxDim } from '@shared/imageBounds'
+import { examineDroppedFile } from '@shared/importDiagnostics'
 import { isImageFilename } from '@shared/mediaFormats'
 
 function cloneDoc<T>(obj: T): T {
@@ -156,6 +157,12 @@ export function ImportPanel(): JSX.Element {
     e.preventDefault()
     setDragOver(false)
     const files = Array.from(e.dataTransfer.files)
+    if (files.length === 0) {
+      // T-178 (1): a link, selected text or a browser element carries no file, and the bar un-highlighted and said nothing. The Video and Audio importers' sentence, from the
+      // same shared hint, at the default duration they use. This one handler is both drop zones (the import bar and the empty state's card).
+      toast.error(examineDroppedFile(undefined).hint ?? 'No file dropped.')
+      return
+    }
     files.forEach((f) => void ingestFile(f))
   }
 

@@ -15,6 +15,7 @@ import {
   noteSuppressedChange,
   onAutosaveResume,
   playheadOnlyChange,
+  autosaveIsFailing,
   startAutosave,
   suppressAutosave
 } from './useAutosave'
@@ -599,5 +600,195 @@ describe('startAutosave - a project over the size limit pauses autosave and says
     await vi.advanceTimersByTimeAsync(5000)
     expect(write).toHaveBeenCalledTimes(1)
     expect(errors).not.toHaveBeenCalled()
+  })
+})
+
+describe('startAutosave - a write that fails says so once per episode (T-178 (2))', () => {
+  const FAILED = "Autosave couldn't save your work."
+  const FULL_DISK = `${FAILED} Your disk is full. Free up some space and try again.`
+  const BLOCKED = `${FAILED} Windows blocked access to a file. Close any app using it, or check your antivirus.`
+  let write: ReturnType<typeof vi.fn>
+  let stop: () => void
+  const spyOnToastError = () => vi.spyOn(toast, 'error').mockReturnValue('x')
+  let errors: ReturnType<typeof spyOnToastError>
+  let edits = 0
+  /** One more real edit, then long enough for the debounce and the minimum interval to pass. */
+  async function edit(): Promise<void> {
+    useCanvasStore.getState().addLayer(textLayer(`e${edits}`, `edit ${edits}`))
+    edits += 1
+    await vi.advanceTimersByTimeAsync(10_000)
+  }
+  const refusal = (reason: string) => async () => ({ ok: false as const, reason })
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    edits = 0
+    write = vi.fn(async () => ({ ok: true as const }))
+    vi.stubGlobal('window', { api: { autosave: { write } } })
+    errors = spyOnToastError()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    useVideoStore.getState().clearSource()
+    useAudioStore.getState().clearSource()
+    useCanvasStore.getState().resetDocument()
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+  })
+  afterEach(() => {
+    stop()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('a refused write (a full disk) raises ONE toast: the sentence, then the plain cause, on a fixed id, long enough to read', async () => {
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(errors).toHaveBeenCalledTimes(1)
+    const [message, options] = errors.mock.calls[0] as [string, { id?: string; duration?: number }]
+    expect(message).toBe(FULL_DISK)
+    expect(options.id, 'a fixed toast id, so a repeat replaces the card').toBe('autosave-failed')
+    expect(options.duration, 'long enough to read').toBeGreaterThanOrEqual(8000)
+  })
+
+  it('a second failure in the same episode stays quiet (one per episode, not one per attempt)', async () => {
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    await edit()
+    await edit()
+    expect(write, 'it kept trying').toHaveBeenCalledTimes(3)
+    expect(errors, 'and told the person once').toHaveBeenCalledTimes(1)
+  })
+
+  it('a success ends the episode: a failure after it is told again', async () => {
+    write.mockImplementation(refusal('EBUSY: resource busy or locked, rename'))
+    await edit()
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(errors.mock.calls[0]?.[0]).toBe(BLOCKED)
+    write.mockImplementation(async () => ({ ok: true as const }))
+    await edit()
+    expect(errors, 'a success says nothing').toHaveBeenCalledTimes(1)
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    expect(errors, 'a NEW episode is told').toHaveBeenCalledTimes(2)
+    expect(errors.mock.calls[1]?.[0]).toBe(FULL_DISK)
+  })
+
+  it('"no studio state" is the expected early-session refusal: no toast, however often', async () => {
+    write.mockImplementation(refusal('no studio state to save'))
+    await edit()
+    await edit()
+    expect(write).toHaveBeenCalledTimes(2)
+    expect(errors).not.toHaveBeenCalled()
+  })
+
+  it('"no studio state" does not end or start an episode: it neither raises the toast nor lets a told failure be told twice', async () => {
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    write.mockImplementation(refusal('no studio state to save'))
+    await edit()
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    expect(errors, 'still the one episode').toHaveBeenCalledTimes(1)
+  })
+
+  it('a write that throws raises the toast too, once', async () => {
+    write.mockImplementation(async () => {
+      throw new Error("Error invoking remote method 'autosave:write': Error: EBUSY: resource busy or locked, rename")
+    })
+    await edit()
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(errors.mock.calls[0]?.[0]).toBe(BLOCKED)
+    await edit()
+    expect(errors, 'a repeat throw is the same episode').toHaveBeenCalledTimes(1)
+  })
+
+  it('a reason with no plain cause still gets the sentence', async () => {
+    write.mockImplementation(refusal('serialization failed: circular structure'))
+    await edit()
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(errors.mock.calls[0]?.[0]).toBe(FAILED)
+  })
+
+  it('control: the over-size toast is its own (id, flag and sentence) and a failed write does not stand in for it', async () => {
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    expect(errors).toHaveBeenCalledTimes(1)
+    const huge: CanvasLayer = {
+      id: 'huge',
+      type: 'image',
+      name: 'huge',
+      visible: true,
+      locked: false,
+      x: 0,
+      y: 0,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: 1,
+      src: `data:image/png;base64,${'A'.repeat(MAX_PROJECT_BYTES + 1000)}`,
+      width: 100,
+      height: 100
+    }
+    useCanvasStore.getState().addLayer(huge)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(errors).toHaveBeenCalledTimes(2)
+    const [message, options] = errors.mock.calls[1] as [string, { id?: string }]
+    expect(message).toMatch(/^Autosave is paused: this project is too large to keep /)
+    expect(options.id).toBe('autosave-too-large')
+  })
+
+  it('control: telling the person it is over the size limit does not use up the failed-write toast (the two flags are separate)', async () => {
+    const huge: CanvasLayer = {
+      id: 'huge',
+      type: 'image',
+      name: 'huge',
+      visible: true,
+      locked: false,
+      x: 0,
+      y: 0,
+      rotation: 0,
+      scaleX: 1,
+      scaleY: 1,
+      opacity: 1,
+      src: `data:image/png;base64,${'A'.repeat(MAX_PROJECT_BYTES + 1000)}`,
+      width: 100,
+      height: 100
+    }
+    useCanvasStore.getState().addLayer(huge)
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(errors).toHaveBeenCalledTimes(1)
+    expect(errors.mock.calls[0]?.[0]).toMatch(/^Autosave is paused/)
+    useCanvasStore.getState().removeLayer('huge')
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    expect(errors, 'the failed write is still told').toHaveBeenCalledTimes(2)
+    expect(errors.mock.calls[1]?.[0]).toBe(FULL_DISK)
+  })
+
+  it('control: a write that succeeds raises nothing', async () => {
+    await edit()
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(errors).not.toHaveBeenCalled()
+  })
+
+  it('autosaveIsFailing follows the episode: false at the start, true after a refusal or a throw, false again after a success, and false once autosave is stopped', async () => {
+    expect(autosaveIsFailing()).toBe(false)
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await edit()
+    expect(autosaveIsFailing(), 'a refusal opens the episode').toBe(true)
+    write.mockImplementation(refusal('no studio state to save'))
+    await edit()
+    expect(autosaveIsFailing(), '"no studio state" neither ends nor opens one').toBe(true)
+    write.mockImplementation(async () => ({ ok: true as const }))
+    await edit()
+    expect(autosaveIsFailing(), 'a success ends it').toBe(false)
+    write.mockImplementation(async () => {
+      throw new Error('EBUSY: resource busy or locked, rename')
+    })
+    await edit()
+    expect(autosaveIsFailing(), 'a throw opens it').toBe(true)
+    stop()
+    expect(autosaveIsFailing(), 'a stopped autosave is not failing').toBe(false)
   })
 })
