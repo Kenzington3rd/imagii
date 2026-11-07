@@ -9166,6 +9166,57 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 129 — see the Done entry)
 
+## T-181 — sweep-67 fixes (round 130)
+
+- **Spec:** the sixty-seventh sweep's one verified finding (candidate clean pass #1 on e31b2f4), confirmed by the
+  expediter against source; found independently by streamer reader a and UX reader 2. It is a new consequence of
+  T-180 (1) — the expediter's miss: T-180 made the toasts reachable over the crash screen and did not sweep what their
+  actions do there. Not counted: a capture or serialize throw in `doSave` not opening a failing episode (no trigger
+  found); a cancel after whisper exits leaving a kilobyte `.srt` in the captions folder (below the bar); deleting
+  unparsable mood boards on restore (crafted renderer only). One track.
+
+  **Track A — a navigation leaves the crash screen (item 1).**
+  1. **[LOW] A toast action or a finishing job that navigates while the crash screen is up leaves the crash screen on
+     top** (components/ErrorBoundary.tsx: no reset but "Reload to Home"'s `setState`; App.tsx: the studio boundary is
+     not keyed on the location). Since T-180 the toasts are drawn over the crash screen, so their actions are pressed
+     there. Every in-app navigation that can fire then changes the hash and does its work, but the boundary keeps
+     `state.error`: lib/editInVideoStudio.ts:36 (`navigate('/video')`, the "Edit in Video Studio" of the Record, Reframe
+     and other saved-file toasts — the video IS replaced, after its question, invisibly); VideoStudio.tsx:139 (Clean
+     audio's auto-navigate to /audio with "Opening Audio Studio" when the hash still says /video) and :152 ("Open Audio
+     Studio"); MoodBoardPanel.tsx:94 (→ Canvas, when the hash says /references); AutosaveRestore.tsx:160 (a restore that
+     finishes, when the hash says /home). The person sees nothing happen; "Reload to Home" then lands on Home, not where
+     they asked to go. Fix (the root cause, every site at once):
+     - `ErrorBoundary` takes an optional `resetKey?: unknown`. `componentDidUpdate(prevProps, prevState)`: when
+       `this.state.error !== null && prevState.error !== null && prevProps.resetKey !== this.props.resetKey`, it clears
+       the error (`setState({ error: null, componentStack: null })`). The `prevState.error !== null` guard: an error
+       caught in the very update that changed the key (a navigation onto a route that throws) is not reset, so it is
+       caught once and the crash screen shows, with no retry.
+     - App passes the router location object (`useLocation()`, already in App) as the studio boundary's `resetKey`:
+       react-router-dom 6's `useLocation()` returns a new object on every navigation, a push to the same path included
+       (an "Edit in Video Studio" while Video Studio is the one that crashed), and the same object otherwise.
+     - "Reload to Home" keeps its own reset (a hash set by hand can keep the location's key).
+
+  Covering tests: e2e (home-chrome.spec.ts, NEW describe at the END): with the crash screen up, a REAL navigating toast
+  action pressed over it — Clean audio's "Open Audio Studio" (a short video, Clean audio started, the crash armed before
+  the extraction ends; on the crash route the hash is not /video, so the toast carries the button) or a Reframe's "Edit
+  in Video Studio", the worker's choice, disclosed — leaves the crash screen and shows the studio with the file loaded
+  (red on the base: the alert is still visible); and the T-35 case's entry onto the crash route logs exactly ONE
+  "[ErrorBoundary] caught render error" (the guard: a navigation onto a throwing route is not retried). Unit
+  (ErrorBoundary.test.tsx, NEW describe, the instance driven directly as the existing cases do): an error held and the
+  key changed → reset; the same key → not; the error caught in this very update (`prevState.error === null`) → not; no
+  error → not. interactionWiring pins: App passes the location as the studio boundary's `resetKey`; the guard's three
+  conditions. IC rows for each navigating action named above (each now leaves the crash screen).
+
+  **Docs:** USER_GUIDE's crash-screen paragraph (a toast button that opens a studio takes you there from the crash
+  screen); IC rows; TESTING paragraph; LESSONS entry at the TOP (a fix that makes a control reachable in a new state
+  sweeps what the control does in that state).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 130)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
