@@ -8848,6 +8848,74 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 123 — see the Done entry)
 
+## T-175 — sweep-61 fixes (round 124)
+
+- **Spec:** the sixty-first sweep's three verified findings (candidate clean pass #1 on 0c81484), each confirmed by the
+  expediter against source. Privacy, a11y, Electron, audio, both design readers, both UX readers' remaining lens, QA
+  renderer reader a, streamer renderer reader b and streamer main clean on their lens. Item 2 is a new consequence of
+  T-150's Recent prune; item 3 of T-174 (4)'s drop. Not counted: a kept part riding into the Save of a project that has
+  no part for its studio (the "a studio the project does not speak for is left alone" rule an open source follows);
+  Open project superseding a kept part (Open project replaces open studios without asking, the standing rule); the
+  device scan having no deadline for a camera that never answers (speculative); the scan probing only the default
+  camera (the T-122 design); the minimized-window wording of the screen sentence (unverified); the Windows
+  focus-after-`confirm` behaviour (a release hand-check, not reproducible here). Two tracks, disjoint source files.
+
+  **Track A — leaving Record during a start says nothing (item 1).**
+  1. **[LOW] Leaving Record while a start waits for a silent screen raises "sent no picture" on the next screen**
+     (record-studio/RecordStudio.tsx:454-457, :526-541; compositor.ts `waitForFirstPicture`). The leave guard
+     (`leftWhileStarting`) is asked only after the wait RESOLVES. A leave stops the screen's tracks, and
+     `MediaStreamTrack.stop()` fires no `ended`, so the wait runs its 10 s and rejects with `NoPictureError('screen')` into
+     the start's outer catch, which toasts "The screen capture sent no picture for 10 seconds. Pick another screen or
+     window, then press Start again." over Home or another studio — against `leftWhileStarting`'s own rule ("no toast for
+     a screen nobody is looking at"), which the camera branch's catch already keeps (:432). Fix (the root, one place): the
+     outer catch, after `abandonStart()`, says nothing when the studio was left (`unmountedRef.current`) — every await of
+     the start, present and future, is covered by the one guard. The MicStartFailure sentence and `reportFailure` are
+     unchanged for a person still on Record.
+
+  **Track B — what is set aside is not lost without a word (items 2 and 3).**
+  2. **[LOW] A Recent entry on a drive that is not connected is erased from Recent** (video-studio/Importer.tsx:89-91,
+     audio-studio/AudioImporter.tsx:84-86; shared/importDiagnostics.ts `isNotFoundError`). T-150 drops a Recent path when
+     opening it fails with the not-found sentence, and an unplugged capture drive fails exactly as a deleted file does
+     (ENOENT), so last night's VOD leaves Recent while its drive is merely out; plugging it back in finds the entry gone.
+     Fix: main answers whether the FILE'S FOLDER is there (`settings:folderOfFilePresent(filePath)` beside `settings:get`,
+     the path checked with the shared absolute-path guard, `folderVerdict(path.dirname(p)) === 'folder'`; the existing
+     deadline's 'unknown' is "not there"; preload `settings.folderOfFilePresent`). The importers drop the entry only when
+     the folder is there (the file itself is gone: T-150 unchanged, " It was removed from Recent."); when it is not, the
+     entry stays and the sentence is "imagii can't find that file. If it is on a drive that isn't connected, plug the
+     drive in and try again." (the not-found sentence's drive form, the words `outputFolderRefusal` already uses). A
+     refused check counts as "not there" (keep the entry).
+  3. **[MED] A part kept for a file that could not be opened is dropped without a word when a different file opens**
+     (project/ProjectIO.ts:433-448 `giveBackVideo` / `giveBackAudio`). The restore sentence tells the person to load the
+     file again; with its drive unplugged they open another video meanwhile, the kept clips (or a sound's kept chain) are
+     dropped, and the next autosave replaces the only copy — the loss T-174 (4) set out to prevent, with no question.
+     Every other way of discarding clip or chain work asks first (Close's lost-work list, T-119's "Replace the video
+     you're editing?", Clean audio's chain question). Fix: ProjectIO exports one question,
+     `keptPartQuestion(studio: 'video' | 'audio', key: string, openingName: string): string | null` — null when that
+     studio keeps no part or the key is the kept part's (the same file: it gives the part back) — and every entry that
+     opens a file into a studio asks it BEFORE claiming its run, a Cancel opening nothing and keeping the part:
+     Importer.handleFile (drop, Choose file, Recent; key = the picked path), AudioImporter.loadFile (key = the picked
+     path), `useEditInVideoStudio` (key = the output path, asked after its own replace question), VideoStudio
+     `cleanAudioFlow` (key = `videoKey(source)`, which is what `soundKey` gives the extracted sound). The words: video —
+     "Open <name>? The <n clip(s)> kept for <kept file name>, which could not be opened, will be discarded."; audio —
+     "Open <name>? The changes kept for <kept file name>, which could not be opened, will be discarded." (`countOf`; file
+     names, not paths). Accepted, the give-back drops the part as now. Open project is unchanged (it supersedes).
+
+  Covering tests: unit (NEW describes at the end of the files they touch) and e2e (NEW describes at the end of
+  record.spec.ts, home-chrome.spec.ts, video-core.spec.ts and audio.spec.ts as fits), each red on the base except the
+  stated controls: with the webcam off and a frameless screen, Start then Home during the wait, and past the 10 s no
+  "sent no picture" toast is shown, nothing is live and no take is left (red: the toast on Home); staying on Record still
+  says the screen sentence (control); a Recent entry whose folder is missing stays in the menu after a failed pick and
+  the toast says the drive sentence (red: removed); a Recent entry whose folder is there and file gone is still removed
+  (control, T-150); an autosave whose video is missing restores the rest, then opening a DIFFERENT video asks the kept
+  question (red: no question), Cancel opens nothing and the autosave still holds the kept clips, and opening the same
+  video afterwards brings them back; accepting opens the other video and the next autosave no longer carries the kept
+  part; the audio twin (a kept chain, the AudioImporter); `useEditInVideoStudio` and `cleanAudioFlow` ask it (unit or
+  wiring pins); `keptPartQuestion`'s key equals the give-back's for every entry (a converted import, an extracted video
+  sound, Clean audio's sound), so the same file never asks. LESSONS_LEARNED entries per item; INTERACTION_COVERAGE rows
+  updated (Record Start's leave, the Recent pick's two outcomes, the kept-part question on four entries).
+
+- **Status:** open.
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
