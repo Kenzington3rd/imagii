@@ -9108,6 +9108,64 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 128 — see the Done entry)
 
+## T-180 — sweep-66 fixes (round 129)
+
+- **Spec:** the sixty-sixth sweep's one verified finding (candidate clean pass #1 on eec0498), confirmed by the
+  expediter against source and the installed library; found by UX reader 1 (UX reader 2 saw the toaster fact and judged
+  it contrived — overruled on expected usability: the crash screen says the work is safe while the jobs it keeps running
+  cannot report). Privacy, a11y, audio, ffmpeg, QA main and both renderer readers, both design readers, UX reader 2 and
+  all three streamer readers clean on their lens. It is a sibling of T-179 (1) and T-178 (2) — the expediter's miss:
+  T-179 swept every state in which autosave writes nothing, but not every MOMENT (a state that begins after the crash
+  screen is drawn). Not counted: the Stream Graphics picker's `accept="image/*"` letting through types the importer
+  refuses (adjacent to the sweep-29 disposition); "Reload to Home" re-crashing on an always-throwing route (cleared: the
+  T-35 e2e presses it once with the crash armed); multi-image drops landing in decode order (unrun; no order promise);
+  the canvas not being a drop target (documented zones). One track.
+
+  **Track A — the crash screen can still talk (item 1).**
+  1. **[LOW-MED] While the crash screen is up, no toast is ever drawn, and its autosave sentence never changes**
+     (App.tsx:102-136; components/ErrorBoundary.tsx:44-77; hooks/useAutosave.ts:181-185 and `doSave`). `<AppToaster />`
+     is a child of `<ErrorBoundary>`, and the fallback replaces every child, so no Toaster is mounted while the crash
+     screen shows. react-hot-toast 2.6.0 keeps the toast in its store, and when a Toaster mounts again (Reload to Home)
+     its effect dismisses at once every toast whose duration has run out (dist/index.mjs, `useToaster`: `R<0` →
+     `dismiss`), so a toast raised during the crash screen and older than its duration is never seen — only
+     `duration: Infinity` ones survive. Jobs keep running after a studio render error (T-135): an export, a Clip Kit, a
+     GIF, a transcription or a Record save that ends while the crash screen is up loses its "Saved … / Show in folder"
+     or failure toast; so do autosave's own "paused" and "couldn't save" toasts. And the crash screen reads
+     `autosaveTrouble()` once per render, with nothing to re-render it, so trouble that begins after the throw (the
+     debounced write of the edit just before it, a background result that changes the project) leaves "imagii saves it
+     every few seconds" on screen — the promise T-179 made true at the moment of the crash. App's loading and welcome
+     phases mount no Toaster either. Fix:
+     - `<AppToaster />` is mounted ONCE in App, outside the studio `ErrorBoundary`, in every phase (loading, welcome,
+       ready) — same position in a fragment so it is not remounted across phases — inside its own
+       `<ErrorBoundary fallback={null}>`: a toast that throws while rendering drops the toast surface (console line)
+       and never unmounts App (which would stop autosave). `ErrorBoundary` takes an optional `fallback` prop; without
+       it, the crash screen as now.
+     - The crash screen's autosave sentence is a small function component that reads `autosaveTrouble()` through
+       `useSyncExternalStore(subscribeAutosaveTrouble, autosaveTrouble)`; useAutosave exports
+       `subscribeAutosaveTrouble(listener): () => void` and notifies its listeners after every `doSave` (a `finally`
+       around its body) and when autosave starts and stops. The three sentences and the precedence are T-179's.
+
+  Covering tests: e2e (home-chrome.spec.ts, NEW describe at the END): with the autosave path blocked (the T-178
+  directory fixture), an edit, then a studio throws inside the 5 s debounce → the crash screen first reads the plain
+  sentence, then — when the debounced write is refused after the throw — the failing sentence, and the "Autosave
+  couldn't save your work." toast is VISIBLE over the crash screen (a drawn toast in `[data-rht-toaster]`, not only the
+  toast log); exactly one `[data-rht-toaster]` during the crash and after Reload to Home (red on the base: no toast
+  drawn, the sentence never changes). Unit (useAutosave tests, NEW describe): a subscriber is called after a write that
+  changes the trouble state and on start and stop; unsubscribe stops it. Unit (ErrorBoundary.test.tsx, NEW describe):
+  `fallback={null}` renders nothing on error; no fallback → the crash screen. interactionWiring pins: the toaster mount
+  outside the studio boundary (the T-31 pins at :55-80 updated in place), one `<AppToaster />` in App, the sentence
+  component reading `useSyncExternalStore`. IC rows; the T-31 row's "one toast surface" now holds on the crash screen.
+
+  **Docs:** USER_GUIDE's crash-screen paragraph (toasts still appear over it; the autosave sentence follows autosave);
+  IC rows; TESTING paragraph; LESSONS entry at the TOP (a sentence about live state is live, and a fix for a state
+  sweeps every moment it can begin).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 129)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
