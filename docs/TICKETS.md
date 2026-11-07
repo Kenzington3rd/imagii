@@ -9055,6 +9055,59 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 127 — see the Done entry)
 
+## T-179 — sweep-65 fixes (round 128)
+
+- **Spec:** the sixty-fifth sweep's one verified finding (candidate clean pass #1 on ca649d0), confirmed by the
+  expediter against source; found independently by QA renderer reader a and UX reader 1. Privacy, a11y, audio, ffmpeg,
+  QA renderer reader b, both design readers, UX reader 2 and all three streamer readers clean on their lens. It is a
+  sibling of T-178 (2) — the expediter's miss: T-178 should have swept every state in which autosave writes nothing
+  (there are two: a failing write, and the over-size pause). Not counted: a direct MP3 / M4A whose container start_time
+  is not 0 placing a cut that far off (unexecuted; a Layer 5 probe for a spare cycle); a failure episode left open when
+  the work returns to the last-written content or every studio closes (the crash line errs cautious). One track.
+
+  **Track A — the crash screen tells the truth while autosave is paused for size (item 1).**
+  1. **[LOW-MED] The crash screen promises "imagii saves it every few seconds" while autosave is paused because the
+     project is too large** (hooks/useAutosave.ts:177-179 `autosaveIsFailing`, :252-261 the over-size branch;
+     components/ErrorBoundary.tsx:73-75). Over the limit, `doSave` sets `memory.toldTooLarge`, toasts "Autosave is
+     paused…" once (8 s) and returns before any write, so nothing is written until the project fits; the getter reads
+     `toldWriteFailed` only, so a render error after the toast has faded shows the promise T-178 (2) set out to stop.
+     "Use Save project" is no way out either: Save project refuses the same project (`projectSizeProblem` 'save').
+     **Second consequence (adjudication):** the content dedupe (`serialized === memory.lastHash`, :251) returns BEFORE the
+     size rule, so an undo back to the last-written content after the pause leaves `toldTooLarge` true while the project
+     fits — with a paused sentence on the crash screen that would be a false instruction, and a later trip over the
+     limit would go untold. Fix:
+     - The getter becomes `autosaveTrouble(): 'paused' | 'failing' | null` (replacing `autosaveIsFailing`): 'paused'
+       while `toldTooLarge` (it wins over 'failing': no write is attempted while paused, and Save project refuses the
+       same project), else 'failing' while `toldWriteFailed`, else null; null with no autosave running.
+     - ErrorBoundary says, for 'paused': "Your work is still open in its studios, but autosave is paused: the project is
+       too large to keep. Reload to Home, then remove some of the large images on the canvas, or import smaller copies
+       of them, and it will start again." (the autosave toast's own remedy, `projectSizeProblem` 'autosave'); 'failing'
+       and null keep T-178's two sentences exactly.
+     - The dedupe return clears `memory.toldTooLarge` first: content equal to the last write fit the limit when it was
+       written, so the pause is over (and the next trip over the limit is told again).
+
+  Covering tests: unit (ErrorBoundary.test.tsx, NEW describe): a running autosave with `toldTooLarge` → the paused
+  sentence and not "every few seconds" and not "Save project"; both flags set → the paused sentence; the pause cleared →
+  the old sentence (red on the base: the promise is shown while paused). Unit (useAutosave tests, NEW describe):
+  `autosaveTrouble()` null at the start; an over-size capture → 'paused' and one toast; a write failure → 'failing';
+  over-size then a capture equal to the last-written content → null (red on the base: stays paused), then over-size
+  again → 'paused' and a SECOND toast; a fitting write after the pause → null; stopped → null. The existing
+  `autosaveIsFailing` assertions move to `autosaveTrouble`. interactionWiring pins (:5042-5046) updated to the new getter
+  and the three-way sentence. An e2e if the harness can push a real project over 50 MiB on the canvas and raise a render
+  error (the crash-screen e2e the T-178 hand-back noted, if one exists) — the worker's call, disclosed; IC row for the
+  paused crash sentence either way.
+
+  **Docs:** USER_GUIDE's crash-screen sentence (":860-862", "If autosave had been failing…") names the paused case and
+  what to do; its "it keeps trying" (:878) becomes what the code does — it tries again with each change you make, and
+  once more as imagii closes (quitFlush.ts); IC row; TESTING paragraph; LESSONS entry at the TOP (a fix for one state
+  of a class must sweep every state of it: T-178 (2) fixed "failing" and left "paused").
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 128)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
