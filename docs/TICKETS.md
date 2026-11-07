@@ -8968,6 +8968,47 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 125 — see the Done entry)
 
+## T-177 — sweep-63 fixes (round 126)
+
+- **Spec:** the sixty-third sweep's two verified findings (candidate clean pass #1 on c91615e), each confirmed by the
+  expediter against source. Privacy, a11y, audio, QA main and both renderer readers, design reader 2 and all three
+  streamer readers clean on their lens. Item 1 is a sibling of T-153 (1) (T-110 (n) was the canvas half only). Not
+  counted: the autosave banner's Clear asking nothing (T-110 (bu), an owner call); a multi-file drop taking the first
+  file (the standing "a multi-file audio drop takes the first" class); "Cleaned audio attached to the video" against
+  BRANDING's Saved/Exported verb (the rule bans done/finished/ready; this verb names the action and is pinned); "Give it
+  a name" beside "Name your preset first" (no rule picks one); "Saved 3600.0 MB" for an hour take (accurate; a unit-step
+  initiative); Clip Kit encoding identical rows twice (wall-clock initiative); a plain import's one-probe window before
+  an Open project from Home (contrived). One track.
+
+  **Track A — one typed target, one undo step; a drop that carries no file says so (items 1 and 2).**
+  1. **[LOW] Typing a loudness target can cost two undo steps** (audio-studio/LevelsPanel.tsx:79-87 and :147;
+     state/audioStore.ts `patchChain`). The target box commits every keystroke that is already a valid target and the
+     commit passes no coalescing key, so typing "-50" commits -5 and then -50 — two steps, and Ctrl+Z first lands on a
+     -5 nobody meant ("-16.5" likewise: -16, then -16.5). T-153 (1) fixed this exact shape for the canvas number boxes;
+     the Manual gain slider in the same card passes `'gain'`. Fix: the target box's commits pass a key
+     (`patchChain({ loudnormTargetLufs: target }, 'loudnormTarget')`); the card's existing gesture end (blur, pointer-up)
+     closes the window, so a later edit is its own step.
+  2. **[LOW] The video importer says nothing when a drop carries no file** (video-studio/Importer.tsx:107-108). A link,
+     a browser thumbnail or selected text dropped on "Drop a video here" un-highlights the card and nothing else; the
+     audio importer's same drop says "No file was dropped. Try the file picker instead." (`examineDroppedFile`'s hint),
+     and the video importer's own no-path drop already toasts. Fix: the video drop says the same sentence, from the
+     shared hint (one source for both importers), with the duration the audio importer uses.
+
+  Covering tests: unit (audioStore or LevelsPanel: "-5" then "-50" with the key = one undo step, undo returns to the
+  original target; a second burst after the gesture end = a second step) and e2e (NEW describes at the end of audio.spec.ts
+  and video-core.spec.ts or home-chrome.spec.ts as fits): type "-50" in the target box, blur, Ctrl+Z → the original target
+  (red on the base: -5); a drop with no file (a DataTransfer carrying only text/uri-list or text/plain) on the video
+  importer shows the no-file sentence and opens nothing (red: no toast); a drop with a file still loads (control). The
+  IC rows for the target box and the video drop updated.
+
+  **Docs:** IC rows; TESTING paragraph; LESSONS entry at the TOP; USER_GUIDE only where a sentence is now wrong or new.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open.
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
