@@ -859,7 +859,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   hits an error instead and shows the crash screen, nothing has restarted: **Reload to Home**
   only changes the screen, so the studio you were in is still open with your work in it, and
   no restore banner is offered. If autosave had been failing, the crash screen says so instead of
-  promising it saves every few seconds, and points you at **Save project**. The banner
+  promising it saves every few seconds, and points you at **Save project**; while autosave is paused for
+  size (below), it says so instead, and tells you to remove large images from the canvas
+  (**Save project** would refuse the same project). The banner
   is not shown over work you have already started in this session, so a restore
   never lands on top of it; and work that arrives while you are looking at Home (a
   sound or a converted video that finishes after you came back) takes the banner away
@@ -875,7 +877,7 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   when the restore is done.
   If imagii cannot write the autosave (the disk is full, or the folder or file is held by another program), it
   says **Autosave couldn't save your work.** once, with the cause where it knows it, so you can
-  save the project yourself; it keeps trying, and tells you again only if a later write fails after one has worked.
+  save the project yourself; it tries again with each change you make, and once more as imagii closes, and tells you again only if a later write fails after one has worked.
   A project over 50 MB is not autosaved: imagii says autosave is paused and why, once,
   and starts again by itself when the project is under the limit. Changes that are not
   part of the project (a grid you switch on, the results of a scan) do not write the file

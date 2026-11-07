@@ -173,9 +173,15 @@ export interface AutosaveMemory {
 /** The memory of the autosave that is running, so the crash screen can ask whether a failure episode is open (T-178 (2) addendum). */
 let activeMemory: AutosaveMemory | null = null
 
-/** True while a write has failed and none has succeeded since (the episode `tellWriteFailed` opened): autosave is NOT keeping the work safe right now. */
-export function autosaveIsFailing(): boolean {
-  return activeMemory?.toldWriteFailed === true
+/**
+ * Why the running autosave is NOT keeping the work safe right now, for the crash screen (T-178 (2) addendum, T-179 (1)): 'paused' while the project is over the size limit
+ * (no write is attempted, and Save project refuses the same project, so it wins), else 'failing' while a write has failed and none has succeeded since, else null
+ * (also null when no autosave is running).
+ */
+export function autosaveTrouble(): 'paused' | 'failing' | null {
+  if (activeMemory?.toldTooLarge === true) return 'paused'
+  if (activeMemory?.toldWriteFailed === true) return 'failing'
+  return null
 }
 
 /**
@@ -248,7 +254,11 @@ export function startAutosave(memory: AutosaveMemory): () => void {
       console.warn('[autosave] serialize failed', err)
       return
     }
-    if (serialized === memory.lastHash) return
+    // T-179 (1): content equal to the last write fit the limit when it was written, so a pause is over (and the next trip over the limit is told again). A failing episode is not: this proves nothing about the write.
+    if (serialized === memory.lastHash) {
+      memory.toldTooLarge = false
+      return
+    }
     // T-137 (6): over the size limit, the project is not sent (a 50 MiB structured clone every few seconds to be refused) and the person is told, once.
     // The refusal used to be a console line, so autosave stopped for good with nothing on screen. It starts again by itself when the project fits.
     const tooLarge = projectSizeProblem(serialized.length, 'autosave')

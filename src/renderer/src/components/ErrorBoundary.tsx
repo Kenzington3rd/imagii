@@ -1,5 +1,5 @@
 import { Component, type ReactNode, type ErrorInfo } from 'react'
-import { autosaveIsFailing } from '../hooks/useAutosave'
+import { autosaveTrouble } from '../hooks/useAutosave'
 
 interface ErrorBoundaryProps {
   children: ReactNode
@@ -69,10 +69,12 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           Something went wrong in this studio
         </h1>
         <p style={{ fontSize: '14px', color: '#a59a97', marginBottom: '16px' }}>
-          {/* T-178 (2): the promise is only true while autosave is working; once a write has failed (and none has worked since) it says what is true. */}
-          {autosaveIsFailing()
-            ? "Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy."
-            : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}
+          {/* T-178 (2), T-179 (1): the promise is only true while autosave is writing; while it is paused for size, or after a write has failed (and none has worked since), it says what is true. */}
+          {autosaveTrouble() === 'paused'
+            ? 'Your work is still open in its studios, but autosave is paused: the project is too large to keep. Reload to Home, then remove some of the large images on the canvas, or import smaller copies of them, and it will start again.'
+            : autosaveTrouble() === 'failing'
+              ? "Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy."
+              : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}
         </p>
         <details style={{ marginBottom: '16px' }}>
           <summary style={{ fontSize: '12px', color: '#a59a97', cursor: 'pointer' }}>

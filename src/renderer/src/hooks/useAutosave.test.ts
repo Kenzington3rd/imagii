@@ -15,7 +15,7 @@ import {
   noteSuppressedChange,
   onAutosaveResume,
   playheadOnlyChange,
-  autosaveIsFailing,
+  autosaveTrouble,
   startAutosave,
   suppressAutosave
 } from './useAutosave'
@@ -772,23 +772,176 @@ describe('startAutosave - a write that fails says so once per episode (T-178 (2)
     expect(errors).not.toHaveBeenCalled()
   })
 
-  it('autosaveIsFailing follows the episode: false at the start, true after a refusal or a throw, false again after a success, and false once autosave is stopped', async () => {
-    expect(autosaveIsFailing()).toBe(false)
+  it('autosaveTrouble follows the episode: null at the start, "failing" after a refusal or a throw, null again after a success, and null once autosave is stopped', async () => {
+    expect(autosaveTrouble()).toBeNull()
     write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
     await edit()
-    expect(autosaveIsFailing(), 'a refusal opens the episode').toBe(true)
+    expect(autosaveTrouble(), 'a refusal opens the episode').toBe('failing')
     write.mockImplementation(refusal('no studio state to save'))
     await edit()
-    expect(autosaveIsFailing(), '"no studio state" neither ends nor opens one').toBe(true)
+    expect(autosaveTrouble(), '"no studio state" neither ends nor opens one').toBe('failing')
     write.mockImplementation(async () => ({ ok: true as const }))
     await edit()
-    expect(autosaveIsFailing(), 'a success ends it').toBe(false)
+    expect(autosaveTrouble(), 'a success ends it').toBeNull()
     write.mockImplementation(async () => {
       throw new Error('EBUSY: resource busy or locked, rename')
     })
     await edit()
-    expect(autosaveIsFailing(), 'a throw opens it').toBe(true)
+    expect(autosaveTrouble(), 'a throw opens it').toBe('failing')
     stop()
-    expect(autosaveIsFailing(), 'a stopped autosave is not failing').toBe(false)
+    expect(autosaveTrouble(), 'a stopped autosave is not failing').toBeNull()
+  })
+})
+
+// ── T-179 (1): the pause for size is a state the crash screen must know, and it ends when the project is back to what was last written ──────────
+
+describe('autosaveTrouble - paused for size, failing, or neither (T-179 (1))', () => {
+  const imageLayer = (id: string, srcChars: number): CanvasLayer => ({
+    id,
+    type: 'image',
+    name: id,
+    visible: true,
+    locked: false,
+    x: 0,
+    y: 0,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    opacity: 1,
+    src: `data:image/png;base64,${'A'.repeat(srcChars)}`,
+    width: 100,
+    height: 100
+  })
+  const OVER = MAX_PROJECT_BYTES + 1000
+  const PAUSED_TOAST = /^Autosave is paused: this project is too large to keep /
+  let write: ReturnType<typeof vi.fn>
+  let stop: () => void
+  const spyOnToastError = () => vi.spyOn(toast, 'error').mockReturnValue('x')
+  let errors: ReturnType<typeof spyOnToastError>
+  const pausedToasts = (): number => errors.mock.calls.filter((c) => PAUSED_TOAST.test(String(c[0]))).length
+  const refusal = (reason: string) => async () => ({ ok: false as const, reason })
+  /** Add a small layer and let the debounce and the minimum interval pass: the write of the fitting project. */
+  async function writeFitting(id: string): Promise<void> {
+    useCanvasStore.getState().addLayer(textLayer(id, `fits ${id}`))
+    await vi.advanceTimersByTimeAsync(10_000)
+  }
+
+  /** One undo, then the selection the last write had (an undo clears it, and the selection is part of the captured project). */
+  function undoTo(selectedId: string): void {
+    useCanvasStore.getState().undo()
+    useCanvasStore.getState().selectLayer(selectedId)
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    write = vi.fn(async () => ({ ok: true as const }))
+    vi.stubGlobal('window', { api: { autosave: { write } } })
+    errors = spyOnToastError()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    useVideoStore.getState().clearSource()
+    useAudioStore.getState().clearSource()
+    useCanvasStore.getState().resetDocument()
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+  })
+  afterEach(() => {
+    stop()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('null at the start, and null with a fitting project written', async () => {
+    expect(autosaveTrouble()).toBeNull()
+    await writeFitting('a')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(autosaveTrouble()).toBeNull()
+  })
+
+  it('an over-size capture: "paused", and exactly one paused toast', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble()).toBe('paused')
+    expect(pausedToasts()).toBe(1)
+    expect(write).not.toHaveBeenCalled()
+  })
+
+  it('a refused write: "failing"', async () => {
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await writeFitting('a')
+    expect(autosaveTrouble()).toBe('failing')
+  })
+
+  it('paused wins over failing: a failed write earlier in the session, then over the limit', async () => {
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await writeFitting('a')
+    expect(autosaveTrouble()).toBe('failing')
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble(), 'no write is attempted while paused, and Save project refuses the same project').toBe('paused')
+  })
+
+  it('over the limit, then back to exactly what was last written: the pause is over (null), and the next trip over the limit is told again', async () => {
+    await writeFitting('a')
+    expect(write).toHaveBeenCalledTimes(1)
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble()).toBe('paused')
+    expect(pausedToasts()).toBe(1)
+    // Undo back to the last-written content: the dedupe returns before the size rule, and must end the pause itself.
+    undoTo('a')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(write, 'equal to the last write: nothing new to send').toHaveBeenCalledTimes(1)
+    expect(autosaveTrouble(), 'the project fits and is what is on disk: not paused').toBeNull()
+    useCanvasStore.getState().addLayer(imageLayer('huge2', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble()).toBe('paused')
+    expect(pausedToasts(), 'a NEW episode is told').toBe(2)
+    expect(write).toHaveBeenCalledTimes(1)
+  })
+
+  it('a fitting write after the pause: null', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble()).toBe('paused')
+    useCanvasStore.getState().removeLayer('huge')
+    await writeFitting('small')
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(autosaveTrouble()).toBeNull()
+  })
+
+  it('the dedupe does NOT end a failing episode: a content-equal capture says nothing about whether a write works (the crash line errs cautious)', async () => {
+    await writeFitting('a')
+    expect(write).toHaveBeenCalledTimes(1)
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await writeFitting('b')
+    expect(autosaveTrouble()).toBe('failing')
+    // Back to the content that was last written successfully: deduped, nothing sent, and still failing.
+    undoTo('a')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(write, 'the equal capture is not sent').toHaveBeenCalledTimes(2)
+    expect(autosaveTrouble()).toBe('failing')
+  })
+
+  it('the dedupe ending a pause leaves an open failing episode open: paused, deduped, then failing (not null)', async () => {
+    await writeFitting('a')
+    write.mockImplementation(refusal('ENOSPC: no space left on device, write'))
+    await writeFitting('b')
+    expect(autosaveTrouble()).toBe('failing')
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble()).toBe('paused')
+    useCanvasStore.getState().undo()
+    undoTo('a')
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble(), 'the pause is over, the failure is not').toBe('failing')
+  })
+
+  it('stopped: null, whatever was open', async () => {
+    useCanvasStore.getState().addLayer(imageLayer('huge', OVER))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(autosaveTrouble()).toBe('paused')
+    stop()
+    expect(autosaveTrouble()).toBeNull()
   })
 })

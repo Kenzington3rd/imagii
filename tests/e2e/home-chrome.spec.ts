@@ -4482,3 +4482,77 @@ test.describe('round 127 Track A (T-178 (2)): the crash screen does not promise 
     }
   })
 })
+
+// round 128 Track A (T-179 (1)): the crash screen's autosave sentence, in the other state in which autosave writes nothing. A project pushed over 50 MiB by a real "+ Add text"
+// pauses autosave (the T-137 (6) toast); a studio then throws, and the screen must say the project is too large to keep, not that imagii saves it every few seconds, and not
+// point at Save project (which refuses the same project). The over-size project is the T-137 (6) seed: a picture layer whose src is padded to 150 characters under the limit.
+test.describe('round 128 Track A (T-179 (1)): the crash screen while autosave is paused for the size of the project', () => {
+  const LIMIT = 50 * 1024 * 1024
+  const AUTOSAVE_PAUSED = /^Autosave is paused: this project is too large to keep \(\d+\.\d MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again\.$/
+  const PAUSED_SCREEN =
+    'Your work is still open in its studios, but autosave is paused: the project is too large to keep. Reload to Home, then remove some of the large images on the canvas, or import smaller copies of them, and it will start again.'
+
+  /** A project file whose text is exactly `size` characters: one picture layer, its src padded to fit (as in the T-137 (6) describe above). */
+  function projectFileOfSize(size: number): string {
+    const make = (src: string): string =>
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        imageCanvas: {
+          doc: {
+            width: 1200,
+            height: 800,
+            background: '#ffffff',
+            layers: [
+              { id: 'bigpic', type: 'image', name: 'Huge picture', visible: true, locked: false, x: 60, y: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, src, width: 100, height: 100 }
+            ]
+          }
+        }
+      })
+    return make('A'.repeat(size - make('').length))
+  }
+
+  test('a project over the limit pauses autosave (toast), then a studio throws: the screen says the project is too large to keep; no "every few seconds", no "Save project"', async () => {
+    test.setTimeout(300_000)
+    const root = makeRoot('t179-crash-autosave-paused')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const nearly = path.join(root, 'nearly.imagii.json')
+    writeFileSync(nearly, projectFileOfSize(LIMIT - 150), 'utf8')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await recordSlowChooser(app, { files: [nearly] })
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] }).toContain('Project loaded')
+      // The control for "paused": the fitting project is autosaved first, so the file on disk is the last project that fit.
+      await expect.poll(() => readAutosaveLayers(userDataDir) ?? 0, { timeout: 60_000, intervals: [500] }).toBe(1)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await window.locator('[data-tutorial="image-import"]').getByRole('button', { name: '+ Add text' }).click()
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => AUTOSAVE_PAUSED.test(t)).length, { timeout: 60_000, intervals: [500] })
+        .toBe(1)
+
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      await expect(alert.locator('p')).toHaveText(PAUSED_SCREEN)
+      const text = await alert.innerText()
+      expect(text).not.toMatch(/every few seconds/)
+      expect(text, 'Save project refuses this same project').not.toMatch(/Save project/)
+      expect(readAutosaveLayers(userDataDir), 'and nothing over the limit was written').toBe(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

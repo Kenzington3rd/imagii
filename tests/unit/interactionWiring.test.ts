@@ -5039,13 +5039,43 @@ describe('round 127 Track A (T-178): the last silent drop zone, and an autosave 
   })
   it('(2 addendum) the crash screen reads the getter, not a copy of the flag, and the getter answers the running autosave\'s episode flag', () => {
     const boundary = strip(read('components/ErrorBoundary.tsx')).replace(/\s+/g, ' ')
-    expect(boundary).toContain("import { autosaveIsFailing } from '../hooks/useAutosave'")
-    expect(boundary).toContain("{autosaveIsFailing() ? \"Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy.\" : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}")
+    expect(boundary).toContain("import { autosaveTrouble } from '../hooks/useAutosave'")
+    // T-179 (1): the one sentence became three; the failing and the plain ones are T-178's words exactly.
+    expect(boundary).toContain("autosaveTrouble() === 'failing' ? \"Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy.\" : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}")
     expect(boundary, 'no flag of its own').not.toMatch(/toldWriteFailed/)
     const hook = strip(read('hooks/useAutosave.ts'))
-    expect(hook).toMatch(/export function autosaveIsFailing\(\): boolean \{\s*return activeMemory\?\.toldWriteFailed === true\s*\}/)
+    expect(hook).toMatch(/export function autosaveTrouble\(\): 'paused' \| 'failing' \| null \{\s*if \(activeMemory\?\.toldTooLarge === true\) return 'paused'\s*if \(activeMemory\?\.toldWriteFailed === true\) return 'failing'\s*return null\s*\}/)
+    expect(hook, 'the old boolean getter is gone').not.toContain('autosaveIsFailing')
     expect(hook).toMatch(/export function startAutosave\(memory: AutosaveMemory\): \(\) => void \{\s*activeMemory = memory/)
     expect(hook).toMatch(/if \(activeMemory === memory\) activeMemory = null/)
   })
 })
 
+describe('round 128 Track A (T-179): the crash screen tells the truth while autosave is paused for size', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const PAUSED_SENTENCE =
+    "'Your work is still open in its studios, but autosave is paused: the project is too large to keep. Reload to Home, then remove some of the large images on the canvas, or import smaller copies of them, and it will start again.'"
+
+  it('(1) the boundary picks among three sentences by autosaveTrouble(), paused first, the paused one naming the remedy and not Save project', () => {
+    const boundary = strip(read('components/ErrorBoundary.tsx')).replace(/\s+/g, ' ')
+    expect(boundary).toContain(`{autosaveTrouble() === 'paused' ? ${PAUSED_SENTENCE} : autosaveTrouble() === 'failing' ?`)
+    expect(boundary.match(/autosaveTrouble\(\)/g), 'read twice, in the one ternary').toHaveLength(2)
+    expect(boundary.match(/every few seconds/g), 'the promise appears once, in the last arm').toHaveLength(1)
+    expect(boundary.match(/Save project/g), 'Save project is named only by the failing arm').toHaveLength(1)
+    expect(boundary, 'no flag of its own').not.toMatch(/toldTooLarge|toldWriteFailed/)
+  })
+
+  it('(1) the paused sentence is the autosave toast\'s own remedy (projectSizeProblem \'autosave\'), word for word', () => {
+    const validation = strip(read('../../shared/projectValidation.ts')).replace(/\s+/g, ' ')
+    expect(validation).toContain('Remove some of the large images on the canvas, or import smaller copies of them, and it will start again.')
+    const boundary = strip(read('components/ErrorBoundary.tsx')).replace(/\s+/g, ' ')
+    expect(boundary).toContain('then remove some of the large images on the canvas, or import smaller copies of them, and it will start again.')
+  })
+
+  it('(1) the dedupe return clears the pause flag and only that one: the failing episode is not ended by a content-equal capture', () => {
+    const hook = strip(read('hooks/useAutosave.ts'))
+    expect(hook).toMatch(/if \(serialized === memory\.lastHash\) \{\s*memory\.toldTooLarge = false\s*return\s*\}\s*const tooLarge = projectSizeProblem\(/)
+    const dedupe = hook.slice(hook.indexOf('if (serialized === memory.lastHash)'), hook.indexOf('const tooLarge = projectSizeProblem('))
+    expect(dedupe).not.toContain('toldWriteFailed')
+  })
+})

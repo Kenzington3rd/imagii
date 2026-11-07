@@ -14,6 +14,18 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-07 - T-179 (round 128), Track A: a fix for one state of a class sweeps every state of it
+
+The sixty-fifth sweep, Track A (item 1).
+
+### (1) [LOW-MED] - The crash screen promised autosave while autosave was paused for size
+
+- **Bug.** With the project over 50 MB, autosave is paused (it says so once in a toast and writes nothing), but a studio that then threw showed "imagii saves it every few seconds". The T-178 (2) fix for a failing write did not cover it, and its remedy ("use Save project") would not have worked either: Save project refuses the same project.
+- **Root cause.** T-178 (2) found the promise untrue in one state in which autosave writes nothing (a failed write) and fixed that state; there are two (the other is the over-size pause), and the getter answered a boolean about one of them. Beside it, the content dedupe in `doSave` returned before the size rule, so an undo back to the last-written content left `toldTooLarge` set while the project fitted: a stale pause (a false sentence on the crash screen, and no toast for the next overflow).
+- **Fix.** `autosaveIsFailing()` became `autosaveTrouble(): 'paused' | 'failing' | null` (paused wins: no write is attempted while paused), and the crash screen has a sentence for each state; the paused one names the toast's own remedy. The dedupe return clears `toldTooLarge` and nothing else: a content-equal capture proves the project fits, and says nothing about whether a write works.
+- **Test.** ErrorBoundary.test.tsx "while autosave is paused for size (T-179 (1))"; useAutosave.test.ts "autosaveTrouble - paused for size, failing, or neither (T-179 (1))" (the second toast after an undo back to the last write is red on the base); interactionWiring.test.ts "round 128 Track A (T-179)"; home-chrome.spec.ts "round 128 Track A (T-179 (1))" (a real over-size project, the toast, a real crash: red on the unchanged build with the promise on screen).
+- **Lesson.** **When a screen makes a promise, list every state in which the promise is false before fixing one.** "Autosave is not writing" has two causes here, and the fix that named one left the other showing the same untrue sentence. And a state flag needs its ending tested on every path out, not only the one that was reported: the dedupe is a path out that no one thought of as one. A mutation that clears the neighbouring flag too (the failing episode) belongs with the fix, so the next edit cannot widen it.
+
 ## 2026-11-07 - T-178 (round 127), Track A: a gesture gets its answer on every surface that takes it, and a safety net that fails says so
 
 The sixty-fourth sweep, Track A (items 1 and 2).

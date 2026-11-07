@@ -9106,7 +9106,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 128)
+- **Status:** done (round 128 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9682,6 +9682,37 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 128 — T-179, the one counted item, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of 3745e26; a
+container restart stopped it after the product change, the tests and
+the three red rows, and a second Sonnet worker took over the same
+clone (it re-read the inherited diff against the ticket, then ran the
+mutations, wrote the docs and ran the gates). Track A: the crash
+screen tells the truth in both states in which autosave writes nothing
+— `autosaveTrouble(): 'paused' | 'failing' | null` replaces
+`autosaveIsFailing()`, and while the project is over the size limit
+the screen reads "Your work is still open in its studios, but autosave
+is paused: the project is too large to keep. Reload to Home, then
+remove some of the large images on the canvas, or import smaller
+copies of them, and it will start again." (paused wins over a failing
+write; T-178's two sentences unchanged); the content dedupe now ends
+the pause, so an undo back to the last-written content is not left
+"paused" and the next trip over the limit is told again (it does not
+end a failing episode). USER_GUIDE names the paused crash line and
+says a failed write is tried again with each change and once more as
+imagii closes. The e2e drives a real project over 50 MB with "+ Add
+text", the paused toast, and a studio throwing. No deviations. Ledger:
+9 mutation rows (7 unit, 2 on rebuilt apps) plus the reds, all killed
+and restored identical. Expedited personally: one independent mutation
+at a seam no ledger row names — the fit path no longer ending the
+pause → the T-137 (6) "told again" case and "a fitting write after the
+pause: null" red — restored byte-identical, sha256 verified; on the
+landed tree: verify x2 (211 files, 6764 tests, both green), test:media
+515 passed and 17 skipped of 532 on 7.0.2, FULL Playwright 819 passed
+(56.5 min; run on the expedited clone, byte-identical to what landed).
+Applied to 3745e26 by `git apply` with every file byte-identical to
+the expedited tree.
 
 Round 127 — T-178, both counted items, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of 6db9877.
