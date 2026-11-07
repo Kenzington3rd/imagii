@@ -9009,6 +9009,52 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 126 — see the Done entry)
 
+## T-178 — sweep-64 fixes (round 127)
+
+- **Spec:** the sixty-fourth sweep's two verified findings (candidate clean pass #1 on e69a2ed), each confirmed by the
+  expediter against source; item 1 was found independently by QA renderer reader a and UX reader 2 (and noted by the a11y
+  reader). Privacy, a11y, audio, ffmpeg, QA main and renderer reader b, design reader 2, UX reader 1 and all three
+  streamer readers clean on their lens. Item 1 is a sibling of T-177 (2) — the expediter's miss: T-177 should have swept
+  every drop zone (there are three). Not counted: Clean audio re-extracting a video whose sound is already open (it does
+  what its tooltip says, and asks first); PiP's Composite enabled with "Pick both files" as a toast; the chat-spike median
+  over non-empty buckets and the scan's top-20 clustering (conservative by design; initiatives); `describeImportError`
+  reading a keyword in an unquoted folder name (contrived). One track.
+
+  **Track A — the last silent drop zone; an autosave that fails says so (items 1 and 2).**
+  1. **[LOW] Stream Graphics says nothing when a drop carries no file** (image-studio/ImportPanel.tsx:155-160, the
+     handler behind the import bar :193-203 and the empty state's card :275-285). `Array.from(e.dataTransfer.files)` is
+     empty for a link, selected text or a browser element, the loop runs nothing, and the highlight clears with no word;
+     Video Studio and Audio Studio say `examineDroppedFile`'s "No file was dropped. Try the file picker instead."
+     (T-177 (2)), and ImportPanel's own unsupported-type drop toasts. Fix: `files.length === 0` → the same shared hint,
+     the same toast kind as the other two importers, and return.
+  2. **[LOW-MED] An autosave write that fails is a console line only** (hooks/useAutosave.ts:243-255 `doSave`; main
+     autosave.ts `writeAutosaveNow`). A refusal (`{ ok: false, reason }`: a disk that is full, a userData folder that is
+     not writable, a locked temp file or rename, a schema or safety refusal) or a throw is `console.warn` — the safety net
+     is off with nothing on screen while the crash screen says "imagii saves it every few seconds" and USER_GUIDE says the
+     same. T-137 (6) gave the over-size case a once-per-episode toast; nothing else got one. Fix (the T-137 (6) shape):
+     the first refusal or throw of an episode — except the expected "no studio state" — raises one
+     `reportFailure(err, { failed: "Autosave couldn't save your work.", id: AUTOSAVE_FAILED_TOAST_ID })` (the plain cause
+     follows where `userFacingError` knows the shape, e.g. a full disk); later failures in the same episode stay quiet; the
+     next successful write ends the episode, so a later failure is told again. The over-size toast is unchanged (its own
+     id and flag).
+
+  Covering tests: e2e (a NEW describe at the end of image.spec.ts): a drop whose DataTransfer carries only text on the
+  Stream Graphics import bar AND on the empty-state card → the no-file sentence, nothing added to the canvas (red on the
+  base: no toast); a file drop still imports (control). Unit (useAutosave tests, NEW describe): a write that resolves
+  `{ ok: false, reason: 'ENOSPC: no space left on device' }` → one toast with the sentence; a second failure → no second
+  toast; a success, then a failure → a toast again; "no studio state" → no toast; a throw → the toast (red on the base:
+  none). An e2e for the autosave toast if main's write can be made to refuse in the harness (e.g. the autosave path held
+  by a directory of the same name, or the test hook the autosave e2e already uses) — the worker's call, disclosed. IC rows
+  for both; USER_GUIDE where it says autosave saves every few seconds (what it says when it cannot).
+
+  **Docs:** IC rows; TESTING paragraph; LESSONS entry at the TOP; USER_GUIDE as above.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open.
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
