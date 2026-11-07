@@ -8966,7 +8966,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open.
+- **Status:** done (round 125 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9542,6 +9542,28 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 125 — T-176, the one counted item, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of 2facd13.
+Track A: Clean audio's kept-part question names what opens — "Open the
+sound of <video>? The changes kept for <sound>, which could not be
+opened, will be discarded." — instead of "Open <video>?" about a video
+that is already open (the app's own phrase, AudioImporter's "the sound
+of"); the two importers and Edit in Video Studio keep the file's own
+name. Clean audio with a kept chain is now driven end to end
+(audio.spec.ts, Cancel and Accept; the kept chain reached through Open
+project of a project whose sound is missing — the same `applyProject`
+keep path a Restore takes). Deviations, accepted: the e2e's route to
+the kept chain, an Accept case added. Ledger: 5 reds + 8 mutation
+rows, all killed. Expedited personally: one independent mutation at a
+seam no ledger row names — Edit in Video Studio reworded "the sound of
+…" → two wiring pins red (wiring-only, disclosed) — restored
+byte-identical, sha256 verified; the worker's full run failed once on
+the known video-pipelines T-89 load flake (5/5 standalone); on the
+landed tree: verify x2 (210 files, 6721 tests, both runs), test:media
+515 passed, 17 skipped of 532 on 7.0.2, FULL Playwright 810 passed,
+57.3 min. Applied to 2facd13 by `git apply` with every file
+byte-identical to the expedited tree.
 
 Round 124 — T-175, all three counted items, landed in the commit that
 carries this entry. Two Sonnet workers in fresh clones of a97bfad,

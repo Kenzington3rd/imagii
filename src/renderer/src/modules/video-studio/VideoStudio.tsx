@@ -94,8 +94,8 @@ export function VideoStudio(): JSX.Element {
     const chainAsked = useAudioStore.getState().chain
     if (!confirmAudioClose(chainAsked, (message) => confirm(message), 'replace')) return
     // T-175 (3): and a chain kept for a sound that could not be opened is let go when this video's sound loads. `soundKey` of the extracted sound is
-    // `videoKey(source)` (the original of a converted import, else the file): the same video's own kept chain asks nothing. Cancel extracts nothing.
-    const keptQuestion = keptPartQuestion('audio', videoKey(source), source.fileName)
+    // `videoKey(source)` (the original of a converted import, else the file): the same video's own kept chain asks nothing. Cancel extracts nothing. T-176: what opens is the video's SOUND (the video is already open), and the question says so.
+    const keptQuestion = keptPartQuestion('audio', videoKey(source), `the sound of ${source.fileName}`)
     if (keptQuestion !== null && !confirm(keptQuestion)) return
     if (!useCleanAudioRun.getState().begin({ videoPath: source.filePath })) return
     toast.loading('Extracting audio…', { id: 'extract-audio' })

@@ -6259,3 +6259,99 @@ test.describe('round 124 Track B (T-175): the audio importer', () => {
     })
   }
 })
+
+// ── round 125 Track A (T-176 item 1): Clean audio's kept-part question names what opens ────────────────────────────────────────────────────────────────────────────────
+//
+// T-175 (3) made Clean audio ask before it lets go of a chain kept for a sound that could not be opened, but it said "Open stream.mp4?" about a video that is already open: what
+// opens is its SOUND, in Audio Studio. The question now names it ("Open the sound of stream.mp4? ..."), the app's own phrase (AudioImporter's "Skipped the sound of ..."). A project
+// whose sound is missing is opened (the same keep path as an autosave's Restore: `applyProject`), a video with sound is opened in Video Studio, and Clean audio is pressed.
+test.describe('round 125 Track A (T-176): Clean audio names the sound it opens', () => {
+  const QUESTION = 'Open the sound of e2e-stream.mp4? The changes kept for e2e-rec.wav, which could not be opened, will be discarded.'
+
+  /** A project whose sound (e2e-rec.wav, with Hum removal and Remove low rumble on) is not there is opened from Home; then the video is opened in Video Studio and Clean audio is enabled. */
+  async function keptChainThenVideo(studio: Studio): Promise<{ video: string; missing: string; clean: ReturnType<Page['getByRole']> }> {
+    const { app, window } = studio
+    const missing = path.join(studio.root, 'source', 'e2e-rec.wav')
+    const video = path.join(studio.root, 'source', 'e2e-stream.mp4')
+    await makeFixtureMp4(video)
+    const projectFile = path.join(studio.root, 'gone-sound.imagii.json')
+    writeFileSync(
+      projectFile,
+      JSON.stringify({
+        schemaVersion: 5,
+        savedAt: Date.now(),
+        appVersion: '1.0.0',
+        audioStudio: { sourcePath: missing, extractedFromVideo: false, chain: { ...DEFAULT_CHAIN_SPEC, hum60: true, rumbleHighpass: true } }
+      }),
+      'utf8'
+    )
+    await stubOpenDialog(app, projectFile)
+    await window.getByRole('link', { name: 'Home' }).click()
+    await window.getByRole('button', { name: 'Open project' }).click()
+    await expect
+      .poll(async () => (await readToastLog(window)).some((t) => t.startsWith("Couldn't find e2e-rec.wav.")), { timeout: 60_000, intervals: [250] })
+      .toBe(true)
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+    await window.evaluate((filePath) => {
+      const zone = document.querySelector('[data-tutorial="video-import"] .card')
+      if (!zone) throw new Error('Video Studio drop zone not found')
+      const file = new File([new Uint8Array([0])], 'e2e-stream.mp4', { type: '' })
+      Object.defineProperty(file, 'path', { value: filePath })
+      const event = new Event('drop', { bubbles: true, cancelable: true })
+      Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
+      zone.dispatchEvent(event)
+    }, video)
+    const clean = window.getByRole('button', { name: 'Clean audio' })
+    await expect(clean).toBeEnabled({ timeout: 60_000 })
+    return { video, missing, clean }
+  }
+
+  test('Cancel: the question names the video\'s sound, nothing is extracted, and the kept chain is still written by Save project', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t176-cancel')
+    try {
+      const { app, window, dialogs } = studio
+      const { missing, clean } = await keptChainThenVideo(studio)
+      expect(dialogs.messages, 'opening the video asked nothing (no video part is kept)').toEqual([])
+
+      dialogs.action = 'dismiss'
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain('Video loaded')
+      const toastsBefore = (await readToastLog(window)).length
+      await clean.click()
+      await expect.poll(() => dialogs.messages, { timeout: 15_000, intervals: [100] }).toEqual([QUESTION])
+      await window.waitForTimeout(1500)
+      await expect(clean, 'no run was claimed').toBeEnabled()
+      expect((await readToastLog(window)).slice(toastsBefore).join(' | '), 'no extraction started and nothing was said').toBe('')
+
+      // The chain is still kept (T-175 control): Save project writes it for the sound that is not there.
+      const saved = path.join(studio.root, 'saved-after-clean-cancel.imagii.json')
+      await stubSaveDialog(app, saved)
+      await window.getByRole('link', { name: 'Home' }).click()
+      await window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(saved), { timeout: 15_000 }).toBe(true)
+      expect(JSON.parse(readFileSync(saved, 'utf8')).audioStudio).toMatchObject({ sourcePath: missing, chain: { hum60: true, rumbleHighpass: true } })
+      expect(dialogs.messages, 'asked once, by Clean audio').toEqual([QUESTION])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Accept: the video\'s sound opens in Audio Studio with the default chain and the kept chain is let go', async () => {
+    test.setTimeout(300_000)
+    const studio = await openStudio('t176-accept')
+    try {
+      const { window, dialogs } = studio
+      const { clean } = await keptChainThenVideo(studio)
+      dialogs.action = 'accept'
+      await clean.click()
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 60_000 })
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator('header').getByText('e2e-stream.mp4', { exact: true })).toBeVisible()
+      await expect(window.locator(CLEANUP).getByLabel('Hum removal (60 Hz mains)')).not.toBeChecked()
+      expect(dialogs.messages, 'only the one question').toEqual([QUESTION])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

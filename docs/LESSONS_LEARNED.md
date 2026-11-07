@@ -14,6 +14,18 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-07 - T-176 (round 125), Track A: a question names what opens, not what is already open
+
+The sixty-second sweep, Track A (item 1).
+
+### (1) [LOW] - Clean audio asked "Open stream.mp4?" about a video that was already open
+
+- **Bug.** Pressing Clean audio on an open stream.mp4 while a chain was kept for an unopenable rec.wav asked "Open stream.mp4? The changes kept for rec.wav, which could not be opened, will be discarded." Nothing opens stream.mp4 there: it is open. What opens is its sound, in Audio Studio.
+- **Root cause.** T-175 (3) gave `keptPartQuestion` one lead, `Open ${openingName}?`, and every entry passed the file's name. That is true of the importers and Edit in Video Studio (they open that file) and false of Clean audio, which was handed the same argument because it was the nearest name to hand.
+- **Fix.** One argument at the one caller: ``keptPartQuestion('audio', videoKey(source), `the sound of ${source.fileName}`)`` in `cleanAudioFlow`, the app's own phrase (AudioImporter's "Skipped the sound of <file> ..."). `keptPartQuestion` and the other three entries are unchanged.
+- **Test.** audio.spec.ts "round 125 Track A (T-176)" (Cancel and Accept: the exact words, no extraction on Cancel, Save project still writes the kept chain, Accept opens the sound with the default chain; red on the base with "Open e2e-stream.mp4? ..."); interactionWiring.test.ts "T-176 Track A" (the single argument in Clean audio, the plain name in the others, the lead) and the T-175 Track B pin updated in place.
+- **Lesson.** **A shared sentence takes a name for what the action opens, and the caller says which thing that is.** A helper that builds "Open X?" is right only when X is what opens; a caller that is handed the nearest name rather than the right one makes the copy promise something the code does not do (BRANDING: copy promises only what the code does). When a message is built from a caller's argument, read each caller's call to see what its argument names.
+
 ## 2026-11-07 - T-175 (round 124), Track A: leaving Record during a start says nothing on the next screen
 
 The sixty-first sweep, Track A (item 1; Track B has items 2 and 3).

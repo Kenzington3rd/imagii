@@ -461,7 +461,7 @@ that names the file being converted.)
   (or the cleanup, cuts and second track of that sound) are back with it. imagii keeps them for the session
   while the file is missing, and the autosave keeps them too, so they are not lost to the next save.
   Opening a different video (or sound) in that studio lets them go, and imagii asks first - "Open X? The 2 clips kept for
-  Y, which could not be opened, will be discarded." (or "The changes kept for Y" for a sound) - from a drop, **Choose file…**,
+  Y, which could not be opened, will be discarded." (or "The changes kept for Y" for a sound; **Clean audio** asks "Open the sound of X?", since it is the video's sound that opens) - from a drop, **Choose file…**,
   **Recent**, **Edit in Video Studio** and **Clean audio** alike; **Cancel** opens nothing and keeps them waiting, and the same
   file opens with no question. **Open project** replaces what it names without asking. Closing leaves them waiting. A file that is
   there but won't open (a conversion that

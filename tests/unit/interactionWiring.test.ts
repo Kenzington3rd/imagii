@@ -4851,7 +4851,7 @@ describe('T-175 Track B - a kept part is asked about before it is let go; a Rece
   it('Clean audio asks keptPartQuestion over videoKey(source) after its chain question and BEFORE it claims its run or toasts; a Cancel returns', () => {
     const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
     const flow = studio.slice(studio.indexOf('async function cleanAudioFlow'), studio.indexOf('return (\n    <div className="h-full'))
-    expect(flow).toMatch(/const keptQuestion = keptPartQuestion\('audio', videoKey\(source\), source\.fileName\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return/)
+    expect(flow).toMatch(/const keptQuestion = keptPartQuestion\('audio', videoKey\(source\), `the sound of \$\{source\.fileName\}`\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) return/)
     const chain = flow.indexOf("confirmAudioClose(chainAsked, (message) => confirm(message), 'replace')")
     const kept = flow.indexOf('keptPartQuestion(')
     const begin = flow.indexOf('useCleanAudioRun.getState().begin(')
@@ -4938,5 +4938,41 @@ describe('T-175 Track B - a kept part is asked about before it is let go; a Rece
     expect(pick).toMatch(/if \(refuseIfBusy\(\)\) return\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)\s*\?\s*\(\): void => \{\s*toast\(\s*'Cloud-sync path\. If import fails/)
     expect(pick.split('Cloud-sync path.').length, 'the warning is toasted only inside advise').toBe(2)
     expect(audio).toMatch(/onPick=\{\(p\) => void loadFile\(p\)\}/)
+  })
+})
+
+// round 125 Track A (T-176 item 1): the opening name each entry hands keptPartQuestion. Clean audio opens a video's SOUND (the video is already open), so it says so; the two importers and
+// Edit in Video Studio open the file itself, so they pass its own name. Behavior of the words: audio.spec.ts "round 125 Track A"; the pass-through: ProjectIO.test.ts "keptPartQuestion".
+describe('T-176 Track A - Clean audio names the sound it opens; the entries that open a file name the file', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('Clean audio\'s opening name is "the sound of <file name>", the app\'s own phrase, and never the bare file name', () => {
+    const studio = strip(read('modules/video-studio/VideoStudio.tsx'))
+    const flow = studio.slice(studio.indexOf('async function cleanAudioFlow'), studio.indexOf('return (\n    <div className="h-full'))
+    const asks = flow.match(/keptPartQuestion\([^\n]*\)/g) ?? []
+    expect(asks, 'one question in the flow').toHaveLength(1)
+    expect(asks[0]).toBe('keptPartQuestion(\'audio\', videoKey(source), `the sound of ${source.fileName}`)')
+    expect(asks[0]).not.toMatch(/videoKey\(source\), source\.fileName\)/)
+    // The words it borrows are the app's: the audio importer's skip toast says "the sound of <file>".
+    expect(strip(read('modules/audio-studio/AudioImporter.tsx'))).toContain('Skipped the sound of ')
+  })
+
+  it('the video Importer, the audio importer and Edit in Video Studio pass the plain file name (they open that file), never "the sound of"', () => {
+    const asks = [
+      ['modules/video-studio/Importer.tsx', "keptPartQuestion('video', filePath, basename(filePath))"],
+      ['modules/audio-studio/AudioImporter.tsx', "keptPartQuestion('audio', filePath, basename(filePath))"],
+      ['lib/editInVideoStudio.ts', "keptPartQuestion('video', outputPath, basename(outputPath))"]
+    ] as const
+    for (const [file, call] of asks) {
+      const code = strip(read(file))
+      expect(code, file).toContain(call)
+      expect(code.match(/keptPartQuestion\(/g) ?? [], `${file}: exactly one asker`).toHaveLength(1)
+      expect(code, file).not.toMatch(/keptPartQuestion\([^\n]*the sound of/)
+    }
+  })
+
+  it('keptPartQuestion itself adds nothing to the name: its lead is `Open ${openingName}?`', () => {
+    const io = strip(read('modules/project/ProjectIO.ts'))
+    expect(io).toContain('const lead = `Open ${openingName}?`')
   })
 })
