@@ -4556,3 +4556,84 @@ test.describe('round 128 Track A (T-179 (1)): the crash screen while autosave is
     }
   })
 })
+
+// round 129 Track A (T-180 (1)): the crash screen can still talk. A job that ends while it is up raised a toast nobody saw (no Toaster was mounted, and the library dismisses an
+// expired toast the moment one mounts again), and its autosave sentence was read once per render, so trouble that begins AFTER the throw left "saves it every few seconds" on
+// screen. The trouble is made by the filesystem exactly as in the T-178 case above (a directory where autosave.json goes, put there after launch), and the throw is armed
+// inside the 5 s debounce of the edit: the write happens after the screen is drawn. No product hook: the timing is the debounce itself, and the control (the plain sentence
+// is read first) proves the write had not happened yet.
+test.describe('round 129 Track A (T-180 (1)): the crash screen shows toasts and follows autosave', () => {
+  const PLAIN = 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'
+  const FAILING = "Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy."
+
+  test('autosave is refused AFTER the studio throws: the screen turns from the promise to the truth, and the toast is drawn over it; one toast surface throughout', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t180-crash-live')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      mkdirSync(autosaveFile(userDataDir), { recursive: true })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 20_000 })
+      // The edit schedules a save 5 s out; the throw is armed in the same breath, well inside that debounce.
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      // Control: the write has not happened yet, so the promise is still true and is what the screen says.
+      await expect(alert.locator('p')).toHaveText(PLAIN)
+      expect(await readToastLog(window), 'no failure told yet: the debounce is still running').toEqual([])
+      const toaster = window.locator('[data-rht-toaster]')
+      await expect(toaster, 'one toast surface while the crash screen is up').toHaveCount(1)
+
+      // The debounced write is refused (the directory in the way) while the crash screen is showing: the toast is DRAWN over it, and the sentence changes.
+      await expect(toaster.getByText(/^Autosave couldn't save your work\./)).toBeVisible({ timeout: 45_000 })
+      await expect(alert).toBeVisible()
+      await expect(alert.locator('p')).toHaveText(FAILING, { timeout: 15_000 })
+      expect(await alert.innerText()).not.toMatch(/every few seconds/)
+      await expect(toaster).toHaveCount(1)
+
+      // Reload to Home: still one surface (nothing mounted a second), and the app is a working Home.
+      await window.getByRole('button', { name: 'Reload to Home' }).click()
+      await expect(alert).toHaveCount(0, { timeout: 15_000 })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await expect(toaster).toHaveCount(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('the toast surface is mounted on the Welcome screen too, and is the same one after "Let\'s go"', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t180-welcome-toaster')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, {})
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'Hi Mike!' })).toBeVisible({ timeout: 30_000 })
+      const toaster = window.locator('[data-rht-toaster]')
+      await expect(toaster, 'a phase before the studios has a toast surface too').toHaveCount(1)
+      // The same element survives the phase change: it is not remounted.
+      const handle = await toaster.elementHandle()
+      await window.getByRole('button', { name: "Let's go" }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await expect(toaster).toHaveCount(1)
+      expect(await handle?.evaluate((el) => el.isConnected), 'the Welcome screen\'s toast surface is the one Home has').toBe(true)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

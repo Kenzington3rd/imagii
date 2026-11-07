@@ -93,7 +93,10 @@ Repeated UI is a component, not copy-paste:
   ran OUT of the card in a real render, by as much as the name was long (81 px for one name, 228 px for a 90-underscore one); `anywhere` (not `break-word`) also lowers the min-content width, so the
   flex row shrinks the message instead of widening the card (`AppToaster.test.tsx` pins the style; image.spec.ts measures the
   rects). Mounted exactly once, in
-  `App.tsx` beside `HotkeyOverlay`, so every route has it. Never mount a
+  `App.tsx`, after the studio `ErrorBoundary` and in every phase, inside its own
+  `ErrorBoundary fallback={null}`, so every route, the welcome screen and the crash screen
+  have it (T-180 (1): inside the studio boundary, a toast raised while the crash screen
+  showed was never drawn). Never mount a
   second one in a studio: react-hot-toast keeps one toast store per
   toaster id and each `<Toaster>` draws all of it, so two mounts render
   every toast twice (T-31).

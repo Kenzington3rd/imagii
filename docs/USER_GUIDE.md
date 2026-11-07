@@ -858,10 +858,12 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   written at that moment is not kept (its half-written file is removed). If a studio
   hits an error instead and shows the crash screen, nothing has restarted: **Reload to Home**
   only changes the screen, so the studio you were in is still open with your work in it, and
-  no restore banner is offered. If autosave had been failing, the crash screen says so instead of
+  no restore banner is offered. Toasts still appear over the crash screen (a job that finishes while it is
+  up, an export or a recording save, still says so). If autosave had been failing, the crash screen says so instead of
   promising it saves every few seconds, and points you at **Save project**; while autosave is paused for
   size (below), it says so instead, and tells you to remove large images from the canvas
-  (**Save project** would refuse the same project). The banner
+  (**Save project** would refuse the same project). That sentence follows autosave while the screen is
+  up: if autosave starts failing or pauses after the error, the screen changes to say so. The banner
   is not shown over work you have already started in this session, so a restore
   never lands on top of it; and work that arrives while you are looking at Home (a
   sound or a converted video that finishes after you came back) takes the banner away

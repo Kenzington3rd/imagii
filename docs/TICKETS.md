@@ -9164,7 +9164,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 129)
+- **Status:** done (round 129 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9740,6 +9740,41 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 129 — T-180, the one counted item, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of 23cd3d9.
+Track A: the crash screen can still talk — `<AppToaster />` is mounted
+once in App, after the studio `ErrorBoundary` and in every phase
+(loading, welcome, ready), inside its own `ErrorBoundary
+fallback={null}` (a toast that throws drops the toasts, never App and
+its autosave), so a job that ends while the crash screen is up still
+says so; and the crash screen's autosave sentence is
+`AutosaveCrashLine`, reading `autosaveTrouble()` through
+`useSyncExternalStore(subscribeAutosaveTrouble, …)`, which useAutosave
+notifies after every save attempt (a `finally`) and at start and stop
+— so trouble that begins after the throw is said. `ErrorBoundary`
+takes an optional `fallback`. USER_GUIDE says toasts still appear over
+the crash screen and its sentence follows autosave. Deviations,
+accepted: one comment line in App.tsx keeps the docClaims line cites;
+a Welcome-screen e2e case (the every-phase mount) beyond the brief; no
+product hook for the e2e timing (the debounce itself; a plain-sentence
+control proves the write had not happened). Ledger: 4 red rows and 18
+mutation rows, all restored identical; two e2e survivors disclosed
+(the toaster's own boundary ignored or absent: no product path makes a
+toast throw) and killed at the unit and wiring layer. Expediter's own
+edits, landed with the patch: the STYLE_GUIDE sentence that still said
+the toaster mounts beside `HotkeyOverlay` (the worker's
+found-not-fixed), and the class doc comment moved back above
+`ErrorBoundary` (comment-only, after the e2e run). Expedited
+personally: one independent mutation at a seam no ledger row names —
+the notify at the end of the normal path instead of in the `finally` →
+the over-size (null → paused) case and a wiring pin red — restored
+byte-identical, sha256 verified; on the landed tree: verify x2 (211
+files, 6783 tests, both green), test:media 515 passed and 17 skipped
+of 532 on 7.0.2, FULL Playwright 821 passed (57.4 min; run on the
+expedited clone before the two comment and doc edits). Applied to
+23cd3d9 by `git apply` with every file byte-identical to the expedited
+tree.
 
 Round 128 — T-179, the one counted item, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of 3745e26; a

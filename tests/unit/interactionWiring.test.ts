@@ -54,17 +54,21 @@ describe('T-31 — the toast surface is mounted app-wide', () => {
   // E2E: T-21 (shared chrome) reads a Home toast and a studio toast, and
   // counts the toast containers on the page.
   const app = read('App.tsx')
+  const appCode = app.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
 
-  it('App.tsx imports and renders it', () => {
+  it('App.tsx imports and renders it, once', () => {
     expect(app).toMatch(/import \{ AppToaster \} from '\.\/components\/AppToaster'/)
-    expect(app).toMatch(/<AppToaster \/>/)
+    expect(appCode.match(/<AppToaster \/>/g), 'one mount: two draw every toast twice').toHaveLength(1)
   })
 
-  it('renders it outside <Routes> so one instance serves every route', () => {
-    const closingRoutes = app.indexOf('</Routes>')
-    const mount = app.indexOf('<AppToaster />')
+  it('renders it outside <Routes> so one instance serves every route, and (T-180 (1)) outside the studio boundary, in its own fallback-null boundary', () => {
+    const closingRoutes = appCode.indexOf('</Routes>')
+    const closingStudioBoundary = appCode.indexOf('</ErrorBoundary>')
+    const mount = appCode.indexOf('<AppToaster />')
     expect(closingRoutes).toBeGreaterThan(0)
     expect(mount).toBeGreaterThan(closingRoutes)
+    expect(mount, 'after the first boundary closes: the crash screen replaces everything inside it').toBeGreaterThan(closingStudioBoundary)
+    expect(appCode).toMatch(/<ErrorBoundary fallback=\{null\}>\s*<AppToaster \/>\s*<\/ErrorBoundary>/)
   })
 
   it('leaves no per-studio copy — two Toasters draw every toast twice', () => {
@@ -5039,9 +5043,9 @@ describe('round 127 Track A (T-178): the last silent drop zone, and an autosave 
   })
   it('(2 addendum) the crash screen reads the getter, not a copy of the flag, and the getter answers the running autosave\'s episode flag', () => {
     const boundary = strip(read('components/ErrorBoundary.tsx')).replace(/\s+/g, ' ')
-    expect(boundary).toContain("import { autosaveTrouble } from '../hooks/useAutosave'")
-    // T-179 (1): the one sentence became three; the failing and the plain ones are T-178's words exactly.
-    expect(boundary).toContain("autosaveTrouble() === 'failing' ? \"Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy.\" : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}")
+    expect(boundary).toContain("import { autosaveTrouble, subscribeAutosaveTrouble } from '../hooks/useAutosave'")
+    // T-179 (1): the one sentence became three; the failing and the plain ones are T-178's words exactly. T-180 (1): read through the store hook, as `trouble`.
+    expect(boundary).toContain("trouble === 'failing' ? \"Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy.\" : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}")
     expect(boundary, 'no flag of its own').not.toMatch(/toldWriteFailed/)
     const hook = strip(read('hooks/useAutosave.ts'))
     expect(hook).toMatch(/export function autosaveTrouble\(\): 'paused' \| 'failing' \| null \{\s*if \(activeMemory\?\.toldTooLarge === true\) return 'paused'\s*if \(activeMemory\?\.toldWriteFailed === true\) return 'failing'\s*return null\s*\}/)
@@ -5058,8 +5062,8 @@ describe('round 128 Track A (T-179): the crash screen tells the truth while auto
 
   it('(1) the boundary picks among three sentences by autosaveTrouble(), paused first, the paused one naming the remedy and not Save project', () => {
     const boundary = strip(read('components/ErrorBoundary.tsx')).replace(/\s+/g, ' ')
-    expect(boundary).toContain(`{autosaveTrouble() === 'paused' ? ${PAUSED_SENTENCE} : autosaveTrouble() === 'failing' ?`)
-    expect(boundary.match(/autosaveTrouble\(\)/g), 'read twice, in the one ternary').toHaveLength(2)
+    expect(boundary).toContain(`{trouble === 'paused' ? ${PAUSED_SENTENCE} : trouble === 'failing' ?`)
+    expect(boundary.match(/\btrouble ===/g), 'read twice, in the one ternary (T-180 (1): the value the store hook returned)').toHaveLength(2)
     expect(boundary.match(/every few seconds/g), 'the promise appears once, in the last arm').toHaveLength(1)
     expect(boundary.match(/Save project/g), 'Save project is named only by the failing arm').toHaveLength(1)
     expect(boundary, 'no flag of its own').not.toMatch(/toldTooLarge|toldWriteFailed/)
@@ -5077,5 +5081,57 @@ describe('round 128 Track A (T-179): the crash screen tells the truth while auto
     expect(hook).toMatch(/if \(serialized === memory\.lastHash\) \{\s*memory\.toldTooLarge = false\s*return\s*\}\s*const tooLarge = projectSizeProblem\(/)
     const dedupe = hook.slice(hook.indexOf('if (serialized === memory.lastHash)'), hook.indexOf('const tooLarge = projectSizeProblem('))
     expect(dedupe).not.toContain('toldWriteFailed')
+  })
+})
+
+describe('round 129 Track A (T-180): the crash screen can still talk - toasts are drawn over it and its autosave sentence follows autosave', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const flat = (text: string): string => strip(text).replace(/\s+/g, ' ')
+
+  it('(1) App mounts the toast surface once, in a fragment after the phase element, so every phase has it at the same position and no phase returns early', () => {
+    const app = strip(read('App.tsx'))
+    expect(app).toMatch(/return \(\s*<>\s*\{phaseElement\}\s*<ErrorBoundary fallback=\{null\}>\s*<AppToaster \/>\s*<\/ErrorBoundary>\s*<\/>\s*\)/)
+    expect(app.match(/<AppToaster \/>/g)).toHaveLength(1)
+    const phases = app.slice(app.indexOf('let phaseElement: JSX.Element'))
+    expect(phases).toMatch(/if \(status\.phase === 'loading'\) \{\s*(?:[\s\S]*?)phaseElement = \(/)
+    expect(phases).toMatch(/\} else if \(status\.phase === 'welcome'\) \{\s*phaseElement = \(\s*<Welcome/)
+    expect(phases).toMatch(/\} else \{\s*phaseElement = \(\s*<ErrorBoundary>\s*<Routes>/)
+    expect(phases.match(/\breturn\b/g), 'the one return is the fragment: a phase that returned its own element would have no toaster').toHaveLength(1)
+  })
+
+  it('(1) the studio boundary keeps the routes and the hotkey overlay, and the toaster is not in it', () => {
+    const app = strip(read('App.tsx'))
+    const studio = app.slice(app.indexOf('<ErrorBoundary>'), app.indexOf('</ErrorBoundary>'))
+    expect(studio).toContain('<Routes>')
+    expect(studio).toContain('<HotkeyOverlay />')
+    expect(studio).not.toContain('AppToaster')
+  })
+
+  it('(1) ErrorBoundary takes an optional fallback: given, it is what an error renders (null: nothing); the crash screen only without one', () => {
+    const boundary = flat(read('components/ErrorBoundary.tsx'))
+    expect(boundary).toContain('fallback?: ReactNode')
+    expect(boundary).toContain('if (!this.state.error) return this.props.children if (this.props.fallback !== undefined) return this.props.fallback const error = this.state.error')
+    expect(boundary.match(/console\.error\(/g), 'componentDidCatch logs the same in both cases: its two lines, unconditional').toHaveLength(2)
+  })
+
+  it('(1) the crash screen\'s sentence is a component reading the store with the server snapshot, inside the same <p>', () => {
+    const boundary = flat(read('components/ErrorBoundary.tsx'))
+    expect(boundary).toContain('const trouble = useSyncExternalStore(subscribeAutosaveTrouble, autosaveTrouble, autosaveTrouble)')
+    expect(boundary).toContain('function AutosaveCrashLine(): JSX.Element {')
+    expect(boundary).toMatch(/<p style=\{\{ fontSize: '14px', color: '#a59a97', marginBottom: '16px' \}\}> <AutosaveCrashLine \/> <\/p>/)
+    expect(boundary.match(/<AutosaveCrashLine \/>/g)).toHaveLength(1)
+  })
+
+  it('(1) useAutosave: the listeners, the unsubscribe, and the three notifications (the end of every doSave in a finally, start, stop)', () => {
+    const hook = strip(read('hooks/useAutosave.ts'))
+    expect(hook).toMatch(/const troubleListeners = new Set<\(\) => void>\(\)/)
+    expect(hook).toMatch(/export function subscribeAutosaveTrouble\(listener: \(\) => void\): \(\) => void \{\s*troubleListeners\.add\(listener\)\s*return \(\) => \{\s*troubleListeners\.delete\(listener\)\s*\}\s*\}/)
+    expect(hook).toMatch(/function notifyAutosaveTrouble\(\): void \{\s*for \(const listener of troubleListeners\) listener\(\)\s*\}/)
+    expect(hook.match(/(?<!function )notifyAutosaveTrouble\(\)/g), 'three call sites: doSave\'s finally, start, stop').toHaveLength(3)
+    const doSave = hook.slice(hook.indexOf('async function doSave(): Promise<void> {'), hook.indexOf('const unsubVideo'))
+    expect(doSave).toMatch(/^async function doSave\(\): Promise<void> \{\s*try \{/)
+    expect(doSave, 'the notify is the finally of the whole body').toMatch(/\} finally \{\s*notifyAutosaveTrouble\(\)\s*\}\s*\}\s*$/)
+    expect(hook).toMatch(/export function startAutosave\(memory: AutosaveMemory\): \(\) => void \{\s*activeMemory = memory\s*notifyAutosaveTrouble\(\)/)
+    expect(hook, 'on stop, after the memory is let go and the scheduler cancelled').toMatch(/if \(activeMemory === memory\) activeMemory = null[\s\S]*?scheduler\.cancel\(\)\s*notifyAutosaveTrouble\(\)\s*\}/)
   })
 })

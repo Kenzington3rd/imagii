@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import { ErrorBoundary } from './ErrorBoundary'
 import { startAutosave } from '../hooks/useAutosave'
@@ -86,5 +86,76 @@ describe('ErrorBoundary - the crash screen while autosave is paused for size (T-
     const memory = { lastWriteTime: 0, lastHash: '', toldTooLarge: true }
     startAutosave(memory)()
     expect(crashScreen()).toMatch(/imagii saves it every few seconds/)
+  })
+})
+
+/**
+ * T-180 (1) - the toast surface lives in its own boundary, whose fallback is nothing (a toast that throws drops the toasts, not the app), and the crash screen's
+ * autosave sentence is a component that follows autosave (a store read, so it re-renders when trouble begins after the throw).
+ */
+function crashed(props: { fallback?: React.ReactNode }): string {
+  const boundary = new ErrorBoundary({ children: null, ...props })
+  boundary.state = { error: new Error('boom'), componentStack: null }
+  return renderToStaticMarkup(boundary.render() as React.ReactElement).replace(/&#x27;/g, "'")
+}
+
+describe('ErrorBoundary - the fallback prop (T-180 (1))', () => {
+  it('fallback={null}: an error renders nothing at all', () => {
+    expect(crashed({ fallback: null })).toBe('')
+  })
+
+  it('a given fallback is what an error renders, instead of the crash screen', () => {
+    const html = crashed({ fallback: <p>toasts are off</p> })
+    expect(html).toBe('<p>toasts are off</p>')
+    expect(html).not.toMatch(/Something went wrong/)
+  })
+
+  it('control: no fallback prop is the crash screen, as it has always been', () => {
+    const html = crashed({})
+    expect(html).toMatch(/Something went wrong in this studio/)
+    expect(html).toMatch(/role="alert"/)
+    expect(html).toMatch(/Reload to Home/)
+  })
+
+  it('control: without an error, the children render whatever the fallback is', () => {
+    const boundary = new ErrorBoundary({ children: <b>kids</b>, fallback: null })
+    expect(renderToStaticMarkup(boundary.render() as React.ReactElement)).toBe('<b>kids</b>')
+  })
+
+  it('a null fallback still logs the error (componentDidCatch is the same in both cases)', () => {
+    const error = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      const boundary = new ErrorBoundary({ children: null, fallback: null })
+      boundary.setState = vi.fn()
+      boundary.componentDidCatch(new Error('toast broke'), { componentStack: '\n at Toast' } as React.ErrorInfo)
+      expect(error.mock.calls.map((c) => String(c[0]))).toContain('[ErrorBoundary] caught render error:')
+    } finally {
+      error.mockRestore()
+    }
+  })
+})
+
+describe('ErrorBoundary - the sentence is a live component (T-180 (1))', () => {
+  let stop: (() => void) | null = null
+  afterEach(() => {
+    stop?.()
+    stop = null
+  })
+
+  it('all three states come out of the component, in T-179 order: failing, paused, and failing + paused = paused', () => {
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '', toldWriteFailed: true })
+    expect(crashScreen()).toContain("autosave couldn't save it recently")
+    stop()
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '', toldTooLarge: true })
+    expect(crashScreen()).toContain('autosave is paused: the project is too large to keep')
+    stop()
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '', toldTooLarge: true, toldWriteFailed: true })
+    const html = crashScreen()
+    expect(html).toContain('autosave is paused')
+    expect(html).not.toMatch(/couldn't save it recently/)
+  })
+
+  it('the sentence sits in the same paragraph as before (the class keeps the <p> and its styles)', () => {
+    expect(crashScreen()).toMatch(/<p style="[^"]*font-size:14px[^"]*">Your work is still open in its studios/)
   })
 })

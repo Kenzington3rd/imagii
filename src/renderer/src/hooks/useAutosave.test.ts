@@ -17,6 +17,7 @@ import {
   playheadOnlyChange,
   autosaveTrouble,
   startAutosave,
+  subscribeAutosaveTrouble,
   suppressAutosave
 } from './useAutosave'
 import { useVideoStore } from '../modules/video-studio/store/videoStore'
@@ -943,5 +944,137 @@ describe('autosaveTrouble - paused for size, failing, or neither (T-179 (1))', (
     expect(autosaveTrouble()).toBe('paused')
     stop()
     expect(autosaveTrouble()).toBeNull()
+  })
+})
+
+// ── T-180 (1): the crash screen's sentence is live - autosave tells whoever listens when the trouble state may have changed ──────────────────────
+
+describe('subscribeAutosaveTrouble - autosave tells its listeners (T-180 (1))', () => {
+  const OVER = MAX_PROJECT_BYTES + 1000
+  const bigLayer = (id: string): CanvasLayer => ({
+    id,
+    type: 'image',
+    name: id,
+    visible: true,
+    locked: false,
+    x: 0,
+    y: 0,
+    rotation: 0,
+    scaleX: 1,
+    scaleY: 1,
+    opacity: 1,
+    src: `data:image/png;base64,${'A'.repeat(OVER)}`,
+    width: 100,
+    height: 100
+  })
+  let write: ReturnType<typeof vi.fn>
+  let stop: (() => void) | null
+  let off: (() => void) | null
+  let listener: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(1_700_000_000_000)
+    write = vi.fn(async () => ({ ok: true as const }))
+    vi.stubGlobal('window', { api: { autosave: { write } } })
+    vi.spyOn(toast, 'error').mockReturnValue('x')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined)
+    useVideoStore.getState().clearSource()
+    useAudioStore.getState().clearSource()
+    useCanvasStore.getState().resetDocument()
+    listener = vi.fn()
+    off = subscribeAutosaveTrouble(listener)
+    stop = null
+  })
+  afterEach(() => {
+    stop?.()
+    off?.()
+    vi.useRealTimers()
+    vi.restoreAllMocks()
+  })
+
+  it('is called when autosave starts (the sentence must re-read a memory that already carries trouble) and when it stops', () => {
+    expect(listener).not.toHaveBeenCalled()
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '', toldWriteFailed: true })
+    expect(listener, 'start').toHaveBeenCalledTimes(1)
+    expect(autosaveTrouble()).toBe('failing')
+    stop()
+    stop = null
+    expect(listener, 'stop').toHaveBeenCalledTimes(2)
+    expect(autosaveTrouble(), 'the notification comes after the memory is let go').toBeNull()
+  })
+
+  it('a listener told at the stop reads the state AFTER the stop (null), not the one being torn down', () => {
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '', toldTooLarge: true })
+    const seen: Array<'paused' | 'failing' | null> = []
+    const spy = subscribeAutosaveTrouble(() => seen.push(autosaveTrouble()))
+    stop()
+    stop = null
+    spy()
+    expect(seen).toEqual([null])
+  })
+
+  it('a refused write (null -> failing): the listener is told, and reads "failing" when it is', async () => {
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+    listener.mockClear()
+    write.mockImplementation(async () => ({ ok: false as const, reason: 'ENOSPC: no space left on device, write' }))
+    const seen: Array<'paused' | 'failing' | null> = []
+    const spy = subscribeAutosaveTrouble(() => seen.push(autosaveTrouble()))
+    useCanvasStore.getState().addLayer(textLayer('a', 'fits a'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    spy()
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalled()
+    expect(seen, 'told after the write has settled, never before').toEqual(['failing'])
+  })
+
+  it('an over-size capture (null -> paused): the listener is told, and reads "paused"', async () => {
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+    listener.mockClear()
+    const seen: Array<'paused' | 'failing' | null> = []
+    const spy = subscribeAutosaveTrouble(() => seen.push(autosaveTrouble()))
+    useCanvasStore.getState().addLayer(bigLayer('huge'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    spy()
+    expect(write, 'nothing is sent while paused').not.toHaveBeenCalled()
+    expect(seen).toEqual(['paused'])
+  })
+
+  it('a write that settles with a thrown error is told too (the notify is in a finally, not on the happy path)', async () => {
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+    listener.mockClear()
+    write.mockImplementation(async () => {
+      throw new Error('EBUSY: resource busy or locked, rename')
+    })
+    useCanvasStore.getState().addLayer(textLayer('a', 'fits a'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(autosaveTrouble()).toBe('failing')
+  })
+
+  it('a write that succeeds is told too (a failing episode ending is a change the sentence must show)', async () => {
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '', toldWriteFailed: true })
+    listener.mockClear()
+    useCanvasStore.getState().addLayer(textLayer('a', 'fits a'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    expect(write).toHaveBeenCalledTimes(1)
+    expect(listener).toHaveBeenCalledTimes(1)
+    expect(autosaveTrouble()).toBeNull()
+  })
+
+  it('unsubscribe stops the calls (start, stop and a write alike), and it removes only that listener', async () => {
+    const other = vi.fn()
+    const offOther = subscribeAutosaveTrouble(other)
+    off?.()
+    off = null
+    stop = startAutosave({ lastWriteTime: 0, lastHash: '' })
+    useCanvasStore.getState().addLayer(textLayer('a', 'fits a'))
+    await vi.advanceTimersByTimeAsync(10_000)
+    stop()
+    stop = null
+    expect(listener, 'unsubscribed: never called').not.toHaveBeenCalled()
+    expect(other.mock.calls.length, 'the other listener still hears start, the write and stop').toBe(3)
+    offOther()
   })
 })

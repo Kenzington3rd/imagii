@@ -1,13 +1,36 @@
-import { Component, type ReactNode, type ErrorInfo } from 'react'
-import { autosaveTrouble } from '../hooks/useAutosave'
+import { Component, useSyncExternalStore, type ReactNode, type ErrorInfo } from 'react'
+import { autosaveTrouble, subscribeAutosaveTrouble } from '../hooks/useAutosave'
 
 interface ErrorBoundaryProps {
   children: ReactNode
+  /**
+   * What an error renders instead of the crash screen (T-180 (1)); `null` renders nothing. Left out, the error renders the crash screen. App's toast surface is the one
+   * user: a toast that throws while rendering drops the toasts, not the app (an unmounted App stops autosave).
+   */
+  fallback?: ReactNode
 }
 
 interface ErrorBoundaryState {
   error: Error | null
   componentStack: string | null
+}
+
+/**
+ * The crash screen's autosave sentence (T-178 (2), T-179 (1), T-180 (1)): the promise is only true while autosave is writing; while it is paused for size, or after a write has
+ * failed (and none has worked since), it says what is true. A component, not a call in render: trouble can begin AFTER the throw (the debounced write of the edit just before
+ * it, refused), and a boundary in its fallback state has nothing else to re-render it. The third argument is the server snapshot (the unit test renders with react-dom/server).
+ */
+function AutosaveCrashLine(): JSX.Element {
+  const trouble = useSyncExternalStore(subscribeAutosaveTrouble, autosaveTrouble, autosaveTrouble)
+  return (
+    <>
+      {trouble === 'paused'
+        ? 'Your work is still open in its studios, but autosave is paused: the project is too large to keep. Reload to Home, then remove some of the large images on the canvas, or import smaller copies of them, and it will start again.'
+        : trouble === 'failing'
+          ? "Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy."
+          : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}
+    </>
+  )
 }
 
 /**
@@ -43,6 +66,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
 
   render(): ReactNode {
     if (!this.state.error) return this.props.children
+    if (this.props.fallback !== undefined) return this.props.fallback
 
     const error = this.state.error
     const message = error instanceof Error ? error.message : String(error)
@@ -69,12 +93,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           Something went wrong in this studio
         </h1>
         <p style={{ fontSize: '14px', color: '#a59a97', marginBottom: '16px' }}>
-          {/* T-178 (2), T-179 (1): the promise is only true while autosave is writing; while it is paused for size, or after a write has failed (and none has worked since), it says what is true. */}
-          {autosaveTrouble() === 'paused'
-            ? 'Your work is still open in its studios, but autosave is paused: the project is too large to keep. Reload to Home, then remove some of the large images on the canvas, or import smaller copies of them, and it will start again.'
-            : autosaveTrouble() === 'failing'
-              ? "Your work is still open in its studios, but autosave couldn't save it recently. Reload to Home, then use Save project to keep a copy."
-              : 'Your work is still open in its studios, and imagii saves it every few seconds. Reload to Home to carry on.'}
+          <AutosaveCrashLine />
         </p>
         <details style={{ marginBottom: '16px' }}>
           <summary style={{ fontSize: '12px', color: '#a59a97', cursor: 'pointer' }}>

@@ -184,6 +184,23 @@ export function autosaveTrouble(): 'paused' | 'failing' | null {
   return null
 }
 
+const troubleListeners = new Set<() => void>()
+
+/**
+ * Tells `listener` when `autosaveTrouble()` may have changed (T-180 (1)): at the end of every save attempt, and when autosave starts and stops. It may be called when nothing changed;
+ * the caller compares snapshots (the crash screen reads it through `useSyncExternalStore`, so its sentence follows autosave while it is on screen). Returns the unsubscribe.
+ */
+export function subscribeAutosaveTrouble(listener: () => void): () => void {
+  troubleListeners.add(listener)
+  return () => {
+    troubleListeners.delete(listener)
+  }
+}
+
+function notifyAutosaveTrouble(): void {
+  for (const listener of troubleListeners) listener()
+}
+
 /**
  * Subscribes to all three studio stores. When any store changes (other than
  * by its playhead alone, T-136 (3)), schedules a debounced autosave. Each save
@@ -206,6 +223,7 @@ export function autosaveTrouble(): 'paused' | 'failing' | null {
  */
 export function startAutosave(memory: AutosaveMemory): () => void {
   activeMemory = memory
+  notifyAutosaveTrouble()
   const scheduler = createSaveScheduler(() => {
     void doSave()
   })
@@ -226,66 +244,71 @@ export function startAutosave(memory: AutosaveMemory): () => void {
   }
 
   async function doSave(): Promise<void> {
-    if (autosaveSuppressed()) {
-      // The hold began after this write was scheduled; the release saves it.
-      noteSuppressedChange()
-      return
-    }
-    const now = Date.now()
-    if (now - memory.lastWriteTime < AUTOSAVE_MIN_INTERVAL_MS) {
-      // Re-arm in case more changes are coming
-      scheduleSave()
-      return
-    }
-    let project
+    // T-180 (1): whatever way this attempt ends (a write, a refusal, a throw, an early return), whoever shows the trouble state is told to look again.
     try {
-      project = captureProject()
-    } catch (err) {
-      console.warn('[autosave] capture failed', err)
-      return
-    }
-    let serialized: string
-    try {
-      // T-137 (7): the key is the project's CONTENT. `savedAt` is `Date.now()` at the capture, so two captures of the same work never matched and
-      // any store change that is not in the project (Find chat spikes, Scan VOD, a grid toggle) re-wrote an identical autosave.json and rotated
-      // autosave.prev (executed: 28.4 MiB for a ticked Grid). It is the same text the size rule below measures, and that main writes.
-      serialized = serializeProject({ ...project, savedAt: UNSTAMPED })
-    } catch (err) {
-      console.warn('[autosave] serialize failed', err)
-      return
-    }
-    // T-179 (1): content equal to the last write fit the limit when it was written, so a pause is over (and the next trip over the limit is told again). A failing episode is not: this proves nothing about the write.
-    if (serialized === memory.lastHash) {
-      memory.toldTooLarge = false
-      return
-    }
-    // T-137 (6): over the size limit, the project is not sent (a 50 MiB structured clone every few seconds to be refused) and the person is told, once.
-    // The refusal used to be a console line, so autosave stopped for good with nothing on screen. It starts again by itself when the project fits.
-    const tooLarge = projectSizeProblem(serialized.length, 'autosave')
-    if (tooLarge !== null) {
-      if (!memory.toldTooLarge) {
-        memory.toldTooLarge = true
-        reportFailure(tooLarge, { failed: 'Autosave is paused.', id: AUTOSAVE_TOO_LARGE_TOAST_ID })
+      if (autosaveSuppressed()) {
+        // The hold began after this write was scheduled; the release saves it.
+        noteSuppressedChange()
+        return
       }
-      return
-    }
-    memory.toldTooLarge = false
-    try {
-      const result = await window.api.autosave.write(project)
-      if (result.ok) {
-        memory.lastHash = serialized
-        memory.lastWriteTime = now
-        memory.toldWriteFailed = false
-      } else {
-        // "no studio state" is an expected condition early in the session — don't spam console
-        if (!/no studio state/.test(result.reason)) {
-          console.warn('[autosave] write rejected:', result.reason)
-          tellWriteFailed(result.reason)
+      const now = Date.now()
+      if (now - memory.lastWriteTime < AUTOSAVE_MIN_INTERVAL_MS) {
+        // Re-arm in case more changes are coming
+        scheduleSave()
+        return
+      }
+      let project
+      try {
+        project = captureProject()
+      } catch (err) {
+        console.warn('[autosave] capture failed', err)
+        return
+      }
+      let serialized: string
+      try {
+        // T-137 (7): the key is the project's CONTENT. `savedAt` is `Date.now()` at the capture, so two captures of the same work never matched and
+        // any store change that is not in the project (Find chat spikes, Scan VOD, a grid toggle) re-wrote an identical autosave.json and rotated
+        // autosave.prev (executed: 28.4 MiB for a ticked Grid). It is the same text the size rule below measures, and that main writes.
+        serialized = serializeProject({ ...project, savedAt: UNSTAMPED })
+      } catch (err) {
+        console.warn('[autosave] serialize failed', err)
+        return
+      }
+      // T-179 (1): content equal to the last write fit the limit when it was written, so a pause is over (and the next trip over the limit is told again). A failing episode is not: this proves nothing about the write.
+      if (serialized === memory.lastHash) {
+        memory.toldTooLarge = false
+        return
+      }
+      // T-137 (6): over the size limit, the project is not sent (a 50 MiB structured clone every few seconds to be refused) and the person is told, once.
+      // The refusal used to be a console line, so autosave stopped for good with nothing on screen. It starts again by itself when the project fits.
+      const tooLarge = projectSizeProblem(serialized.length, 'autosave')
+      if (tooLarge !== null) {
+        if (!memory.toldTooLarge) {
+          memory.toldTooLarge = true
+          reportFailure(tooLarge, { failed: 'Autosave is paused.', id: AUTOSAVE_TOO_LARGE_TOAST_ID })
         }
+        return
       }
-    } catch (err) {
-      console.warn('[autosave] write threw', err)
-      tellWriteFailed(err)
+      memory.toldTooLarge = false
+      try {
+        const result = await window.api.autosave.write(project)
+        if (result.ok) {
+          memory.lastHash = serialized
+          memory.lastWriteTime = now
+          memory.toldWriteFailed = false
+        } else {
+          // "no studio state" is an expected condition early in the session — don't spam console
+          if (!/no studio state/.test(result.reason)) {
+            console.warn('[autosave] write rejected:', result.reason)
+            tellWriteFailed(result.reason)
+          }
+        }
+      } catch (err) {
+        console.warn('[autosave] write threw', err)
+        tellWriteFailed(err)
+      }
+    } finally {
+      notifyAutosaveTrouble()
     }
   }
 
@@ -307,6 +330,7 @@ export function startAutosave(memory: AutosaveMemory): () => void {
     unsubAudio()
     unsubCanvas()
     scheduler.cancel()
+    notifyAutosaveTrouble()
   }
 }
 

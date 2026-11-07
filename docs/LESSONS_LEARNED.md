@@ -14,6 +14,18 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-07 - T-180 (round 129), Track A: a sentence about live state is live, and a fix for a state sweeps every moment it can begin
+
+The sixty-sixth sweep, Track A (item 1).
+
+### (1) [LOW-MED] - The crash screen could not show a toast, and its autosave sentence never changed
+
+- **Bug.** While the crash screen was up, no toast was ever drawn, and its autosave sentence was whatever it read when the screen appeared. A job that ended meanwhile (an export, a Record save) lost its "Saved" toast; an autosave that began failing after the throw left "imagii saves it every few seconds" on screen.
+- **Root cause.** `<AppToaster />` was a child of the studio `ErrorBoundary`, and the fallback replaces every child, so no Toaster was mounted (react-hot-toast then dismisses an expired toast the moment one mounts again). And the sentence was a call in render, with nothing to re-render a boundary in its fallback state. T-179 swept every STATE in which autosave writes nothing, not every MOMENT such a state can begin.
+- **Fix.** The toaster is mounted once in App, after the studio boundary, in every phase, in its own `ErrorBoundary fallback={null}`; the sentence is a component reading `autosaveTrouble()` through `useSyncExternalStore`, with useAutosave notifying at the end of every save attempt and on start and stop.
+- **Test.** home-chrome.spec.ts "round 129 Track A (T-180 (1))"; useAutosave.test.ts "subscribeAutosaveTrouble"; ErrorBoundary.test.tsx; interactionWiring.test.ts "round 129 Track A (T-180)".
+- **Lesson.** **A sentence about live state must be live, and a screen that stays up must keep its surfaces.** Anything the app can still do while an error screen shows (jobs finishing, autosave retrying) needs its toast surface and its status text mounted outside the thing that crashed. When fixing a screen's claim, sweep the states AND the moments each can begin, including after the screen is drawn.
+
 ## 2026-11-07 - T-179 (round 128), Track A: a fix for one state of a class sweeps every state of it
 
 The sixty-fifth sweep, Track A (item 1).
