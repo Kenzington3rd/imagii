@@ -8914,6 +8914,14 @@ IMG-PREC.
   sound, Clean audio's sound), so the same file never asks. LESSONS_LEARNED entries per item; INTERACTION_COVERAGE rows
   updated (Record Start's leave, the Recent pick's two outcomes, the kept-part question on four entries).
 
+  **Docs (each track its own items):** IC rows; TESTING paragraphs; LESSONS entry at the TOP per track; USER_GUIDE where a
+  sentence is now wrong or new (A: none expected — say so; B: the Recent entry on a drive that is not connected, the
+  question before a kept part is let go).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a
+  ledger; new cases in NEW describe blocks appended at the end of shared files; `npm run verify`
+  twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
+  is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** open.
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
