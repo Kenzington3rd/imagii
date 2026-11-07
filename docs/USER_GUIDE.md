@@ -206,6 +206,10 @@ Recent.** A file on a drive that is not connected is not taken off: the message 
 imagii can't find it and that the drive may need plugging in, and the entry stays for
 when it is back. Audio Studio's **Recent** does the same.)
 
+(A link, a browser thumbnail or selected text dragged onto the drop zone carries no
+file. imagii says **No file was dropped. Try the file picker instead.** and opens
+nothing; Audio Studio says the same.)
+
 (One video loads at a time. If you drop a second while the first is still loading
 or converting, imagii says it is still working on the last one and leaves the
 second alone — and it keeps saying so if you leave Video Studio and come back

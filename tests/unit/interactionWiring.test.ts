@@ -3591,7 +3591,7 @@ describe('T-147 - Audio Studio: the sliders name their undo step, the cards clos
     expect(cleanup).not.toMatch(/patchChain\([^)]*\}, '/)
     const levels = strip(read('modules/audio-studio/LevelsPanel.tsx'))
     expect(levels).toMatch(/patchChain\(\{ gainDb: Number\(e\.target\.value\) \}, 'gain'\)/)
-    expect(levels.match(/patchChain\([^;\n]*, '[a-z.]+'\)/g) ?? [], 'only the gain slider carries a key').toHaveLength(1)
+    expect(levels.match(/patchChain\([^;\n]*, '[A-Za-z.]+'\)/g) ?? [], 'only the gain slider and (T-177 (1)) the loudness target box carry a key').toHaveLength(2)
     const second = strip(read('modules/audio-studio/SecondaryTrackPanel.tsx'))
     for (const key of ['secondary.gain', 'secondary.threshold', 'secondary.ratio', 'secondary.attack', 'secondary.release']) {
       expect(second, key).toContain(`'${key}')`)
@@ -4974,5 +4974,41 @@ describe('T-176 Track A - Clean audio names the sound it opens; the entries that
   it('keptPartQuestion itself adds nothing to the name: its lead is `Open ${openingName}?`', () => {
     const io = strip(read('modules/project/ProjectIO.ts'))
     expect(io).toContain('const lead = `Open ${openingName}?`')
+  })
+})
+
+// round 126 Track A (T-177): the two wirings the DOM-less unit layer can reach. The behavior of each is driven end to end in audio.spec.ts ("round 126 Track A (T-177 (1))") and
+// video-core.spec.ts ("round 126 Track A (T-177 (2))"); the store's half of (1) is audioStore.test.ts "a typed loudness target coalesces under its own key".
+describe('T-177 Track A - one typed target is one undo step; a drop with no file says so', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('(1) the loudness target box commits under the key \'loudnormTarget\', and nothing else but the gain slider carries a key', () => {
+    const panel = strip(read('modules/audio-studio/LevelsPanel.tsx')).replace(/\s+/g, ' ')
+    expect(panel).toContain("onCommit={(target) => patchChain({ loudnormTargetLufs: target }, 'loudnormTarget')}")
+    expect(panel.match(/onCommit\(/g), 'the box commits through onCommit in two places only (a keystroke that is a target, and `finish` for Enter / blur): one prop, so one key').toHaveLength(2)
+    expect(panel.match(/patchChain\(\{ loudnormTargetLufs: [^}]*\}\)/g), 'the platform picker is a discrete step: no key').toHaveLength(1)
+    expect(panel.match(/'loudnormTarget'/g), 'one use of the key').toHaveLength(1)
+    expect(panel).toContain("patchChain({ gainDb: Number(e.target.value) }, 'gain')")
+  })
+
+  it('(1) the card closes the window the key opens: its gesture end is the store\'s endGesture, spread on the card, and the box\'s blur bubbles to it', () => {
+    const panel = strip(read('modules/audio-studio/LevelsPanel.tsx')).replace(/\s+/g, ' ')
+    expect(panel).toContain('const gesture = useGestureEnd(useAudioStore((s) => s.endGesture))')
+    expect(panel).toContain('<div className="card p-4 flex flex-col gap-4" {...gesture}>')
+    // The box handles its own blur with `finish` (it must not stop the event, or the card would never hear the box lose focus).
+    expect(panel).toContain('onBlur={finish}')
+    expect(panel).not.toMatch(/stopPropagation\(\)[^>]*onBlur|onBlur=\{\(e\) => \{?\s*e\.stopPropagation/)
+  })
+
+  it('(2) the video drop with no file toasts the shared no-file hint as an error at the default duration, opens nothing, and comes before the busy refusal', () => {
+    const video = strip(read('modules/video-studio/Importer.tsx'))
+    const drop = video.slice(video.indexOf('function onDrop('), video.indexOf('async function onPickFile('))
+    expect(drop).toMatch(/const file = e\.dataTransfer\.files\[0\]\s*if \(!file\) \{\s*toast\.error\(examineDroppedFile\(undefined\)\.hint \?\? 'No file dropped\.'\)\s*return\s*\}\s*(\/\/[^\n]*\s*)*if \(refuseIfBusy\(\)\) return/)
+    expect(video).toMatch(/import \{ describeFailedOpen, examineDroppedFile \} from '@shared\/importDiagnostics'/)
+    // One source for the sentence: it is not typed into the importer, and the audio importer reads the same hint.
+    expect(video).not.toContain('No file was dropped')
+    const diag = strip(read('../../shared/importDiagnostics.ts'))
+    expect(diag).toContain("hint: 'No file was dropped. Try the file picker instead.'")
+    expect(strip(read('modules/audio-studio/AudioImporter.tsx'))).toMatch(/if \(diag\.reason === 'no-file'\) \{\s*toast\.error\(diag\.hint \?\? 'No file dropped\.'\)\s*return\s*\}/)
   })
 })

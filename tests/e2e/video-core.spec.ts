@@ -14,7 +14,8 @@ import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { dragThrough, dragTo } from './drag'
 import { withoutAtomicTmp } from './atomicTmp'
-import { installToastLog, readToastLog } from './toastLog'
+import { chooserCalls, recordSlowChooser } from './chooser'
+import { installToastLog, readToastEntries, readToastLog } from './toastLog'
 import { DEFAULT_WINDOW, MIN_WINDOW, expectControlsWhole, expectNoHorizontalOverflow, expectNoOverlap, expectOneLine, expectSameRow, expectSelectsWhole, setWindowSize as resizeAndSettle } from './layout'
 import { leave, retype } from './typing'
 
@@ -4028,4 +4029,60 @@ test.describe('T-171 Track A (6): the Export panel\'s other-video line fits', ()
       }
     })
   }
+})
+
+// round 126 Track A (T-177 (2)): a link, a browser thumbnail or selected text dropped on "Drop a video here" carries no file. The card un-highlighted and nothing else
+// happened; the audio importer's same drop says "No file was dropped. Try the file picker instead." (the shared `examineDroppedFile` hint), and now this one does too.
+test.describe('round 126 Track A (T-177 (2)): a drop that carries no file says so', () => {
+  const SENTENCE = 'No file was dropped. Try the file picker instead.'
+
+  /** A real DataTransfer holding text and a link only - what dragging a URL or a selection out of a browser carries - so `files` is the empty FileList. */
+  async function dropTextOnVideoImporter(window: Page): Promise<number> {
+    return window.evaluate(() => {
+      const zone = document.querySelector('[data-tutorial="video-import"] .card')
+      if (!zone) throw new Error('Video Studio drop zone not found')
+      const transfer = new DataTransfer()
+      transfer.setData('text/uri-list', 'https://example.com/clip.mp4')
+      transfer.setData('text/plain', 'https://example.com/clip.mp4')
+      zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+      return transfer.files.length
+    })
+  }
+
+  test('text and a link only: the sentence is toasted (once, as an error) and nothing opens; a file dropped after it still loads', async () => {
+    test.setTimeout(90_000)
+    const userDataDir = path.join(root, `ud-t177-nofile-${Date.now().toString(36)}`)
+    seedUserData(userDataDir)
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 15_000 })
+      await installToastLog(window)
+      const pageErrors: string[] = []
+      window.on('pageerror', (err) => pageErrors.push(err.message))
+      await recordSlowChooser(app, {})
+
+      expect(await dropTextOnVideoImporter(window), 'the transfer carries no file').toBe(0)
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [100] }).toEqual([SENTENCE])
+      expect((await readToastEntries(window))[0]?.hasIcon, 'an error toast (it draws the status icon), not a plain one').toBe(true)
+      await expect(window.locator('video'), 'nothing opened').toHaveCount(0)
+      await expect(window.getByText('Drop a video here'), 'and the importer is still there').toBeVisible()
+      await expect(window.getByRole('button', { name: 'Choose file…' }), 'not left busy').toBeEnabled()
+      await window.waitForTimeout(800)
+      expect(await readToastLog(window), 'one sentence, nothing after it').toEqual([SENTENCE])
+      expect(await chooserCalls(app), 'the file picker was not opened for it').toEqual([])
+      expect(pageErrors, 'the handler stopped there: it did not go on to read a path off a file that is not there').toEqual([])
+
+      // Control: a drop with a file still loads.
+      await dropOnVideoImporter(window, fixture, path.basename(fixture))
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('video')).toHaveCount(1)
+      expect(await readToastLog(window), 'the no-file sentence is not repeated by the file drop').toEqual([SENTENCE, 'Video loaded'])
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
 })

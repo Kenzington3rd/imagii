@@ -14,6 +14,26 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-07 - T-177 (round 126), Track A: a control that commits as you type takes the key its siblings have, and a drop that carries no file gets an answer
+
+The sixty-third sweep, Track A (items 1 and 2).
+
+### (1) [LOW] - Typing a loudness target could cost two undo steps
+
+- **Bug.** The Even volume target box commits every keystroke that is already a valid target, so typing "-50" committed -5 and then -50 ("-16.5" likewise: -16, then -16.5). The commit passed no coalescing key, so each was a step, and the first Ctrl+Z landed on a -5 nobody meant.
+- **Root cause.** T-153 (1) fixed this shape for the canvas number boxes and T-147 gave the Manual gain slider its key, but the box beside the slider in the same card was written before either and was never revisited: a control that commits per keystroke is a drag by another name.
+- **Fix.** The box's commit is `patchChain({ loudnormTargetLufs: target }, 'loudnormTarget')`. Nothing else changed: the card's `useGestureEnd` already closes the window when the box loses focus (its blur bubbles to the card; `finish` does not stop it), so a later edit is its own step. The platform picker stays keyless (a discrete step that closes the window).
+- **Test.** audio.spec.ts "round 126 Track A (T-177 (1))" (type "-50" key by key, leave, one Undo returns the box to -16, Redo puts -50 back; a second burst, entered by keyboard after the first left the box by a plain blur, is a second step; red on the unchanged build: `Expected: "-16" Received: "-5"`); audioStore.test.ts "a typed loudness target coalesces under its own key" (the store's half, green on the base because the store always had the mechanism - it records what the key buys and that it is not shared with 'gain'); interactionWiring.test.ts "T-177 Track A" (the box passes exactly this key, once; the card spreads the gesture end; the box's blur does not stop the event) and the in-place update of the T-147 pin (two keys now, not one).
+- **Lesson.** **Every control that commits while the person is still typing or dragging passes its history key, and the audit is by shape, not by the control that was reported.** When a fix lands for "the number boxes", grep every `onChange` that calls the store directly in the same card; a sibling written earlier is where the next report comes from. And a mutation that shares the key with a neighbour (`'gain'`) is invisible to any end-to-end case, because a press or a blur always sits between two real controls: only a wiring pin on the exact key catches it, so keep one.
+
+### (2) [LOW] - The video importer said nothing when a drop carried no file
+
+- **Bug.** A link, a browser thumbnail or selected text dropped on "Drop a video here" un-highlighted the card and nothing else. The audio importer's same drop says "No file was dropped. Try the file picker instead."; the video importer's own no-path drop already toasted.
+- **Root cause.** `onDrop` began `if (!file) return`: written as the cheapest guard before the checks that read the file, and nobody saw it as a user-visible state because it printed nothing. The audio importer got its sentence from `examineDroppedFile`; the video importer never called it.
+- **Fix.** The branch toasts `examineDroppedFile(undefined).hint` (the one shared sentence, as an error, at the default duration the audio importer uses) and returns; it sits ahead of the busy refusal, as in the audio importer, because that refusal is about a file being tried.
+- **Test.** video-core.spec.ts "round 126 Track A (T-177 (2))" (a real `DataTransfer` carrying only a link and text: the sentence once, as an error toast, no `<video>`, no chooser opened, no page error, the importer still idle; then a file drop still loads; red on the unchanged build: no toast); interactionWiring.test.ts "T-177 Track A" (the branch, its order before `refuseIfBusy`, and that the sentence has one source).
+- **Lesson.** **A guard that returns silently on a user gesture is a decision to say nothing; make it deliberately.** `if (!x) return` is right for internal invariants and wrong for anything a person did with the mouse: they did something, so the app answers. When two screens take the same gesture, they take the same answer, from the same source.
+
 ## 2026-11-07 - T-176 (round 125), Track A: a question names what opens, not what is already open
 
 The sixty-second sweep, Track A (item 1).

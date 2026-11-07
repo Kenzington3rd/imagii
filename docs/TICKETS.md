@@ -9007,7 +9007,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open.
+- **Status:** done (round 126 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9583,6 +9583,32 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 126 — T-177, both counted items, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of 4742320.
+Track A: the Even volume target box commits under its own coalescing
+key (`'loudnormTarget'`), so typing "-50" — which passes through the
+valid "-5" — is one undo step, and the card's gesture end (the box's
+blur bubbles to it) closes the window, so a later edit is its own step
+(the T-153 (1) shape, found in Audio Studio); Video Studio's importer
+says "No file was dropped. Try the file picker instead." (the shared
+`examineDroppedFile` hint, the audio importer's toast kind) for a drop
+that carries no file and opens nothing; and, asked for at adjudication
+from the worker's own found-not-fixed, the audio importer's same
+refusal is now driven end to end and has its IC row. Deviations,
+accepted: the unit layer's red is the wiring pins (the store always
+had the key mechanism; its describe is a control); an existing T-147
+pin widened in place; Enter keeps the coalescing window open, as the
+canvas boxes do. Ledger: 9 reds + 25 mutation rows (interim-test
+survivors tightened and killed; the key shared with 'gain' survives
+the e2e by design and is killed by the exact-key wiring pin), all
+restored identical. Expedited personally: one independent mutation at
+a seam no ledger row names — a key that never matches itself → two
+wiring pins red — restored byte-identical, sha256 verified; on the
+landed tree: verify x2 (210 files, 6729 tests, both runs), test:media
+515 passed, 17 skipped of 532 on 7.0.2, FULL Playwright 814 passed,
+56.7 min. Applied to 4742320 by `git apply` with every file
+byte-identical to the expedited tree.
 
 Round 125 — T-176, the one counted item, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of 2facd13.

@@ -8,7 +8,7 @@ import { basename } from '../../components/OutputDirLabel'
 import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
-import { describeFailedOpen } from '@shared/importDiagnostics'
+import { describeFailedOpen, examineDroppedFile } from '@shared/importDiagnostics'
 import {
   VIDEO_EXTENSIONS,
   isVideoFilename,
@@ -105,7 +105,12 @@ export function Importer(): JSX.Element {
     e.preventDefault()
     setDragOver(false)
     const file = e.dataTransfer.files[0]
-    if (!file) return
+    if (!file) {
+      // T-177 (2): a link, a browser thumbnail or selected text carries no file, and the card un-highlighted and said nothing. The audio importer's sentence, from the
+      // same shared hint, at the default duration it uses. Ahead of the busy refusal, as there: that refusal is about a file being tried.
+      toast.error(examineDroppedFile(undefined).hint ?? 'No file dropped.')
+      return
+    }
     // Before anything else is said about the file: "trying anyway" followed by a
     // refusal would be two sentences that disagree.
     if (refuseIfBusy()) return

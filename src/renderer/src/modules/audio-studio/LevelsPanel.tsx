@@ -144,7 +144,8 @@ export function LevelsPanel(): JSX.Element {
             <LoudnessTargetInput
               value={chain.loudnormTargetLufs}
               disabled={!chain.loudnorm}
-              onCommit={(target) => patchChain({ loudnormTargetLufs: target })}
+              // T-177 (1): the key makes a typed target ("-50" passes through -5) ONE undo step; the card's `useGestureEnd` closes the window when the box loses focus.
+              onCommit={(target) => patchChain({ loudnormTargetLufs: target }, 'loudnormTarget')}
             />{' '}
             LUFS)
           </span>

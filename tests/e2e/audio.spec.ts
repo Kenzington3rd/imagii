@@ -6355,3 +6355,115 @@ test.describe('round 125 Track A (T-176): Clean audio names the sound it opens',
     }
   })
 })
+
+// round 126 Track A (T-177 (1)): the loudness target box committed every keystroke that was already a target and passed no coalescing key, so "-50" was two undo steps
+// (-5, then -50) and the first Ctrl+Z landed on a -5 nobody meant. Its commits carry the key 'loudnormTarget'; the card's gesture end (the box losing focus) closes the window.
+test.describe('round 126 Track A (T-177 (1)): one typed loudness target is one undo step', () => {
+  /**
+   * What a person does to change a number: select the old one, delete it, type the new digits one at a time, then leave the box. `how: 'keyboard'` gets into the box
+   * without a press (focus only), so the ONLY thing that can have closed the earlier burst's undo window is that burst's box losing focus - a click on the box would close it.
+   * `leave: 'blur'` takes focus out of the box to nowhere (what the window losing focus does), where Tab lands on the Platform select: THAT control's own blur would also
+   * close the window, which would hide a box whose blur no longer reached the card.
+   */
+  async function retypeTarget(box: ReturnType<Page['getByLabel']>, text: string, how: 'click' | 'keyboard' = 'click', leave: 'tab' | 'blur' = 'tab'): Promise<void> {
+    if (how === 'keyboard') await box.focus()
+    else await box.click()
+    await box.press('Control+a')
+    await box.press('Backspace')
+    await box.pressSequentially(text)
+    if (leave === 'blur') await box.evaluate((el) => (el as HTMLElement).blur())
+    else await box.press('Tab')
+  }
+
+  test('typing -50 and leaving the box is ONE step: one Undo returns the box to -16 (not -5), Redo puts -50 back', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t177-target-one-step')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const levels = window.locator(LEVELS)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      const redo = window.getByRole('button', { name: 'Redo' })
+      await levels.getByLabel(/^Even volume/).check()
+      const lufs = levels.getByLabel('Loudness target (LUFS)')
+      await expect(lufs).toHaveValue('-16')
+
+      await retypeTarget(lufs, '-50')
+      await expect(lufs).toHaveValue('-50')
+      await undo.click()
+      await expect(lufs, 'one Undo undoes the whole typed number, back to what it was').toHaveValue('-16')
+      await expect(levels.getByLabel(/^Even volume/), 'and no further: the checkbox is its own, earlier step').toBeChecked()
+      await expect(redo).toBeEnabled()
+      await redo.click()
+      await expect(lufs).toHaveValue('-50')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: a second edit after leaving the box (back in by keyboard, no press) is its own step - -50 then -30 undoes -30 first, then -50, then the original', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t177-target-two-steps')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const levels = window.locator(LEVELS)
+      const undo = window.getByRole('button', { name: 'Undo' })
+      await levels.getByLabel(/^Even volume/).check()
+      const lufs = levels.getByLabel('Loudness target (LUFS)')
+
+      await retypeTarget(lufs, '-50', 'click', 'blur')
+      await retypeTarget(lufs, '-30', 'keyboard')
+      await expect(lufs).toHaveValue('-30')
+      await undo.click()
+      await expect(lufs, 'the second burst is its own step').toHaveValue('-50')
+      await undo.click()
+      await expect(lufs, 'and the first is another').toHaveValue('-16')
+      await expect(levels.getByLabel(/^Even volume/)).toBeChecked()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// round 126 Track A (T-177 (2), the audio twin): the Audio importer already says "No file was dropped. Try the file picker instead." for a drop that carries no file (the shared
+// `examineDroppedFile` hint, which the video importer now reads too), but no case drove it. This one does; it could not be red-first because the behavior exists, so it is
+// proven to discriminate by mutation (the branch's toast removed) in the ledger.
+test.describe('round 126 Track A (T-177 (2)): the Audio importer says so for a drop that carries no file', () => {
+  test('text and a link only: the sentence once, as an error, nothing opens, no chooser, no page error; a file dropped after it still loads', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t177-audio-nofile')
+    const { app, window } = studio
+    try {
+      const SENTENCE = 'No file was dropped. Try the file picker instead.'
+      const pageErrors: string[] = []
+      window.on('pageerror', (err) => pageErrors.push(err.message))
+      await recordSlowChooser(app, {})
+      const files = await window.evaluate(() => {
+        const zone = document.querySelector('[data-tutorial="audio-importer"] .card')
+        if (!zone) throw new Error('Audio Studio drop zone not found')
+        const transfer = new DataTransfer()
+        transfer.setData('text/uri-list', 'https://example.com/take.wav')
+        transfer.setData('text/plain', 'https://example.com/take.wav')
+        zone.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: transfer }))
+        return transfer.files.length
+      })
+      expect(files, 'the transfer carries no file').toBe(0)
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [100] }).toEqual([SENTENCE])
+      expect((await readToastEntries(window))[0]?.hasIcon, 'an error toast, not a plain one').toBe(true)
+      await expect(playButton(window), 'no sound opened').toHaveCount(0)
+      await expect(window.getByRole('button', { name: 'Choose file…' })).toBeEnabled()
+      await window.waitForTimeout(800)
+      expect(await readToastLog(window), 'one sentence, nothing after it').toEqual([SENTENCE])
+      expect(await chooserCalls(app), 'the file picker was not opened for it').toEqual([])
+      expect(pageErrors).toEqual([])
+
+      // Control: a drop with a file still loads.
+      await dropAndWaitReady(studio)
+      await expect(playButton(window), 'the sound opened').toBeEnabled()
+      expect((await readToastLog(window)).filter((t) => t === SENTENCE), 'the file drop does not say it again').toHaveLength(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

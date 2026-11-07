@@ -631,3 +631,63 @@ describe('soundKey - the file the person opened is the sound\'s identity (T-172 
   })
 })
 
+
+// round 126 Track A (T-177 (1)): the loudness target box commits every keystroke that is already a target ("-50" passes through -5; "-16.5" through -16), and each commit
+// was a step of its own. Its commits now pass 'loudnormTarget' (the call `LevelsPanel` makes; tests/unit/interactionWiring.test.ts pins that the box passes exactly this key),
+// so a typed number is the same one-step window a slider drag is. This describe is the store's half: what the key buys, and that it is not shared with 'gain'.
+describe('a typed loudness target coalesces under its own key (T-177 (1))', () => {
+  const store = () => useAudioStore.getState()
+  const type = (...targets: number[]): void => {
+    for (const t of targets) store().patchChain({ loudnormTargetLufs: t }, 'loudnormTarget')
+  }
+
+  it('"-5" then "-50" is ONE step, and one undo returns the original target', () => {
+    const original = store().chain.loudnormTargetLufs
+    type(-5, -50)
+    expect(store().chain.loudnormTargetLufs).toBe(-50)
+    expect(store().history.past).toHaveLength(1)
+    store().undo()
+    expect(store().chain.loudnormTargetLufs, 'the target from before the typing, not the -5 on the way').toBe(original)
+    expect(store().history.past).toHaveLength(0)
+    store().redo()
+    expect(store().chain.loudnormTargetLufs).toBe(-50)
+  })
+
+  it('"-16.5" typed over -14 (through -16) is one step', () => {
+    store().patchChain({ loudnormTargetLufs: -14 })
+    store().endGesture()
+    type(-1, -16, -16.5)
+    expect(store().history.past).toHaveLength(2)
+    store().undo()
+    expect(store().chain.loudnormTargetLufs).toBe(-14)
+  })
+
+  it('a second burst after the gesture end (the box losing focus) is a second step', () => {
+    const original = store().chain.loudnormTargetLufs
+    type(-5, -50)
+    store().endGesture()
+    type(-3, -30)
+    expect(store().history.past).toHaveLength(2)
+    store().undo()
+    expect(store().chain.loudnormTargetLufs, 'the second burst alone').toBe(-50)
+    store().undo()
+    expect(store().chain.loudnormTargetLufs).toBe(original)
+  })
+
+  it('the target\'s key is not the gain slider\'s: a burst of one straight after a burst of the other, with no gesture end between, is a new step', () => {
+    store().patchChain({ gainDb: 2 }, 'gain')
+    store().patchChain({ gainDb: 3 }, 'gain')
+    type(-5, -50)
+    expect(store().history.past, 'one for the gain drag, one for the typing').toHaveLength(2)
+    store().undo()
+    expect(store().chain.loudnormTargetLufs).toBe(-16)
+    expect(store().chain.gainDb, 'the gain drag is still in').toBe(3)
+  })
+
+  it('a discrete edit between two bursts (the platform picker) closes the window', () => {
+    type(-5, -50)
+    store().patchChain({ loudnormTargetLufs: -14 })
+    type(-3, -30)
+    expect(store().history.past).toHaveLength(3)
+  })
+})
