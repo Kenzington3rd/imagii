@@ -14,6 +14,18 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-07 - T-181 (round 130), Track A: a fix that makes a control reachable in a new state sweeps what the control does in that state
+
+The sixty-seventh sweep, Track A (item 1).
+
+### (1) [LOW] - A navigation left the crash screen on top
+
+- **Bug.** With the crash screen up, a toast's "Edit in Video Studio" or "Open Audio Studio" changed the hash and did its work (the video was replaced, after its question, invisibly) and the person saw nothing happen. "Reload to Home" then landed on Home, not where they had asked to go. Clean audio's auto-navigate, "→ Canvas" and a finishing autosave Restore did the same.
+- **Root cause.** The boundary kept `state.error` until "Reload to Home"'s own `setState`, and nothing keyed it on the location. It did not matter while the crash screen could not show a toast. T-180 (1) made the toasts reachable over it and did not sweep what their actions do there.
+- **Fix.** `ErrorBoundary` takes an optional `resetKey`; `componentDidUpdate` clears the error and the stack when an error is held, was held before this update, and the key changed. App passes the router's location object (new per navigation, a push to the same path included) as the studio boundary's key. The `prevState.error` condition is the retry guard: an error caught in the very update that changed the key (a navigation onto a route that throws) is not reset, so it is caught once and the screen shows.
+- **Test.** home-chrome.spec.ts "round 130 Track A (T-181 (1))" (a real Clean audio, a real crash, the drawn "Open Audio Studio" pressed over it: red on the unchanged build, the alert stays; and the control that entering a throwing route logs the caught error once); ErrorBoundary.test.tsx "a navigation leaves the crash screen"; interactionWiring.test.ts "round 130 Track A (T-181)".
+- **Lesson.** **A fix that makes a control reachable in a new state must sweep what the control does in that state.** T-180 put toasts over a screen; every action a toast carries is then pressed on that screen, and each of them navigates. The audit is the callers of `navigate` that a toast, a finishing job or a restore can fire, not the screens the person can see. And a reset that listens to a change must be told which change it is for: without the `prevState` condition the boundary resets in the update that caught the error and renders the throwing route twice, which only a count of the logged errors shows.
+
 ## 2026-11-07 - T-180 (round 129), Track A: a sentence about live state is live, and a fix for a state sweeps every moment it can begin
 
 The sixty-sixth sweep, Track A (item 1).

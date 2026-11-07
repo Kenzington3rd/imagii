@@ -99,7 +99,7 @@ export function App(): JSX.Element {
     )
   } else {
     phaseElement = (
-      <ErrorBoundary>
+      <ErrorBoundary resetKey={location}>
         <Routes>
           <Route path="/" element={<Navigate to="/home" replace />} />
           <Route path="/home" element={<Home />} />

@@ -5095,13 +5095,13 @@ describe('round 129 Track A (T-180): the crash screen can still talk - toasts ar
     const phases = app.slice(app.indexOf('let phaseElement: JSX.Element'))
     expect(phases).toMatch(/if \(status\.phase === 'loading'\) \{\s*(?:[\s\S]*?)phaseElement = \(/)
     expect(phases).toMatch(/\} else if \(status\.phase === 'welcome'\) \{\s*phaseElement = \(\s*<Welcome/)
-    expect(phases).toMatch(/\} else \{\s*phaseElement = \(\s*<ErrorBoundary>\s*<Routes>/)
+    expect(phases).toMatch(/\} else \{\s*phaseElement = \(\s*<ErrorBoundary resetKey=\{location\}>\s*<Routes>/)
     expect(phases.match(/\breturn\b/g), 'the one return is the fragment: a phase that returned its own element would have no toaster').toHaveLength(1)
   })
 
   it('(1) the studio boundary keeps the routes and the hotkey overlay, and the toaster is not in it', () => {
     const app = strip(read('App.tsx'))
-    const studio = app.slice(app.indexOf('<ErrorBoundary>'), app.indexOf('</ErrorBoundary>'))
+    const studio = app.slice(app.indexOf('<ErrorBoundary resetKey={location}>'), app.indexOf('</ErrorBoundary>'))
     expect(studio).toContain('<Routes>')
     expect(studio).toContain('<HotkeyOverlay />')
     expect(studio).not.toContain('AppToaster')
@@ -5133,5 +5133,42 @@ describe('round 129 Track A (T-180): the crash screen can still talk - toasts ar
     expect(doSave, 'the notify is the finally of the whole body').toMatch(/\} finally \{\s*notifyAutosaveTrouble\(\)\s*\}\s*\}\s*$/)
     expect(hook).toMatch(/export function startAutosave\(memory: AutosaveMemory\): \(\) => void \{\s*activeMemory = memory\s*notifyAutosaveTrouble\(\)/)
     expect(hook, 'on stop, after the memory is let go and the scheduler cancelled').toMatch(/if \(activeMemory === memory\) activeMemory = null[\s\S]*?scheduler\.cancel\(\)\s*notifyAutosaveTrouble\(\)\s*\}/)
+  })
+})
+
+describe('round 130 Track A (T-181): a navigation leaves the crash screen - the studio boundary is keyed on the router location', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const flat = (text: string): string => strip(text).replace(/\s+/g, ' ')
+
+  it('(1) App passes the router location object (not its pathname) as the STUDIO boundary\'s resetKey, once, and the toaster\'s boundary has none', () => {
+    const app = strip(read('App.tsx'))
+    expect(app).toMatch(/const location = useLocation\(\)/)
+    expect(app).toMatch(/\} else \{\s*phaseElement = \(\s*<ErrorBoundary resetKey=\{location\}>\s*<Routes>/)
+    expect(app.match(/resetKey=/g), 'one boundary is keyed: the toaster\'s is not (a navigation must not reset a toast that threw)').toHaveLength(1)
+    expect(app).toMatch(/<ErrorBoundary fallback=\{null\}>\s*<AppToaster \/>\s*<\/ErrorBoundary>/)
+    expect(app, 'the pathname would miss a push to the same path').not.toMatch(/resetKey=\{location\./)
+  })
+
+  it('(1) ErrorBoundary takes an optional resetKey, and componentDidUpdate clears the error and the stack on exactly three conditions', () => {
+    const boundary = flat(read('components/ErrorBoundary.tsx'))
+    expect(boundary).toContain('resetKey?: unknown')
+    expect(boundary).toContain('componentDidUpdate(prevProps: ErrorBoundaryProps, prevState: ErrorBoundaryState): void {')
+    expect(boundary).toContain(
+      'if (this.state.error !== null && prevState.error !== null && prevProps.resetKey !== this.props.resetKey) { this.setState({ error: null, componentStack: null }) }'
+    )
+  })
+
+  it('(1) each condition is its own: an error held now, an error held BEFORE this update (the retry guard), and a key that changed', () => {
+    const update = flat(read('components/ErrorBoundary.tsx'))
+    const body = update.slice(update.indexOf('componentDidUpdate('), update.indexOf('render(): ReactNode'))
+    expect(body.match(/this\.state\.error !== null/g)).toHaveLength(1)
+    expect(body.match(/prevState\.error !== null/g)).toHaveLength(1)
+    expect(body.match(/prevProps\.resetKey !== this\.props\.resetKey/g)).toHaveLength(1)
+    expect(body.match(/&&/g), 'three conditions, ANDed').toHaveLength(2)
+  })
+
+  it('(1) "Reload to Home" keeps its own reset (a hash set by hand can keep the location\'s key)', () => {
+    const boundary = flat(read('components/ErrorBoundary.tsx'))
+    expect(boundary).toMatch(/onClick=\{\(\): void => \{ this\.setState\(\{ error: null, componentStack: null \}\) window\.location\.hash = '#\/home' \}\}/)
   })
 })

@@ -9215,7 +9215,7 @@ IMG-PREC.
   twice and the FULL Playwright suite green before handback (no ffmpeg command changes; `test:media`
   is run by the expediter on the merge) — a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 130)
+- **Status:** done (round 130 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9791,6 +9791,39 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 130 — T-181, the one counted item, landed in the commit that
+carries this entry. One Sonnet worker in a fresh clone of 9276899.
+Track A: a navigation leaves the crash screen — `ErrorBoundary` takes
+a `resetKey` and, in `componentDidUpdate`, clears its error when the
+key changed and the error was already held before this update (an
+error caught in the very update that navigated, onto a route that
+throws, is caught once and shown, with no retry); App passes the
+router location (`useLocation()`, a new object per navigation, a push
+to the same path included) to the studio boundary only. So "Edit in
+Video Studio", Clean audio's "Open Audio Studio" and its auto-open, "→
+Canvas" and a Restore that finishes on Home, pressed or finishing
+while the crash screen is up, land in their studio instead of changing
+the hash behind it. "Reload to Home" keeps its own reset. USER_GUIDE
+says a toast button that opens a studio takes you there from the crash
+screen. The e2e drives Clean audio's "Open Audio Studio" over the
+crash screen (the extraction held by the existing spawn stall) and
+counts one caught error on entering the crash route. Deviations,
+accepted: the other navigating sites share the one `navigate()` and
+the keyed boundary and are not each driven over the crash screen (an
+IC coverage note says so; no OS boundary stops them); unit cases and
+two mutations beyond the brief. Ledger: 2 red rows, a control and 14
+mutation rows, all restored identical; the `location.pathname` key
+survives only at the e2e layer (the case crosses paths) and dies at
+the wiring pin. Expedited personally: one independent mutation at a
+seam no ledger row names — "Reload to Home" without its own reset (a
+crash on Home sets the same hash, which fires no change) → two wiring
+pins red — restored byte-identical, sha256 verified; on the landed
+tree: verify x2 (211 files, 6795 tests, both green), test:media 515
+passed and 17 skipped of 532 on 7.0.2, FULL Playwright 823 passed
+(57.2 min, on the expedited clone, byte-identical to what landed).
+Applied to 9276899 by `git apply` with every file byte-identical to
+the expedited tree.
 
 Round 129 — T-180, the one counted item, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of 23cd3d9.

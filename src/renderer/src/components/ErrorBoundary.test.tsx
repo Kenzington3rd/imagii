@@ -159,3 +159,63 @@ describe('ErrorBoundary - the sentence is a live component (T-180 (1))', () => {
     expect(crashScreen()).toMatch(/<p style="[^"]*font-size:14px[^"]*">Your work is still open in its studios/)
   })
 })
+
+/**
+ * T-181 (1) - a navigation leaves the crash screen. The boundary clears its error when the router's location changes while the screen is up (a toast's "Edit in Video Studio",
+ * Clean audio's "Open Audio Studio", a finishing job that opens a studio all navigate from the crash screen since T-180 drew the toasts over it). The instance is driven directly
+ * (no DOM here): `setState` is a spy, and `componentDidUpdate` is called with the props and state of the render before.
+ */
+describe('ErrorBoundary - a navigation leaves the crash screen (T-181 (1))', () => {
+  const HELD = (): { error: Error | null; componentStack: string | null } => ({ error: new Error('boom'), componentStack: '\n at Studio' })
+  const NONE = { error: null, componentStack: null }
+
+  /** The setState calls `componentDidUpdate` makes for a boundary whose state NOW is `now`, whose state BEFORE this update was `before`, and whose key changed from `prevKey` to `key`. */
+  function resetsFor(now: { error: Error | null; componentStack: string | null }, before: { error: Error | null; componentStack: string | null }, prevKey: unknown, key: unknown): unknown[][] {
+    const boundary = new ErrorBoundary({ children: null, resetKey: key })
+    boundary.state = now
+    const setState = vi.fn()
+    boundary.setState = setState
+    boundary.componentDidUpdate({ children: null, resetKey: prevKey }, before)
+    return setState.mock.calls
+  }
+
+  it('an error held, and held before this update, and the key changed: the error and the stack are cleared', () => {
+    expect(resetsFor(HELD(), HELD(), { key: 'a' }, { key: 'b' })).toEqual([[{ error: null, componentStack: null }]])
+  })
+
+  it('the same key object: no reset (every other re-render leaves the crash screen alone)', () => {
+    const key = { key: 'a' }
+    expect(resetsFor(HELD(), HELD(), key, key)).toEqual([])
+  })
+
+  it('a new object is a new key even when it holds the same text (a push to the same path: "Edit in Video Studio" while Video Studio is the one that crashed)', () => {
+    expect(resetsFor(HELD(), HELD(), { pathname: '/video', key: 'a' }, { pathname: '/video', key: 'a' })).toHaveLength(1)
+  })
+
+  it('the error was caught in THIS update (nothing held before): no reset, so a navigation onto a route that throws is caught once and not retried', () => {
+    expect(resetsFor(HELD(), NONE, { key: 'a' }, { key: 'b' })).toEqual([])
+  })
+
+  it('no error held: no reset, whatever the key does', () => {
+    expect(resetsFor(NONE, NONE, { key: 'a' }, { key: 'b' })).toEqual([])
+  })
+
+  it('the error is gone now though it was held before this update (the reset itself, or a clear): no second reset', () => {
+    expect(resetsFor(NONE, HELD(), { key: 'a' }, { key: 'b' })).toEqual([])
+  })
+
+  it('no resetKey at all (the toast boundary): no reset, an error stays', () => {
+    expect(resetsFor(HELD(), HELD(), undefined, undefined)).toEqual([])
+  })
+
+  it('after the reset the boundary renders its children again, not the crash screen', () => {
+    const boundary = new ErrorBoundary({ children: <b>studio</b>, resetKey: { key: 'b' } })
+    boundary.state = HELD()
+    boundary.setState = ((update: { error: Error | null; componentStack: string | null }) => {
+      boundary.state = { ...boundary.state, ...update }
+    }) as typeof boundary.setState
+    expect(renderToStaticMarkup(boundary.render() as React.ReactElement)).toMatch(/Something went wrong in this studio/)
+    boundary.componentDidUpdate({ children: null, resetKey: { key: 'a' } }, HELD())
+    expect(renderToStaticMarkup(boundary.render() as React.ReactElement)).toBe('<b>studio</b>')
+  })
+})

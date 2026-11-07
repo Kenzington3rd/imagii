@@ -859,7 +859,8 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   hits an error instead and shows the crash screen, nothing has restarted: **Reload to Home**
   only changes the screen, so the studio you were in is still open with your work in it, and
   no restore banner is offered. Toasts still appear over the crash screen (a job that finishes while it is
-  up, an export or a recording save, still says so). If autosave had been failing, the crash screen says so instead of
+  up, an export or a recording save, still says so), and a toast's button that opens a studio (**Edit in Video Studio**,
+  **Open Audio Studio**) takes you there from the crash screen. If autosave had been failing, the crash screen says so instead of
   promising it saves every few seconds, and points you at **Save project**; while autosave is paused for
   size (below), it says so instead, and tells you to remove large images from the canvas
   (**Save project** would refuse the same project). That sentence follows autosave while the screen is

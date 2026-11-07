@@ -4637,3 +4637,87 @@ test.describe('round 129 Track A (T-180 (1)): the crash screen shows toasts and 
     }
   })
 })
+
+test.describe('round 130 Track A (T-181 (1)): a navigation leaves the crash screen', () => {
+  const CAUGHT = '[ErrorBoundary] caught render error'
+
+  test('Clean audio finishes behind the crash screen: its "Open Audio Studio" button, pressed over the screen, takes the person to Audio Studio with the sound', async () => {
+    test.setTimeout(240_000)
+    const root = makeRoot('t181-crash-nav')
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'e2e-clip.mp4')
+    await makeFixtureMp4(clip)
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Video Studio' })).toBeVisible({ timeout: 30_000 })
+      await dropOnZone(window, '[data-tutorial="video-import"] .card', clip, 'e2e-clip.mp4')
+      await expect(window.locator('video')).toHaveCount(1, { timeout: 30_000 })
+      await expect(window.getByText(/^(Strong|OK|Weak) hook$/)).toBeVisible({ timeout: 30_000 })
+
+      // The extraction's ffmpeg is held, so the studio throws while it runs.
+      await installSpawnStall(app, [{ match: 'ffmpeg', nth: 1, ms: 15_000 }])
+      await window.getByRole('button', { name: 'Clean audio' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+
+      // The extraction ends behind the crash screen: the person is not on /video, so nothing takes them anywhere, and the toast carries the way there, drawn over the screen.
+      const open = window.locator('[data-rht-toaster]').getByRole('button', { name: 'Open Audio Studio', exact: true })
+      await expect(open).toBeVisible({ timeout: 60_000 })
+      expect(await readToastLog(window), 'nothing took them there on its own').not.toContain('Opening Audio Studio')
+      await expect(alert, 'the screen is still up until the button is pressed').toBeVisible()
+
+      // Pressed over the crash screen, it goes where it says: the screen is gone, Audio Studio shows the sound.
+      await open.click()
+      await expect(alert, 'the navigation leaves the crash screen').toHaveCount(0, { timeout: 15_000 })
+      await expect(window.locator('h1', { hasText: 'Audio Studio' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible({ timeout: 30_000 })
+      expect(await window.evaluate(() => globalThis.location.hash)).toBe('#/audio')
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('control: navigating ONTO a route that throws is caught once - the screen shows and the error is logged once, not retried', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t181-crash-once')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      const caught: string[] = []
+      window.on('console', (msg) => {
+        if (msg.text().startsWith(CAUGHT)) caught.push(msg.text())
+      })
+      await window.evaluate(() => {
+        ;(globalThis as unknown as { __imagiiCrashTest?: boolean }).__imagiiCrashTest = true
+        globalThis.location.hash = '#/__crash'
+      })
+      const alert = window.getByRole('alert')
+      await expect(alert).toBeVisible({ timeout: 15_000 })
+      // Time for any retry a reset in the very update that caught the error would cause.
+      await window.waitForTimeout(1_500)
+      await expect(alert).toBeVisible()
+      expect(caught, 'caught exactly once: the key changed in the same update that caught it, and a reset there would render the throwing route a second time').toHaveLength(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

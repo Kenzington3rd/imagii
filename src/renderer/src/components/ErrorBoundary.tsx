@@ -8,6 +8,12 @@ interface ErrorBoundaryProps {
    * user: a toast that throws while rendering drops the toasts, not the app (an unmounted App stops autosave).
    */
   fallback?: ReactNode
+  /**
+   * T-181 (1): when this changes while the crash screen is up, the screen is let go and the children render again. App passes the router's location object (a new one per
+   * navigation, a push to the same path included; the same one otherwise), so a navigation that happens from the crash screen (a toast's "Edit in Video Studio", Clean audio's
+   * "Open Audio Studio") leaves it. Left out, the error stays until "Reload to Home".
+   */
+  resetKey?: unknown
 }
 
 interface ErrorBoundaryState {
@@ -62,6 +68,14 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
     console.error('[ErrorBoundary] caught render error:', error)
     console.error('[ErrorBoundary] component stack:', info.componentStack)
     this.setState({ componentStack: info.componentStack ?? null })
+  }
+
+  componentDidUpdate(prevProps: ErrorBoundaryProps, prevState: ErrorBoundaryState): void {
+    // T-181 (1). All three, each for a reason: an error held now (nothing to clear otherwise); an error held BEFORE this update (one caught in the very update that changed
+    // the key - a navigation onto a route that throws - is not reset, so it is caught once and the screen shows, with no retry that would throw again); the key changed.
+    if (this.state.error !== null && prevState.error !== null && prevProps.resetKey !== this.props.resetKey) {
+      this.setState({ error: null, componentStack: null })
+    }
   }
 
   render(): ReactNode {
