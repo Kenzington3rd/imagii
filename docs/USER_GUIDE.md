@@ -293,7 +293,8 @@ that names the file being converted.)
   9:16 or taller size) the top corners sit 15% of the height down, below the app's header, and
   the bottom corners 25% up, above its caption (288 px and 480 px on 1080×1920); a bottom
   corner on the right still shares a column with the like and share buttons, so pick a left
-  corner if that matters. GIF, reframe, compilation and picture-in-picture don't take one.
+  corner if that matters. A long handle is set smaller so the whole of it stays inside the frame (most
+  of all on a vertical export, which is narrow); a short one keeps its usual size. GIF, reframe, compilation and picture-in-picture don't take one.
 - **Clip Kit** — one click exports a clip for all five platforms plus three
   thumbnails into a single folder (YouTube 1080p60 is not part of it: it is one file per
   platform, at 30 fps). The thumbnails are your clip's picture: with a crop drawn, each
@@ -801,7 +802,7 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   name one first. A screen reader is told how each search went: how many results, or that there were none, or why the search could not run.
 - **Mood Boards** — your saved boards (a board's name can be up to 200 characters). **Rename** opens with the board's whole name selected, every time (also after you typed and cancelled, and for a second board), so typing replaces it;
   with the name the board already has (or with nothing new) it changes nothing and adds no **Undo** step. **Delete** asks first, and the question says **Ctrl+Z**
-  brings the board back; so does the notice that follows, which stays on screen for 8 seconds. Hover an item and click **→ Canvas**
+  brings the board back; so does the notice that follows, which stays on screen for 8 seconds. If an **Undo** or **Redo** on a mood board cannot be written to disk, imagii says so and the same **Undo** (or **Redo**) is offered again. Hover an item and click **→ Canvas**
   to add it to the Stream Graphics canvas as a 40%-opacity reference layer (the layer
   carries its own copy of the picture, so it stays on the canvas after **Clear thumbnail
   cache**, and in a saved project); if the picture takes a

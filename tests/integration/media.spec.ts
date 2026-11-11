@@ -12973,3 +12973,166 @@ describe('a surround voice keeps its level in a mix (real runAudioExport + ffmpe
     near(await level(got, HZ_BED), await level(was, HZ_BED), 0.05, `${name}: the bed (dB)`)
   }, 180_000)
 })
+
+/**
+ * T-182 (2) - the watermark fits the frame (pixels).
+ *
+ * drawtext places a right-hand watermark at `w-tw-20`. A handle wider than the frame made that x negative, so on 1080x1920 a 33-character
+ * handle at 67 px started at x = -182 and lost its first characters (40 capitals: 1821 px of a 1080 frame). `watermarkFontSize` now sets a text
+ * that would not fit at the largest whole size that does, from a table of Arial Bold's advance widths (`ARIAL_BOLD_ADVANCES`, read from
+ * LiberationSans-Bold.ttf, Arial Bold's metric twin). A string-shape unit test says what the graph looks like, not whether the ink is inside the
+ * frame, and the table is an ESTIMATE of what drawtext will do, so this describe measures the real thing.
+ *
+ * It needs a drawtext, which the bundled linux ffmpeg (7.0.2) has not, so it runs on the distro 6.1.1 through the alias recipe in
+ * docs/TESTING.md ("Running the win32-only drawtext cases here (T-111)") and SKIPS, with its reason, on a binary without drawtext or on a box
+ * without the Liberation font file. Every graph is the product's own `buildVideoFilter`, with ONE substitution made in the TEST: the
+ * `C:/Windows/Fonts/arialbd.ttf` it names is replaced by the Liberation Sans Bold path (the same swap the T-151 describe makes for arial.ttf).
+ * The win32 release run has no such swap to make; its pixel block (T-51) keeps its pins.
+ *
+ * The ink is read with ffmpeg's own `bbox` filter (`min_val=128`: the white text, not the 34% black box that sits on the black source) on one
+ * frame of a black source of the export's size.
+ */
+describe('the watermark fits the frame (drawtext, T-182)', () => {
+  const FONT_FILE = '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf'
+  const SHIPPED_FONT_IN_GRAPH = 'C\\:/Windows/Fonts/arialbd.ttf'
+  const CAPS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMN'
+  const WS = 'W'.repeat(40)
+  const URL = 'youtube.com/@averylongchannelname'
+  const CORNERS = ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const
+
+  /** Why this describe cannot run here, or null when it can. */
+  async function cannotRun(): Promise<string | null> {
+    const names = await ffFilterNames()
+    if (!names.has('drawtext')) return 'this ffmpeg has no drawtext filter (the bundled linux 7.0.2): run it on the distro 6.1.1 through the alias recipe in docs/TESTING.md'
+    if (!existsSync(FONT_FILE)) return `no ${FONT_FILE} on this box: drawtext has nothing to draw with`
+    return null
+  }
+
+  interface Ink {
+    x1: number
+    x2: number
+    y1: number
+    y2: number
+    graph: string
+  }
+
+  /** One watermark through the product's graph on a black `width` x `height` frame; the white ink's bounding box, read by `bbox`. */
+  async function inkOf(text: string, position: (typeof CORNERS)[number], width: number, height: number, tag: string): Promise<Ink> {
+    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    let graph = buildVideoFilter(
+      { startSec: 0, cropRect: null, textOverlays: [] },
+      { ...PLATFORM_PRESETS.tiktok, width, height },
+      { width, height },
+      { text, position, fontSizePct: 3.5, opacity: 0.85 }
+    )
+    expect(graph, 'production built the Windows fontfile this test substitutes').toContain(SHIPPED_FONT_IN_GRAPH)
+    graph = graph.replace(SHIPPED_FONT_IN_GRAPH, FONT_FILE)
+    const { stderr } = await ff([
+      '-y', '-hide_banner',
+      '-f', 'lavfi', '-i', `color=c=black:s=${width}x${height}:r=30:d=1`,
+      '-vf', `${graph},bbox=min_val=128`,
+      '-frames:v', '1',
+      '-f', 'null', '-'
+    ])
+    const m = stderr.match(/x1:(-?\d+) x2:(-?\d+) y1:(-?\d+) y2:(-?\d+)/)
+    expect(m, `${tag}: bbox reported no ink: ${stderr.slice(-400)}`).not.toBeNull()
+    return { x1: Number(m![1]), x2: Number(m![2]), y1: Number(m![3]), y2: Number(m![4]), graph }
+  }
+
+  const sizeIn = (graph: string): number => Number(/fontsize=(\d+):/.exec(graph)![1])
+
+  /** A shrunk watermark is the LARGEST that fits, not merely a small one: its ink fills at least 90% of the 1024 px between the margins and its border. */
+  function expectFillsRoom(ink: Ink, what: string): void {
+    const width = ink.x2 - ink.x1 + 1
+    expect(width, `${what}: ${width} px of ink in a 1024 px room (a text sized too small would leave most of it empty)`).toBeGreaterThanOrEqual(Math.round(1024 * 0.9))
+  }
+
+  /** The ink is inside the frame's side margins: it starts at x >= 20 and ends at x <= 1060 of 1080 columns, and a right-hand one still reaches the margin. */
+  function expectInside(ink: Ink, corner: (typeof CORNERS)[number], what: string): void {
+    expect(ink.x1, `${what}: the ink starts at column ${ink.x1}; the left margin is 20`).toBeGreaterThanOrEqual(20)
+    expect(ink.x2, `${what}: the ink ends at column ${ink.x2}; the right margin leaves 1060`).toBeLessThanOrEqual(1060)
+    if (corner.endsWith('right')) expect(ink.x2, `${what}: a right-hand watermark still ends at its margin (1050 or later), not short of it`).toBeGreaterThanOrEqual(1050)
+  }
+
+  // Plain loops, not it.each: a test context (for ctx.skip) is not passed to an each-case's function.
+  for (const corner of CORNERS) it(`40 capitals in the ${corner} corner of a 1080x1920 export stay inside the side margins`, async (ctx) => {
+    const why = await cannotRun()
+    if (why) {
+      console.warn(`SKIPPED (T-182 drawtext): ${why}`)
+      return ctx.skip()
+    }
+    const ink = await inkOf(CAPS, corner, 1080, 1920, `caps-${corner}`)
+    expectInside(ink, corner, `40 capitals, ${corner}, ${sizeIn(ink.graph)} px`)
+    expect(sizeIn(ink.graph), 'the 40 capitals are set below today\'s 67').toBeLessThan(67)
+    expectFillsRoom(ink, `40 capitals, ${corner}`)
+    if (corner.endsWith('left')) expect(ink.x1, 'a left-hand watermark starts at its margin, not far from it').toBeLessThanOrEqual(30)
+  }, 120_000)
+
+  for (const [label, text] of [['the 33-character URL', URL], ['40 W', WS]] as const) it(`${label} bottom-right on a 1080x1920 export stays inside the side margins`, async (ctx) => {
+    const why = await cannotRun()
+    if (why) {
+      console.warn(`SKIPPED (T-182 drawtext): ${why}`)
+      return ctx.skip()
+    }
+    const ink = await inkOf(text, 'bottom-right', 1080, 1920, label)
+    expectInside(ink, 'bottom-right', `${label}, ${sizeIn(ink.graph)} px`)
+    expect(sizeIn(ink.graph), `${label} is set below today's 67`).toBeLessThan(67)
+    expectFillsRoom(ink, label)
+  }, 120_000)
+
+  it('a text with a colon, an apostrophe and a percent sign is sized on what the person typed, and drawn as typed (the escapes are not counted)', async (ctx) => {
+    const why = await cannotRun()
+    if (why) {
+      console.warn(`SKIPPED (T-182 drawtext): ${why}`)
+      return ctx.skip()
+    }
+    const typed = "W:W'W%W:W'W%W:W'W%W:W'W%W:W'W%W:W'W%W:W"
+    const ink = await inkOf(typed, 'bottom-right', 1080, 1920, 'escapes')
+    expectInside(ink, 'bottom-right', `${typed.length} characters with escapes, ${sizeIn(ink.graph)} px`)
+    expect(sizeIn(ink.graph), 'set below today\'s 67').toBeLessThan(67)
+    expectFillsRoom(ink, 'the escape-heavy text')
+  }, 120_000)
+
+  for (const [label, text] of [['the 33-character URL', URL], ['40 W', WS]] as const) it(`the table against the ink: ${label} at 67 px is never measured wider than the estimate by more than 2 px, and not far narrower`, async (ctx) => {
+    const why = await cannotRun()
+    if (why) {
+      console.warn(`SKIPPED (T-182 drawtext): ${why}`)
+      return ctx.skip()
+    }
+    const { watermarkTextWidth } = await import('../../src/shared/watermark')
+    // A frame wide enough that 67 px fits: the size is today's, so the estimate and the ink are the same text at the same size.
+    const ink = await inkOf(text, 'bottom-right', 3000, 1920, `table-${label}`)
+    expect(sizeIn(ink.graph), 'the wide frame keeps today\'s 67').toBe(67)
+    const measured = ink.x2 - ink.x1 + 1
+    const estimate = watermarkTextWidth(text, 67)
+    // Measured on the distro 6.1.1: the URL 1245.6 estimated against 1242 of ink, 40 W 2529.5 against 2529.
+    expect(estimate, `estimate ${estimate.toFixed(1)} px against ${measured} px of ink: never short by more than 2 px`).toBeGreaterThanOrEqual(measured - 2)
+    expect(estimate - measured, `estimate ${estimate.toFixed(1)} px against ${measured} px of ink: the side bearings and kerning, not a wrong table`).toBeLessThanOrEqual(10)
+  }, 120_000)
+
+  describe('controls: what fits is drawn exactly as before', () => {
+    it('"@sample" bottom-right on 1080x1920 is still 67 px and ends at its margin', async (ctx) => {
+      const why = await cannotRun()
+      if (why) {
+      console.warn(`SKIPPED (T-182 drawtext): ${why}`)
+      return ctx.skip()
+    }
+      const ink = await inkOf('@sample', 'bottom-right', 1080, 1920, 'sample')
+      expect(sizeIn(ink.graph)).toBe(67)
+      expectInside(ink, 'bottom-right', '@sample, 67 px')
+    }, 120_000)
+
+    it('the 33-character URL on a 1920x1080 landscape export is still 38 px and inside the frame', async (ctx) => {
+      const why = await cannotRun()
+      if (why) {
+      console.warn(`SKIPPED (T-182 drawtext): ${why}`)
+      return ctx.skip()
+    }
+      const ink = await inkOf(URL, 'bottom-right', 1920, 1080, 'landscape')
+      expect(sizeIn(ink.graph)).toBe(38)
+      expect(ink.x1, 'inside the left edge').toBeGreaterThanOrEqual(20)
+      expect(ink.x2, 'a right-hand watermark ends at its margin (1900 of 1920)').toBeGreaterThanOrEqual(1890)
+      expect(ink.x2).toBeLessThanOrEqual(1900)
+    }, 120_000)
+  })
+})

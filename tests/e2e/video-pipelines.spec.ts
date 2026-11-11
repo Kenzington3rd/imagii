@@ -15485,3 +15485,76 @@ test.describe('T-174 Track B (5): a late transcription is held for its video', (
     }
   })
 })
+
+// ═══════════════ round 131 Track A (T-182 (3)): the Posting log row keeps the clip's name ═══════════════
+// The row was `flex items-center gap-2` with a `flex-1 truncate` name and an unshrinkable platforms span, so in the 300 px column four platforms left the
+// name 76 px, five left 10 px and all seven 0 px (the name is what the log is scanned for). The row is now the Layers panel's pattern: the name keeps 7rem,
+// the delete button stays beside it on the first line, the platforms take their own line underneath.
+test.describe('round 131 Track A (T-182 (3)): a logged post keeps its name beside the delete button, for 1, 5 and all 7 platforms', () => {
+  const ALL = ['YouTube', 'Reels', 'TikTok', 'X', 'Facebook', 'Twitch', 'Discord']
+  const CASES: Array<[string, string[]]> = [
+    ['One platform clip', ALL.slice(0, 1)],
+    ['Five platform clip', ALL.slice(0, 5)],
+    ['Every platform clip', ALL],
+    ['No platform clip', []]
+  ]
+
+  test('the name span is at least 7rem, every platform is in the row, and the delete button sits inside the row on the name\'s line, at the default window and the minimum', async () => {
+    test.setTimeout(150_000)
+    const studio = await launchWithVideo('diary-name-kept')
+    const { app, window } = studio
+    try {
+      await setWindowSize(app, window, DEFAULT_WINDOW)
+      const card = postCard(window)
+      for (const [name, platforms] of CASES) {
+        await card.getByPlaceholder('Clip name').fill(name)
+        for (const p of platforms) await card.getByRole('button', { name: p, exact: true }).click()
+        await card.getByRole('button', { name: '+ Log post' }).click()
+        await expect(card.getByText(`Logged posts (${CASES.findIndex((c) => c[0] === name) + 1})`)).toBeVisible()
+      }
+      const list = card.locator('div.max-h-60')
+      for (const [size, where] of [
+        [DEFAULT_WINDOW, 'the default 1632 px window'],
+        [MIN_WINDOW, 'the 1024 px minimum']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        for (const [name, platforms] of CASES) {
+          const row = list.locator('div.bg-bg-hover', { has: window.locator('span.truncate', { hasText: name }) })
+          await row.scrollIntoViewIfNeeded()
+          const label = `${name} (${platforms.length} platform${platforms.length === 1 ? '' : 's'}) at ${where}`
+          const nameBox = await row.locator('span.truncate').boundingBox()
+          const rowBox = await row.boundingBox()
+          const delBox = await row.getByRole('button', { name: 'Delete entry' }).boundingBox()
+          expect(nameBox && rowBox && delBox, `${label}: boxes measured`).toBeTruthy()
+          if (!nameBox || !rowBox || !delBox) continue
+          expect(nameBox.width, `${label}: the name keeps at least 7rem`).toBeGreaterThanOrEqual(112)
+          test.info().annotations.push({ type: 'name width', description: `${label}: ${nameBox.width}` })
+          // The platforms are on their own line UNDER the name, for one platform as for seven: the row's shape does not change with the count.
+          if (platforms.length > 0) {
+            const platformsBox = await row.getByText(platforms.join(' · '), { exact: true }).boundingBox()
+            expect(platformsBox, `${label}: the platforms line measured`).toBeTruthy()
+            if (platformsBox) expect(platformsBox.y, `${label}: the platforms sit beneath the name`).toBeGreaterThanOrEqual(nameBox.y + nameBox.height - 0.5)
+          } else {
+            // A post with no platform has no second line: an empty full-width span would still add the row gap under the name.
+            const lineBox = await row.locator('span.truncate').locator('xpath=..').boundingBox()
+            expect(lineBox, `${label}: the name line measured`).toBeTruthy()
+            if (lineBox) expect(lineBox.height, `${label}: the name line is one line high`).toBeLessThanOrEqual(Math.max(nameBox.height, delBox.height) + 1)
+          }
+          const text = await row.innerText()
+          for (const p of platforms) expect(text, `${label}: ${p} is in the row`).toContain(p)
+          expect(delBox.x, `${label}: the delete button is inside the row (left)`).toBeGreaterThanOrEqual(rowBox.x)
+          expect(delBox.x + delBox.width, `${label}: inside the row (right)`).toBeLessThanOrEqual(rowBox.x + rowBox.width + 0.5)
+          expect(delBox.y, `${label}: inside the row (top)`).toBeGreaterThanOrEqual(rowBox.y)
+          expect(delBox.y + delBox.height, `${label}: inside the row (bottom)`).toBeLessThanOrEqual(rowBox.y + rowBox.height + 0.5)
+          const centre = delBox.y + delBox.height / 2
+          expect(centre, `${label}: the delete button is on the name's line (top)`).toBeGreaterThanOrEqual(nameBox.y)
+          expect(centre, `${label}: the delete button is on the name's line (bottom)`).toBeLessThanOrEqual(nameBox.y + nameBox.height)
+        }
+        await expectNoHorizontalOverflow(list, `the Logged posts list at ${where}`)
+      }
+      await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-14-diary-name-kept.png') })
+    } finally {
+      await app.close()
+    }
+  })
+})

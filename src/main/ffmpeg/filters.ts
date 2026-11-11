@@ -2,7 +2,7 @@ import { clipSpeed } from '../../shared/clip'
 import type { Clip, ClipRecipe, CropRect, TextOverlay, WatermarkSpec, ColorGrade } from '../../shared/clip'
 import type { PlatformPreset } from './presets'
 import type { OverlayFont } from '../../shared/textOverlay'
-import { WATERMARK_EDGE_PX, watermarkInset } from '../../shared/watermark'
+import { WATERMARK_BOX_BORDER_PX, WATERMARK_EDGE_PX, watermarkFontSize, watermarkInset } from '../../shared/watermark'
 
 export interface SourceDimensions {
   width: number
@@ -522,7 +522,8 @@ function hypeShakeFilter(): string {
  */
 function watermarkFilter(spec: WatermarkSpec, preset: FilterFrame): string {
   const fontPath = 'C\\:/Windows/Fonts/arialbd.ttf'
-  const fontSize = Math.max(12, Math.round((spec.fontSizePct / 100) * preset.height))
+  // T-182 (2): today's share of the height, or smaller when the handle would not fit between the side margins (a vertical frame).
+  const fontSize = watermarkFontSize(spec, preset)
   const text = escapeDrawtext(spec.text)
   const padding = WATERMARK_EDGE_PX
   const inset = watermarkInset(preset)
@@ -548,7 +549,7 @@ function watermarkFilter(spec: WatermarkSpec, preset: FilterFrame): string {
       break
   }
   const alpha = Math.max(0, Math.min(1, spec.opacity)).toFixed(2)
-  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${fontSize}:fontcolor=white@${alpha}:x=${x}:y=${y}:box=1:boxcolor=black@${(Number(alpha) * 0.4).toFixed(2)}:boxborderw=8`
+  return `drawtext=fontfile='${fontPath}':text='${text}':fontsize=${fontSize}:fontcolor=white@${alpha}:x=${x}:y=${y}:box=1:boxcolor=black@${(Number(alpha) * 0.4).toFixed(2)}:boxborderw=${WATERMARK_BOX_BORDER_PX}`
 }
 
 /**

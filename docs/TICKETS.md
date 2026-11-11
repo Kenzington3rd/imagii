@@ -9297,7 +9297,7 @@ IMG-PREC.
   cores: the expediter runs the FULL Playwright suite once on the merged tree); Track B also `npm run test:media`
   (it changes a filter graph — IMG-PREC); a hand-back with an unrun gate is not finished; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 131)
+- **Status:** done (round 131 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9873,6 +9873,56 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 131 — T-182, the three counted items of sweep 69, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+0342ceb, after a container replacement lost the first round's clones
+(Track B's product code, already accepted, was re-applied
+byte-identical and its tests and docs rewritten). Track A (items 1 and
+3): a mood-board Undo or Redo whose disk write is refused says so —
+one "Couldn't undo that." / "Couldn't redo that." toast through
+`reportFailure` — adopts the disk (keeping the board the person is on
+while it exists, else the one before the press, else the first) and
+puts the history back, only while it is still the object the step set,
+so the same press is offered again; if the disk cannot be read either,
+the boards, selection and history go back to before the press, and the
+write's promise never rejects. The undo/redo write is now a counted
+mutation in the board chain, so a second press while it is out waits
+its turn and steps from what a failure left. The Posting log's logged-
+post row follows the Layers row pattern: `flex flex-wrap`, the name at
+`min-w-[7rem]` beside the delete, the platforms on their own line
+under the name (none drawn for a post with no platforms), so seven
+platforms no longer squeeze the name to 0 px. Track B (item 2):
+`watermarkFontSize` in shared/watermark.ts sets the watermark at the
+smaller of today's size and the largest whole size at which the text
+and its 8 px box border fit between the 20 px side margins, from Arial
+Bold's advance widths (read from Liberation Sans Bold, its metric
+twin; any other character counts as the widest), never below 12;
+`watermarkFilter` uses it and the border is one constant. A short
+handle keeps its size; "youtube.com/@averylongchannelname" on
+1080x1920 is 55 px instead of 67 and no longer starts at x = -182.
+USER_GUIDE says both. Deviations, accepted: an in-place edit of
+useGlobalUndo.test.ts (a Redo pressed while a board Undo's write is
+out now waits for it, by design); the URL handle keeps 47 on 1080x1350
+(it fits; the ticket said it shrinks); Layer 5 cases beyond the brief
+(an escape-heavy text, the ink filling 90% of its room). Expediter:
+Track B's first-round mutation (a space counted as the widest advance)
+survived and was sent back — a code-point walk through the public
+function now kills it; this round's (the frame's width and height
+swapped at the call site) was killed. Track A's (the adopted selection
+ignoring the board the person is on) survived and was sent back with
+the zero-platform row; a select-during-write case now kills it.
+Ledgers: Track A 13 mutations, all killed in the end (`min-w-[7rem]`
+by the wiring pin only: it never binds in the 300 px column; flex-wrap
+and the platforms' basis-full after the e2e gained its platforms-
+beneath-the-name check); Track B 16 mutations x unit and Layer 5, all
+killed at unit, 8 invisible to Layer 5 and disclosed. Gates on the
+merged tree: verify x2 green (211 files, 6832 tests); test:media 515
+passed and 28 skipped of 543 on the bundled 7.0.2, and the new T-182
+describe 11 of 11 on the distro 6.1.1; the full Playwright suite of
+825 cut at 752 by a container restart, all 752 passed, and video-
+pipelines.spec.ts (291, where the cut fell) run whole on the same
+build, 25.4 min, no failures.
 
 Round 130 — T-181, the one counted item, landed in the commit that
 carries this entry. One Sonnet worker in a fresh clone of 9276899.

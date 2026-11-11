@@ -5172,3 +5172,33 @@ describe('round 130 Track A (T-181): a navigation leaves the crash screen - the 
     expect(boundary).toMatch(/onClick=\{\(\): void => \{ this\.setState\(\{ error: null, componentStack: null \}\) window\.location\.hash = '#\/home' \}\}/)
   })
 })
+
+// round 131 Track A (T-182 (1), (3)): the wiring the behavior tests stand on. Behavior: referencesStore.test.ts "T-182 (1)" (the failure, the put-back, the counted write),
+// references.spec.ts / video-pipelines.spec.ts "round 131 Track A" (the real refusal; the row measured). The row's `min-w-[7rem]` only binds in a column narrower than the
+// name plus the delete button, which the 300 px column never is, so no measurement can see it removed: this pins it.
+describe('round 131 Track A - a refused Undo/Redo write is counted and reported; the Posting log row keeps the Layers panel pattern', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const flatOf = (rel: string): string => strip(read(rel)).replace(/\s+/g, ' ')
+
+  it('the undo/redo write is a counted mutation, and a refusal names the direction through reportFailure', () => {
+    const store = flatOf('modules/references/state/referencesStore.ts')
+    expect(store).toContain('if (write) void mutate(write)')
+    expect(store).not.toContain('void run(write)')
+    expect(store).toContain("import { reportFailure } from '../../../lib/reportFailure'")
+    expect(store).toContain(`failed: direction === 'undo' ? "Couldn't undo that." : "Couldn't redo that."`)
+    expect(store).toContain('get().history === after ?')
+  })
+
+  it('the row: wrap, name at 7rem beside the delete button, platforms on a full-width line of their own', () => {
+    const log = flatOf('modules/video-studio/PostChecklist.tsx')
+    expect(log).toContain('<div className="flex flex-wrap items-center gap-x-2 gap-y-1">')
+    expect(log).toContain('<span className="font-medium flex-1 min-w-[7rem] truncate" title={e.outputName}>')
+    const name = log.indexOf('min-w-[7rem]')
+    const del = log.indexOf('aria-label="Delete entry"')
+    expect(log, 'no platform, no second line').toContain('{e.platforms.length > 0 ? <span className="text-ink-dim basis-full">{e.platforms.join(\' · \')}</span> : null}')
+    const platforms = log.indexOf('<span className="text-ink-dim basis-full">{e.platforms.join')
+    expect(name, 'the name, then the delete button, then the platforms').toBeLessThan(del)
+    expect(del).toBeLessThan(platforms)
+    expect(platforms).toBeGreaterThan(0)
+  })
+})

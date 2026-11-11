@@ -304,9 +304,11 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
               key={e.id}
               className="bg-bg-hover rounded px-2 py-1.5 text-xs flex flex-col gap-1"
             >
-              <div className="flex items-center gap-2">
-                <span className="font-medium flex-1 truncate" title={e.outputName}>{e.outputName}</span>
-                <span className="text-ink-dim">{e.platforms.join(' · ')}</span>
+              {/* T-182 (3): the Layers panel's row pattern. The name keeps 7rem (it truncates past that, with its title) and the delete button stays beside it on the first line;
+                  the platforms take a full-width second line for every entry, one platform included, so the row's shape does not change with the count (a post with no platform has no line: an empty one would add the row gap). As a flex-1 sibling
+                  of seven platforms the name was squeezed to 0 px (4 platforms left 76 px, 5 left 10 px). */}
+              <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
+                <span className="font-medium flex-1 min-w-[7rem] truncate" title={e.outputName}>{e.outputName}</span>
                 <button
                   onClick={() => deleteEntry(e)}
                   className="text-ink-dim hover:text-danger"
@@ -315,6 +317,7 @@ export function PostChecklist(_p: PostChecklistProps = {}): JSX.Element {
                 >
                   ✕
                 </button>
+                {e.platforms.length > 0 ? <span className="text-ink-dim basis-full">{e.platforms.join(' · ')}</span> : null}
               </div>
               {/* T-123 (26): `break-words` so a link pasted into the notes wraps instead of widening the list. */}
               {e.notes ? <div className="text-ink-muted break-words">{e.notes}</div> : null}

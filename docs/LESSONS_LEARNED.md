@@ -14,6 +14,38 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-11 - T-182 (round 131), Track A: a step taken before its write has landed owes the person a way back when the write is refused
+
+The sixty-ninth sweep, Track A (items 1 and 3).
+
+### (1) [LOW-MED] - A mood-board Undo or Redo whose disk write failed was silent and spent the step
+
+- **Bug.** `step` moved the history and the boards at once and fired the write. A refused `moodboard.restore` (a full disk; EPERM/EBUSY on the fresh tmp from antivirus, the T-139 class) was answered only by re-listing the disk: no sentence, the deleted board stayed gone, Undo went dark and Redo lit, so the "Deleted - press Ctrl+Z to undo" promise failed without a word. If `list()` also rejected, the rejection escaped as an unhandled one with the UI showing an undo that never landed.
+- **Root cause.** The step was optimistic (it has to be synchronous: Home calls it through the same `() => void` as the other studios) and the failure path only repaired the boards, not the history, and never told anyone. The write was also fired on the UNCOUNTED `run`, so a second press while the first write was out stepped at once and queued its own write: a failure that put the history back could leave that second write on disk under a history that no longer matched it.
+- **Fix.** `writeThrough(direction, before, after, collections)`: on a refused write, one `reportFailure` ("Couldn't undo that." / "Couldn't redo that."), adopt the disk (the selection stays on the current board when the disk still has it, else the one before the press, else the first), and put the history back to its value before the step, so the same press is offered again; if `list()` also rejects, the boards, selection and history all go back to before the step. The history goes back only while it is still the object the step set (a `resetHistory()` in between is a session restore, not an edit to undo). The promise never rejects. The write is now a COUNTED mutation (`mutate`), so a second press waits its turn and steps from the state the failure left; a single press still steps synchronously.
+- **Test.** referencesStore.test.ts "T-182 (1)" (Undo, Redo, both refused, the second press during a failing write, the `resetHistory` guard, the success control); references.spec.ts "round 131 Track A (T-182 (1))" (a non-empty directory where the board's file goes makes the real rename fail, no product hook; clear it and the same Undo lands); interactionWiring.test.ts "round 131 Track A".
+- **Lesson.** **An optimistic step that fires its write must carry the way back with it.** Whatever the step spends (here the history entry) is put back when the write fails, the failure is said in the person's words, and a second press cannot overtake the first. The audit is every store that moves state first and writes after: what does it say, and what does it give back, when the write is refused?
+
+### (3) [MED] - The Posting log row lost the clip's name once a post went to four or more platforms
+
+- **Bug.** The row was `flex items-center gap-2` with a `flex-1 truncate` name and an unshrinkable platforms span: four platforms left the name 76 px, five left 10 px, all seven 0 px in the 300 px column. The name is what the log is scanned for.
+- **Root cause.** DESIGN_GUIDE already names the pattern for a name and its companions (the Layers panel: `flex flex-wrap`, the name at `min-w-[7rem]`); this row was built beside it without it, and the only measurement of the row (T-123 (26)) looked at the stat boxes below the name.
+- **Fix.** The row follows the pattern: the name `flex-1 min-w-[7rem] truncate`, the delete button beside it on the first line, the platforms on a full-width second line (`basis-full`) for EVERY entry, one platform included, so the row's shape does not change with the count.
+- **Test.** video-pipelines.spec.ts "round 131 Track A (T-182 (3))" (1, 5 and all 7 platforms, at the default window and the minimum: the name at least 112 px, every platform in the row, the delete button inside the row and on the name's line, the platforms beneath the name); interactionWiring.test.ts pins the classes and the child order (the `min-w-[7rem]` is never the binding constraint in this column, so no measurement sees it removed).
+- **Lesson.** **A row that holds free text beside a variable-length list needs the wrapping pattern, and its test measures the free text at the list's longest.** A text span that shares a line with a list it cannot outbid shrinks to nothing, and a click-driven test never notices. Measure the part the person reads, at 1 and at the maximum.
+
+## 2026-11-11 - T-182 (round 131), Track B: an estimate that stands in for a renderer is checked against the renderer, and a size that depends on the frame's width cannot come from its height alone
+
+The sixty-ninth sweep, Track B (item 2).
+
+### (2) [LOW-MED] - On a vertical export a long watermark ran off the left edge
+
+- **Bug.** A watermark handle wider than the frame lost its first characters. On 1080x1920 the 33-character "youtube.com/@averylongchannelname" is 1242 px wide at the 67 px the filter always used, so a right-hand corner (`x=w-tw-20`) started it at x = -182; 40 capitals are 1821 px. Reels, TikTok and the Clip Kit's YouTube Short file are where a handle is most often stamped.
+- **Root cause.** The size was a share of the frame's HEIGHT (3.5%) and the position was a function of the text's WIDTH, and nothing joined the two. A landscape frame is wide enough that the product of the two never mattered; a vertical one is the same height and a little over half the width. drawtext's `tw` is known only when it runs, after `fontsize` is chosen, so the filter could not ask it.
+- **Fix.** `watermarkFontSize(spec, frame)` in shared/watermark.ts: today's size, or the largest whole size at which the text plus its 8 px box border fits between the 20 px side margins, never below 12. The width is estimated from a table of Arial Bold's printable-ASCII advances (read from Liberation Sans Bold, its metric twin; any other character counts as the widest advance), measured on the RAW typed text. The border is one constant that both the size and the printed `boxborderw` read. A short handle keeps today's size and its filter is unchanged byte for byte.
+- **Test.** watermark.test.ts "watermarkFontSize (T-182 (2))"; filters.test.ts "the watermark fits the frame (T-182 (2))"; media.spec.ts "the watermark fits the frame (drawtext, T-182)" (real drawtext on the distro 6.1.1: ink measured with `bbox`; red on the base at columns 0, 1 and 1079).
+- **Lesson.** **An estimate that stands in for a renderer's own measurement is pinned to the renderer by a pixel test, and the table is cross-checked against its source, not against itself.** A unit test can say the rule is right (the largest size that fits) and still not know whether the table is the font's; only the real drawtext, measured on a real frame, says the estimate is within 2 px of the ink. And a size that is a share of one dimension, placed by an expression in the other, is a bug waiting for the frame shape that makes the second one smaller than the text.
+
 ## 2026-11-07 - T-181 (round 130), Track A: a fix that makes a control reachable in a new state sweeps what the control does in that state
 
 The sixty-seventh sweep, Track A (item 1).

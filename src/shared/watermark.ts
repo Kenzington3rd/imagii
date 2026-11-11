@@ -61,6 +61,66 @@ export function watermarkInset(frame: { width: number; height: number }): { top:
   }
 }
 
+/**
+ * The width of a watermark (T-182 (2)). drawtext sizes the box from the font, and the filter places a right-hand watermark at `w-tw-20`, so a
+ * handle wider than the frame started at a negative x and its first characters were cut off (33 characters at 67 px on 1080x1920: x = -182).
+ * The filter cannot ask drawtext for `tw` ahead of choosing `fontsize`, so the width is estimated here from the font's own advance widths.
+ *
+ * `ARIAL_BOLD_ADVANCES` is the advance width of each printable ASCII character (0x20 to 0x7E, index = code point - 0x20), in font units of
+ * `ARIAL_BOLD_UNITS_PER_EM`. Source: /usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf (sha256
+ * 3973aa5054fb467dd5627245d3dc82e37bf16fe075756156a570455871351582), `head.unitsPerEm` and the `hmtx` entry of the glyph that `cmap` (platform
+ * 3, encoding 1, format 4) gives for each code point, read by a short script. Liberation Sans Bold is metric-compatible with Arial Bold
+ * (that is what it was made for), so these ARE the advances of the arialbd.ttf the filter names. Kerning is not applied by this estimate
+ * (drawtext applies it); a pair almost always tightens, and the real-media check below measures the difference.
+ */
+export const ARIAL_BOLD_UNITS_PER_EM = 2048
+export const ARIAL_BOLD_ADVANCES: readonly number[] = [
+  569, 682, 971, 1139, 1139, 1821, 1479, 487, 682, 682, 797, 1196, 569, 682, 569, 569, 1139, 1139, 1139,
+  1139, 1139, 1139, 1139, 1139, 1139, 1139, 682, 682, 1196, 1196, 1196, 1251, 1997, 1479, 1479, 1479, 1479, 1366,
+  1251, 1593, 1479, 569, 1139, 1479, 1251, 1706, 1479, 1593, 1366, 1593, 1479, 1366, 1251, 1479, 1366, 1933, 1366,
+  1366, 1251, 682, 569, 682, 1196, 1139, 682, 1139, 1251, 1139, 1251, 1139, 682, 1251, 1251, 569, 569, 1139,
+  569, 1821, 1251, 1251, 1251, 1251, 797, 1139, 682, 1251, 1139, 1593, 1139, 1139, 1024, 797, 573, 797, 1196
+]
+
+const WIDEST_ADVANCE = Math.max(...ARIAL_BOLD_ADVANCES)
+
+/** The box border `watermarkFilter` prints as `boxborderw=` and `watermarkFontSize` leaves room for, one constant so they cannot drift. */
+export const WATERMARK_BOX_BORDER_PX = 8
+
+/** A character's advance, in font units: the table's for printable ASCII, the WIDEST one for anything else (so the estimate never runs short). */
+function advanceOf(ch: string): number {
+  const code = ch.codePointAt(0) ?? 0
+  return code >= 0x20 && code <= 0x7e ? ARIAL_BOLD_ADVANCES[code - 0x20]! : WIDEST_ADVANCE
+}
+
+function advanceSum(text: string): number {
+  let sum = 0
+  for (const ch of text) sum += advanceOf(ch)
+  return sum
+}
+
+/** The width in pixels of `text` set in Arial Bold at `fontSize` px. Pass the RAW text the user typed, never the drawtext-escaped string. */
+export function watermarkTextWidth(text: string, fontSize: number): number {
+  return (advanceSum(text) * fontSize) / ARIAL_BOLD_UNITS_PER_EM
+}
+
+/**
+ * The font size a watermark is drawn at in `frame`: the smaller of today's share of the frame's HEIGHT and the largest whole size at which the
+ * text plus its box border fits between the two side margins. A short handle keeps today's size exactly; only a text that would not fit shrinks.
+ * Never below 12.
+ *
+ * // simplification: at the 12 px floor a 40-character text can still be wider than a very narrow custom frame; 12 is the floor the filter always
+ * had. The upgrade, if such a frame ever matters, is to drop the floor (or wrap the text), not to widen the estimate.
+ */
+export function watermarkFontSize(spec: Pick<WatermarkSpec, 'text' | 'fontSizePct'>, frame: { width: number; height: number }): number {
+  const today = Math.max(12, Math.round((spec.fontSizePct / 100) * frame.height))
+  const sum = advanceSum(spec.text)
+  if (sum === 0) return today
+  const room = frame.width - 2 * WATERMARK_EDGE_PX - 2 * WATERMARK_BOX_BORDER_PX
+  const fit = Math.floor((room * ARIAL_BOLD_UNITS_PER_EM) / sum)
+  return Math.max(12, Math.min(today, fit))
+}
+
 /** Is this stored value one of the corners the picker offers? */
 export function isWatermarkPosition(value: unknown): value is WatermarkSpec['position'] {
   return WATERMARK_POSITIONS.some((p) => p === value)

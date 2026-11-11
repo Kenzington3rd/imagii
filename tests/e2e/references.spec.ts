@@ -4036,3 +4036,61 @@ test.describe('T-172 Track B - the Asset Library card is the shared SpecCard', (
     }
   })
 })
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// round 131 Track A (T-182 (1)): a mood-board Undo whose disk write is refused says so and can be pressed again.
+// The refusal is made by the filesystem, with no product hook: once the board is deleted, a NON-EMPTY DIRECTORY is put where its `<id>.json` would be written
+// (the T-178 trick), so main's rename of the tmp over it fails for real. Removing the directory lets the same Undo land.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('round 131 Track A (T-182 (1)): a refused mood-board Undo says so and is offered again', () => {
+  test('a directory where the board file goes: Undo raises the toast and stays enabled; clear it and the same Undo brings the board back', async () => {
+    test.setTimeout(180_000)
+    const fx = makeFixture('refs-t182-undo-refused')
+    const seeded = boardOwning('refusedboard', 'Refused board', fx.thumbsDir, [])
+    writeFileSync(path.join(fx.boardsDir, 'refusedboard.json'), JSON.stringify(seeded), 'utf8')
+
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      const redo = window.getByRole('button', { name: 'Redo', exact: true })
+      await expect(window.locator('h3.text-lg')).toHaveText('Refused board')
+
+      window.once('dialog', (d) => void d.accept())
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
+      await expect(undo).toBeEnabled()
+
+      // The filesystem refuses the board's name: a non-empty directory cannot be renamed over by a file.
+      const blocker = path.join(fx.boardsDir, 'refusedboard.json')
+      mkdirSync(blocker)
+      writeFileSync(path.join(blocker, 'keep.txt'), 'x', 'utf8')
+
+      await undo.click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t.startsWith("Couldn't undo that.")).length, { timeout: 15_000 })
+        .toBe(1)
+      // The toast is on screen too, and the step was not spent: Undo is still lit, Redo is not, and the board is still gone.
+      await expect(window.getByText(/^Couldn't undo that\./)).toBeVisible()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect(undo).toBeEnabled()
+      await expect(redo).toBeDisabled()
+
+      // The cause is cleared; the same press now lands, on screen and on disk.
+      rmSync(blocker, { recursive: true, force: true })
+      await undo.click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(window.locator('h3.text-lg')).toHaveText('Refused board')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([seeded])
+      expect((await readToastLog(window)).filter((t) => t.startsWith("Couldn't undo that."))).toHaveLength(1)
+      await expect(redo).toBeEnabled()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

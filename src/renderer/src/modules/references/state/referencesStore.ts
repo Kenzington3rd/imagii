@@ -2,6 +2,7 @@ import { create } from 'zustand'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '@shared/search'
 import type { ReferencesTab } from '@shared/workspace'
 import { userFacingError } from '@shared/userFacingError'
+import { reportFailure } from '../../../lib/reportFailure'
 
 // One definition, in shared, because a session snapshot records the tab
 // (T-47) and the validator has to know the same list. Re-exported here so
@@ -123,16 +124,56 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
     return { collections, selectedCollectionId }
   }
 
-  /** Make the boards on disk match the step we just moved to. On failure,
-   *  adopt what the disk really says rather than leaving the UI showing an
-   *  undo that never landed. */
-  function writeThrough(collections: MoodBoardCollection[]): () => Promise<void> {
+  /** Make the boards on disk match the step we just moved to. T-182 (1): a write that is refused (a full disk, EPERM/EBUSY from antivirus on the
+   *  fresh tmp - the T-139 class) used to be answered only by re-reading the disk, in silence, with the step spent: the deleted board stayed gone,
+   *  Undo went dark and Redo lit, and a failing `list()` escaped as an unhandled rejection. Now it says so ("Couldn't undo that."), adopts the disk
+   *  (or, when the disk cannot be read either, the boards as they stood before the press) and puts the history back, so the same press is offered
+   *  again. `before` is the state read before the step; `after` is the history object the step set. Never rejects. */
+  function writeThrough(
+    direction: 'undo' | 'redo',
+    before: BoardsSnapshot & { history: History },
+    after: History,
+    collections: MoodBoardCollection[]
+  ): () => Promise<void> {
     return async () => {
       try {
         await window.api.moodboard.restore(collections)
-      } catch {
-        set({ collections: await window.api.moodboard.list() })
+        return
+      } catch (err) {
+        try {
+          reportFailure(err, {
+            failed: direction === 'undo' ? "Couldn't undo that." : "Couldn't redo that."
+          })
+        } catch {
+          // a toast that cannot be raised must not stop the recovery below
+        }
       }
+      let adopted: BoardsSnapshot
+      try {
+        const listed = await window.api.moodboard.list()
+        const current = get().selectedCollectionId
+        const has = (id: string | null): id is string => !!id && listed.some((c) => c.id === id)
+        adopted = {
+          collections: listed,
+          selectedCollectionId: has(current)
+            ? current
+            : has(before.selectedCollectionId)
+              ? before.selectedCollectionId
+              : (listed[0]?.id ?? null)
+        }
+      } catch {
+        adopted = before
+      }
+      // The history goes back ONLY while it is still the object the step set: a `resetHistory()` (a session restore) in between is not an edit to undo
+      // and must keep its empty history.
+      set(
+        get().history === after
+          ? { ...adopted, history: before.history }
+          : {
+              collections: adopted.collections,
+              selectedCollectionId: adopted.selectedCollectionId
+            }
+      )
     }
   }
 
@@ -140,24 +181,27 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
   function step(direction: 'undo' | 'redo'): (() => Promise<void>) | null {
     const { history, collections, selectedCollectionId } = get()
     const here = { collections, selectedCollectionId }
+    const before = { ...here, history }
     if (direction === 'undo') {
       const last = history.past[history.past.length - 1]
       if (!last) return null
+      const after = { past: history.past.slice(0, -1), future: [here, ...history.future] }
       set({
         collections: last.collections,
         selectedCollectionId: last.selectedCollectionId,
-        history: { past: history.past.slice(0, -1), future: [here, ...history.future] }
+        history: after
       })
-      return writeThrough(last.collections)
+      return writeThrough(direction, before, after, last.collections)
     }
     const next = history.future[0]
     if (!next) return null
+    const after = { past: [...history.past, here], future: history.future.slice(1) }
     set({
       collections: next.collections,
       selectedCollectionId: next.selectedCollectionId,
-      history: { past: [...history.past, here], future: history.future.slice(1) }
+      history: after
     })
-    return writeThrough(next.collections)
+    return writeThrough(direction, before, after, next.collections)
   }
 
   function stepThroughChain(direction: 'undo' | 'redo'): void {
@@ -168,7 +212,10 @@ export const useReferencesStore = create<ReferencesStudioState>((set, get) => {
       return
     }
     const write = step(direction)
-    if (write) void run(write)
+    // T-182 (1): COUNTED (`mutate`, not `run`). Uncounted, a second press while this write was out stepped at once (`mutating` was 0) and queued its own
+    // write; if the first then failed and put the history back, the second could land on disk under a history that no longer matched it. Counted, the
+    // second press waits its turn and steps from the state the failure left. A single press still steps synchronously, here.
+    if (write) void mutate(write)
   }
 
   return {

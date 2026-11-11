@@ -12,6 +12,7 @@ import {
 import { PLATFORM_PRESETS, resolveExportPreset } from './presets'
 import { OVERLAY_FONTS } from '../../shared/textOverlay'
 import type { Clip, TextOverlay } from '../../shared/clip'
+import { watermarkFontSize, watermarkTextWidth } from '../../shared/watermark'
 
 const { escapeDrawtext, safeOverlaySize, safeOverlayColor } = __testing__
 
@@ -1306,5 +1307,63 @@ describe('the overlay position keeps the caption inside the frame (T-151 (1))', 
     )
     expect(graph).toContain(':x=w-tw-20:')
     expect(graph).not.toContain('max(0,min(')
+  })
+})
+
+/**
+ * T-182 (2) - the watermark fits the frame. `watermarkFilter` sets its size with `watermarkFontSize` (today's share of the height, or smaller
+ * when the handle would not fit between the side margins), and the box border it prints is the constant that function leaves room for. Layer 5
+ * (`media.spec.ts`, the drawtext describe for T-182, on a build that has drawtext) measures the ink; these pin what the graph says.
+ */
+describe('the watermark fits the frame (T-182 (2))', () => {
+  const URL = 'youtube.com/@averylongchannelname'
+  const markOf = (text: string) => ({ text, position: 'bottom-right' as const, fontSizePct: 3.5, opacity: 0.85 })
+  const optionsOn = (frame: FilterFrame, text: string, source: { width: number; height: number } = { width: 1920, height: 1080 }): Record<string, string | undefined> => {
+    const graph = buildVideoFilter({ startSec: 0, cropRect: null, textOverlays: [] }, frame, source, markOf(text))
+    return parseDrawtext(graph.slice(graph.indexOf('drawtext=') + 'drawtext='.length)).options
+  }
+
+  it('a tiktok (1080x1920) export of a long handle carries the size watermarkFontSize gives it, under today\'s 67, and the 8 px box border', () => {
+    const options = optionsOn(PLATFORM_PRESETS.tiktok, URL)
+    const want = watermarkFontSize(markOf(URL), PLATFORM_PRESETS.tiktok)
+    expect(want).toBeLessThan(67)
+    expect(options.fontsize).toBe(String(want))
+    expect(options.boxborderw).toBe('8')
+  })
+
+  it('a short handle keeps 67 on the same export', () => {
+    const options = optionsOn(PLATFORM_PRESETS.tiktok, '@sample')
+    expect(options.fontsize).toBe('67')
+    expect(options.boxborderw).toBe('8')
+  })
+
+  it('the whole graph for "@sample" on tiktok is byte for byte what it was before the change (green on the unchanged base)', () => {
+    const graph = buildVideoFilter({ startSec: 0, cropRect: null, textOverlays: [] }, PLATFORM_PRESETS.tiktok, { width: 1920, height: 1080 }, markOf('@sample'))
+    expect(graph).toBe(
+      "fps=30,crop=606:1080:656:0,scale=1080:1920:flags=lanczos,setsar=1," +
+        "drawtext=fontfile='C\\:/Windows/Fonts/arialbd.ttf':text='@sample':fontsize=67:fontcolor=white@0.85:x=w-tw-20:y=h-th-480:box=1:boxcolor=black@0.34:boxborderw=8"
+    )
+  })
+
+  it('a landscape export of the same long handle keeps 38: it fits', () => {
+    expect(optionsOn(PLATFORM_PRESETS.youtube, URL).fontsize).toBe('38')
+  })
+
+  it('every corner gets the same size: the size depends on the text and the frame, not the corner', () => {
+    for (const position of ['top-left', 'top-right', 'bottom-left', 'bottom-right'] as const) {
+      const graph = buildVideoFilter({ startSec: 0, cropRect: null, textOverlays: [] }, PLATFORM_PRESETS.tiktok, { width: 1920, height: 1080 }, { ...markOf(URL), position })
+      expect(graph, position).toContain(`fontsize=${watermarkFontSize(markOf(URL), PLATFORM_PRESETS.tiktok)}:`)
+    }
+  })
+
+  it('the size is measured on the text the user typed, not on the escaped string (an apostrophe, a colon and a percent expand when escaped)', () => {
+    const typed = "W:W'W%W:W'W%W:W'W%W:W'W%W:W'W%W:W'W%W:W"
+    const sizeOf = (text: string): number => watermarkFontSize(markOf(text), PLATFORM_PRESETS.tiktok)
+    const escaped = escapeDrawtext(typed)
+    expect(escaped.length).toBeGreaterThan(typed.length)
+    // The case has teeth: measuring the escaped string would give a different size.
+    expect(sizeOf(escaped)).not.toBe(sizeOf(typed))
+    expect(watermarkTextWidth(typed, sizeOf(typed)) + 16).toBeLessThanOrEqual(1040)
+    expect(optionsOn(PLATFORM_PRESETS.tiktok, typed).fontsize).toBe(String(sizeOf(typed)))
   })
 })

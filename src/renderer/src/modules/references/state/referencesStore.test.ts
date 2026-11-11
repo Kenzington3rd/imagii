@@ -2,6 +2,23 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
 import type { MoodBoardCollection, MoodBoardItem, SearchResult } from '@shared/search'
 import { useReferencesStore } from './referencesStore'
 
+// T-182 (1): the failure toast of a refused Undo/Redo write. Hoisted because the store is imported statically above.
+const toasts = vi.hoisted(() => [] as Array<{ kind: 'error' | 'plain'; text: string }>)
+vi.mock('react-hot-toast', () => {
+  const plain = (text: string): string => {
+    toasts.push({ kind: 'plain', text })
+    return 'id'
+  }
+  return {
+    default: Object.assign(plain, {
+      error: (text: string) => {
+        toasts.push({ kind: 'error', text })
+        return 'id'
+      }
+    })
+  }
+})
+
 /**
  * T-58 — the references history.
  *
@@ -104,6 +121,7 @@ async function settle(): Promise<void> {
 beforeEach(() => {
   disk = []
   restoreCalls.length = 0
+  toasts.length = 0
   nextId = 0
   vi.stubGlobal('window', { api: { moodboard: moodboardApi } })
   useReferencesStore.setState({
@@ -856,5 +874,223 @@ describe('a rename that changes nothing is not an edit (T-169 (2), the class of 
   it('a rename of a board the store does not hold still goes to main (it decides)', async () => {
     await store().renameCollection('ghost', 'Anything')
     expect(renameCalls).toEqual([['ghost', 'Anything']])
+  })
+})
+
+describe('T-182 (1): an Undo or Redo whose disk write is refused says so and can be pressed again', () => {
+  const EPERM = (): Error => new Error("EPERM: operation not permitted, rename 'board.json.tmp'")
+  const withApi = (over: Partial<typeof moodboardApi>): void => {
+    vi.stubGlobal('window', { api: { moodboard: { ...moodboardApi, ...over } } })
+  }
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 20))
+  const errorToasts = (): string[] => toasts.filter((t) => t.kind === 'error').map((t) => t.text)
+
+  /** Two boards, then Beta deleted: the disk holds [Alpha], Undo holds the delete. */
+  async function betaDeleted(): Promise<void> {
+    await store().createCollection('Alpha')
+    await store().createCollection('Beta')
+    await store().deleteCollection('board-2')
+    expect(diskNames()).toEqual(['Alpha'])
+  }
+
+  it('(a) a refused Undo raises one "Couldn\'t undo that." toast, shows the disk, and offers the same Undo again', async () => {
+    await betaDeleted()
+    withApi({ restore: () => Promise.reject(EPERM()) })
+    store().undo()
+    await settle()
+    expect(errorToasts()).toHaveLength(1)
+    expect(errorToasts()[0]).toContain("Couldn't undo that.")
+    expect(names(), 'the boards are what the disk holds').toEqual(diskNames())
+    expect(names()).toEqual(['Alpha'])
+    expect(store().canUndo(), 'the step is not spent').toBe(true)
+    expect(store().canRedo(), 'Redo is as it was before the press').toBe(false)
+  })
+
+  it('(a) the same Undo then lands once the write works again', async () => {
+    await betaDeleted()
+    withApi({ restore: () => Promise.reject(EPERM()) })
+    store().undo()
+    await settle()
+    withApi({})
+    store().undo()
+    await settle()
+    expect(names()).toEqual(['Alpha', 'Beta'])
+    expect(diskNames()).toEqual(['Alpha', 'Beta'])
+    expect(errorToasts()).toHaveLength(1)
+    expect(store().canUndo()).toBe(true)
+    expect(store().canRedo(), 'the delete is on the Redo side now').toBe(true)
+  })
+
+  it('(b) a refused Redo raises one "Couldn\'t redo that." toast and offers Redo again, Undo as before', async () => {
+    await betaDeleted()
+    store().undo()
+    await settle()
+    expect(names()).toEqual(['Alpha', 'Beta'])
+    const past = store().history.past.length
+    withApi({ restore: () => Promise.reject(EPERM()) })
+    store().redo()
+    await settle()
+    expect(errorToasts()).toHaveLength(1)
+    expect(errorToasts()[0]).toContain("Couldn't redo that.")
+    expect(errorToasts()[0]).not.toContain("Couldn't undo that.")
+    expect(names()).toEqual(diskNames())
+    expect(names()).toEqual(['Alpha', 'Beta'])
+    expect(store().canRedo(), 'the step is not spent').toBe(true)
+    expect(store().history.past, 'Undo is as it was before the press').toHaveLength(past)
+  })
+
+  it('(c) restore AND list refused: nothing escapes, and boards, selection and history are as before the press', async () => {
+    await betaDeleted()
+    store().selectCollection('board-1')
+    const before = clone({
+      collections: store().collections,
+      selectedCollectionId: store().selectedCollectionId,
+      history: store().history
+    })
+    withApi({ restore: () => Promise.reject(EPERM()), list: () => Promise.reject(new Error('EBUSY')) })
+    const seen: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      seen.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      store().undo()
+      await flush()
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+    expect(seen, 'no unhandled rejection').toEqual([])
+    expect(errorToasts()).toHaveLength(1)
+    expect(clone(store().collections)).toEqual(before.collections)
+    expect(store().selectedCollectionId).toBe(before.selectedCollectionId)
+    expect(clone(store().history)).toEqual(before.history)
+  })
+
+  it('(c) the selection stays on the current board when the disk still has it, else falls back to before\'s, else the first', async () => {
+    await betaDeleted()
+    // Undo of the delete moves the selection to Beta (the board the step snapshot held); the disk has no Beta, so the selection goes back to before\'s.
+    store().selectCollection('board-1')
+    withApi({ restore: () => Promise.reject(EPERM()) })
+    store().undo()
+    await settle()
+    expect(store().selectedCollectionId).toBe('board-1')
+  })
+
+  it('(d) a second Undo pressed while the first write is out steps from the state the failure left', async () => {
+    await store().createCollection('Alpha')
+    await store().createCollection('Beta')
+    expect(diskNames()).toEqual(['Alpha', 'Beta'])
+    let rejectFirst: (e: Error) => void = () => {}
+    let calls = 0
+    withApi({
+      restore: (collections: MoodBoardCollection[]) => {
+        if (++calls === 1) {
+          restoreCalls.push(clone(collections))
+          return new Promise<void>((_, reject) => {
+            rejectFirst = reject
+          })
+        }
+        return moodboardApi.restore(collections)
+      }
+    })
+    store().undo() // Beta's create undone on screen; its write is out
+    store().undo() // pressed while it is out
+    await flush() // the first write has been handed to restore and is pending
+    expect(calls).toBe(1)
+    rejectFirst(EPERM())
+    await settle()
+    await flush()
+    expect(errorToasts()).toHaveLength(1)
+    // The failure put the first step back; the second press then stepped ONCE from there, so the screen, the disk and the history agree.
+    expect(names(), 'the screen shows what the disk holds').toEqual(diskNames())
+    expect(names()).toEqual(['Alpha'])
+    expect(restoreCalls[restoreCalls.length - 1]!.map((c) => c.name)).toEqual(['Alpha'])
+    expect(store().history.past).toHaveLength(1)
+    expect(store().history.future).toHaveLength(1)
+  })
+
+  it('(e) a resetHistory() while a refused write is out is not undone: the history stays empty', async () => {
+    await betaDeleted()
+    let rejectWrite: (e: Error) => void = () => {}
+    withApi({
+      restore: () =>
+        new Promise<void>((_, reject) => {
+          rejectWrite = reject
+        })
+    })
+    store().undo()
+    store().resetHistory()
+    await flush() // the write has been handed to restore and is pending
+    rejectWrite(EPERM())
+    await settle()
+    expect(errorToasts()).toHaveLength(1)
+    expect(store().history.past).toHaveLength(0)
+    expect(store().history.future).toHaveLength(0)
+    expect(names(), 'the boards still adopt the disk').toEqual(diskNames())
+  })
+
+  /** Alpha, Beta, Gamma made (Gamma selected), Gamma deleted (selection to Alpha): the disk holds [Alpha, Beta]; Undo's step selects Gamma, which is not on the disk. */
+  async function gammaDeleted(): Promise<void> {
+    await store().createCollection('Alpha')
+    await store().createCollection('Beta')
+    await store().createCollection('Gamma')
+    await store().deleteCollection('board-3')
+    expect(diskNames()).toEqual(['Alpha', 'Beta'])
+    expect(store().selectedCollectionId).toBe('board-1')
+  }
+
+  /** An Undo whose write is held open; resolves with the function that refuses it, after the write has reached `restore`. */
+  async function undoHeldOpen(): Promise<() => void> {
+    let refuse: (e: Error) => void = () => {}
+    withApi({
+      restore: () =>
+        new Promise<void>((_, reject) => {
+          refuse = reject
+        })
+    })
+    store().undo()
+    await flush()
+    return () => refuse(EPERM())
+  }
+
+  it('(g) a board clicked while the write is out stays selected when the write is refused (the current board wins while the disk has it)', async () => {
+    await gammaDeleted()
+    const refuse = await undoHeldOpen()
+    expect(store().selectedCollectionId, 'the step moved the selection to Gamma').toBe('board-3')
+    store().selectCollection('board-2')
+    refuse()
+    await settle()
+    expect(store().selectedCollectionId).toBe('board-2')
+  })
+
+  it('(g) the current board is not on the disk: the selection falls back to the one before the press, not the first board', async () => {
+    await gammaDeleted()
+    store().selectCollection('board-2')
+    const refuse = await undoHeldOpen()
+    expect(store().selectedCollectionId).toBe('board-3')
+    refuse()
+    await settle()
+    expect(store().selectedCollectionId).toBe('board-2')
+  })
+
+  it('(g) neither the current nor the earlier board is on the disk: the selection is the first board on the disk', async () => {
+    await gammaDeleted()
+    store().selectCollection('ghost')
+    const refuse = await undoHeldOpen()
+    refuse()
+    await flush() // not `settle()`: a re-read applies this same rule and would hide the write's own
+    expect(store().selectedCollectionId).toBe('board-1')
+  })
+
+  it('(f) control: a succeeding Undo raises no toast, spends the step, and is applied synchronously', async () => {
+    await betaDeleted()
+    store().undo()
+    expect(names(), 'applied on the spot, before any write lands').toEqual(['Alpha', 'Beta'])
+    expect(store().canUndo()).toBe(true)
+    expect(store().canRedo()).toBe(true)
+    await settle()
+    expect(diskNames()).toEqual(['Alpha', 'Beta'])
+    expect(toasts).toEqual([])
+    expect(store().history.future).toHaveLength(1)
   })
 })
