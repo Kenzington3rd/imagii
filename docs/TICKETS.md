@@ -9299,6 +9299,128 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 131 — see the Done entry)
 
+## T-183 — sweep-70 fixes (round 132)
+
+- **Spec:** the seventieth sweep's verified findings (candidate clean pass #1 on cc57b10, the T-182 tree; the count
+  stays at 0). Item 1 found by the a11y reader (the expediter swept the class — every percent the renderer draws — and
+  found this the only site); item 2 found and executed by the QA main reader (the expediter swept the class: every file
+  name main derives from a person's name); items 3 and 4 found and measured by design reader 1 (its third, Record's
+  hand-drawn convert bar, is the exemption `runningJobControls.test.ts:32` records, not counted). Not counted: no `-protocol_whitelist` (measured by the
+  expediter: a local `.m3u8` naming an http segment is refused "not on whitelist file,crypto,data" and an ffconcat
+  naming one "Unsafe file name" on 7.0.2 and 6.1.1, and `.m3u8` is not an import type); full user paths in console logs
+  (nothing writes a log file); Home's Undo order after a refused References undo (the retry lands on References, as
+  expected); duplicate default clip and Highlight names (exports dedupe to "(2)"); ExportPanel's mount read against a
+  watermark typed in its first milliseconds; a posting-log load failure followed by an add (the IPC-refusal class);
+  per-panel option state reset on leaving a studio (settings, not work); Templates replacing a populated canvas without
+  asking (its footer says so; one Undo); the 10x16 delete and 14x14 speed-reset hit targets (polish); the 12 px
+  watermark floor on very narrow custom frames (the documented simplification); burn-in's `-c:a copy` (T-110 (ab)); a
+  hand-edited preset's lowercase "m" bitrate; names over 255 or with a tab (refused at the gate); the desktop-capture
+  frame rate (the owner hand-check). Every other reader clean on its lens. Two tracks, disjoint files.
+
+  **Track A — the Export queue's percent stops speaking every tick (item 1); the ducking sliders fit their column
+  (item 3); the grid-size box says what it is (item 4).** Renderer only, disjoint from Track B.
+  1. **[LOW] The Export queue announces every percent to a screen reader**
+     (modules/video-studio/ExportPanel.tsx:633-638). Each queue row's percent is `<span role="status"
+     aria-live="polite">{Math.round(j.percent)}%</span>`, and `exportQueue.ts:104-105` writes every `video:progress`
+     event into the row (main forwards ffmpeg's progress unthrottled, `ipc/video.ts:316-318`), so a screen-reader user
+     exporting a batch hears the percent re-read at each integer change — up to 100 announcements per file, four rows at
+     once in a two-clip, two-platform batch. The row's `ProgressTrack` (`role="progressbar"`, named, `aria-valuenow`)
+     already carries the value. The app's own later rule says the opposite: VideoJobsRunning.tsx:214-215 and
+     AudioJobRunning.tsx:21 make their moving percents `aria-hidden` because "a percent that moves several times a
+     second would be read out each time from a polite region" (T-144, T-146); the T-114 choice in the open Export panel
+     ("the percent beside it stays the live region that speaks", IC:2700) was never carried forward. Fix:
+     - The percent span becomes `aria-hidden="true"` with no `role` and no `aria-live` (its look unchanged). The
+       progressbar keeps the value. The T-114 comment above it says why (the T-144/T-146 rule, cited).
+     - The row's outcome words ("Canceled", "Failed", "Not run") are unchanged and stay where they are; the batch's end
+       is announced by its toast, as today.
+     - The panel's always-mounted status region (T-153, :458) is unchanged.
+  3. **[LOW] The ducking "Threshold" readout runs out of its column at the default window**
+     (modules/audio-studio/SecondaryTrackPanel.tsx:175 the `grid grid-cols-2 gap-3` of the four DuckSliders, :243-263
+     `DuckSlider`). Each slider's header is `flex justify-between gap-2` with a `whitespace-nowrap` mono readout; in the
+     300 px side column (the 1024 minimum and the default 1632 window) a column is 116 px, and "Threshold" + gap +
+     "-26 dBFS" need 124: measured, the readout overhangs its slider by 7 px and sits 5 px from the next column's
+     "Ratio" (it reads "Threshold -26 dBFS Ratio 8:1"); every Threshold value is 8 characters. T-126 (12)'s gap-2 fixed
+     the 2560 case only. Duck is on by default for music and game audio, so a second track shows it. Fix: the four
+     sliders are ONE column (`grid-cols-1`, the gap and the card's left rule unchanged) — the house row every other
+     slider in Audio Studio uses (label left, readout right, the track under it), so no width can squeeze a readout into
+     its neighbour. Nothing else in the card changes.
+  4. **[LOW] The Stream Graphics grid-size box is a bare number** (modules/image-studio/Toolbar.tsx:94-110). The toolbar
+     draws `[ ] Grid [ ] Snap [ 20 ]`: the box's only name is a hover `title` and an `aria-label`, so a sighted person
+     sees an unlabelled 20 beside "Snap" — BRANDING's "A bare number is not a value" (T-153 (7) changed bare x / y to "X
+     (px)" / "Y (px)" under the same rule). Fix: the box sits in a `<label>` whose visible text is "Grid size (px)"
+     (Properties' "Size (px)" pattern), its `aria-label` kept (its name still begins with the visible words, WCAG
+     2.5.3); the toolbar stays one line, wrapping nothing, at 1024x640 and at the widest window the existing toolbar e2e
+     uses.
+
+  Covering tests: Track A — e2e: the two existing pins that find the percents by role (video-pipelines.spec.ts ~:3019
+  "four live percents" and ~:8165) move to the row text / the progressbar's `aria-valuenow`, IN PLACE, listed; a NEW
+  describe at the END of video-pipelines.spec.ts: during a running export the queue card holds no `role="status"`
+  element other than the panel's T-153 region (count, and that region's text unchanged), the percent span is
+  `aria-hidden="true"` and still visibly reads the percent, and each row's progressbar reports the same value (red on
+  the base: the role finds the percent spans). Unit/wiring (interactionWiring.test.ts, NEW describe at the END):
+  ExportPanel's percent span carries `aria-hidden` and no `aria-live`; no `aria-live` region in ExportPanel wraps a
+  rendered percent. Item 3 — e2e (audio.spec.ts NEW describe): a second track with Duck on, at 1024x640 and the default
+  1632x918 and 2560x1440, each DuckSlider's readout box lies inside its slider's box (right edge ≤ the track's right
+  edge) and at least 12 px from any other slider's label, for the widest Threshold value and after dragging Threshold
+  across its range; the four sliders are one column (red on the base: the 7 px overhang); the existing "apart" check
+  (~:2667) stays green. Item 4 — e2e (image.spec.ts NEW describe): the text "Grid size (px)" is visible beside the box
+  and its label (getByLabel) is the box; the toolbar is one line with no horizontal overflow at 1024x640 (red on the
+  base). Wiring pins for both.
+
+  **Track B — a name the gate accepts can be written (item 2).**
+  2. **[LOW] A file name of 239-255 characters passes the gate and then cannot be written**
+     (main/ffmpeg/partialOutput.ts:54-57 `partialPathFor`; main/ipc/video.ts:135-139 `assertPlainMp4Name`, whose comment
+     promises "within a file system's 255 characters"). T-140's partial is `<stem>.<8 hex>.partial<ext>`, 17 characters
+     longer than the target, so a 239-255-character name — Export's `{source}_{clip}_{preset}` with a long VOD title,
+     or a long pasted clip name (`NameDialog` has no cap) — hands ffmpeg a 256-272-character name: "File name too long"
+     (NTFS's and ext4's 255-unit component limit), and the person reads "Export failed. ... Check that the source file
+     still plays and the folder has room" — neither is the cause (executed on 7.0.2 by the reader: 238 writes, 239 and
+     255 fail; before T-140 these wrote). Siblings, the same class (a suffix on a person's name with no fit): the ranged
+     burn-in's `shiftedSrtPath` (+46: a 192-character video name fails with ENAMETOOLONG and the generic burn-in line,
+     executed), and every name main derives — `nextFreePath`'s " (N)", Reframe / GIF / Compile names built from the
+     source and clip, the import copy `<base>-<nanoid>.mp4` (convert.ts:365), the transcript base
+     `<name>-<Date.now()>` (whisperManager.ts:252), the re-attach's `.cleaned.wav`. Not the ledgered kit MAX_PATH
+     owner hand-check (the whole path's length; TICKETS 3332/13047) — this is one name's 255. Fix:
+     - shared/filename.ts gains `fitFileName(stem: string, suffix: string, maxBytes = 255): string` (pure; unit-tested
+       beside it): the stem cut at a whole code point so that the UTF-8 byte length of stem + suffix is at most
+       `maxBytes` (UTF-8 bytes bound both NTFS's 255 UTF-16 units and ext4's 255 bytes), trailing spaces and dots
+       trimmed from a cut stem (Windows drops them), and an unchanged stem when it already fits.
+     - It is applied at the funnels: `partialPathFor` (the partial is a hidden temp; its name need not match the
+       target), `nextFreePath` (the wanted name itself when it is over, and each " (N)" candidate), and the names main
+       builds outside them — the import copy, the transcript base, `shiftedSrtPath` (its `isShiftedSrtName` pattern must
+       still match a fitted name), the re-attach's `.cleaned.wav`. Grep for any other `${…}` file name built from a
+       person's name in src/main and src/shared and list each site and its disposition in the hand-back. A FINAL output
+       whose name is fitted lands under the fitted name, which the success toast and Show in folder already report.
+     - shared/userFacingError.ts maps ENAMETOOLONG / "File name too long" / "name too long" to a sentence of its own
+       (BRANDING voice; e.g. "That file name is too long for the drive. Shorten the clip's or the video's name and try
+       again."), so any site not fitted still says what happened.
+
+  Covering tests: Track B — unit (filename.test.ts NEW describe): `fitFileName` keeps a short stem; cuts a 300-ASCII
+  stem to exactly 255 bytes with the suffix; never splits a surrogate pair or a multi-byte character (a stem of "é" and
+  of an astral glyph); trims a trailing space/dot left by the cut; red on the base (no such function). partialOutput /
+  outputPath tests (NEW describes): a 255-character target's partial is at most 255 bytes and `commitPartial` lands at
+  the target's exact name; `nextFreePath` on a taken 255-character name returns a fitted " (2)". captions tests:
+  `shiftedSrtPath` of a 250-character srt path's name is at most 255 bytes and `isShiftedSrtName` still matches it.
+  userFacingError tests: the new sentence for each spelling, and the fallback unchanged for others. Layer 5
+  (media.spec.ts NEW describe; real bundled 7.0.2): `runExportJob` with a 255-character `outputFilename` writes a
+  playable file at that exact name (ffprobe: duration and streams), red on the base ("File name too long"); a ranged
+  burn-in of a video with a 200-character name succeeds (red on the base: ENAMETOOLONG) — or disclose why burn-in cannot
+  run here and cover `shiftedSrtPath` at the unit level.
+
+  **Docs:** IC rows in place — Video 4j (T-114: "the percent beside it is aria-hidden; the bar carries the value; the
+  T-144/T-146 rule"), the second-track Duck sliders (one column), the Toolbar grid size (its visible label) — plus a NEW
+  section appended at the end ("round 132, Track A"); TESTING paragraph; LESSONS entry at
+  the TOP; USER_GUIDE only if it says the percent is read out (grep). Track B: an IC disposition row (a long name is
+  shortened to fit; the new sentence); TESTING paragraph; LESSONS entry at the TOP; USER_GUIDE one sentence where
+  file naming is described (a name too long for the drive is shortened to fit).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice before handback; Track A also a build and
+  video-pipelines.spec.ts run whole; Track B also `npm run test:media` (it changes the output names ffmpeg is handed —
+  IMG-PREC) and any e2e spec it touches run whole; the expediter runs the FULL Playwright suite on the merged tree; a
+  hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
+  explicit PID only.
+- **Status:** open (round 132)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
