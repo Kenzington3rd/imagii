@@ -9650,6 +9650,60 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 134 — see the Done entry)
 
+## T-186 — sweep-73 fixes (round 135)
+
+- **Spec:** the seventy-third sweep's verified findings (candidate clean pass #1 on 20a78a8, the T-185 tree; the count
+  stays at 0). Item 1 found by UX reader 1: a sibling of the T-113 / T-114 overlay Color box at sites no disposition
+  names (sweep 72's UX reader 1 weighed the same boxes as polish, an adjudication that was never ledgered). Not counted:
+  UX reader 2's stray-drop navigation (T-110 (aj): REFUTED, `navigateOnDragDrop` defaults to false; re-checked in the
+  installed Electron 31.7.7's own typings); AltGr+Z on a Polish layout reaching Ctrl+Z outside a text field (it arrives
+  as Ctrl+Alt+Z, which undoes on a US layout too; a key typed outside a text field is a studio shortcut by design); a
+  Russian Shift+period stepping back while the ю key steps forward (the printed-ASCII rule); the "Last autosave" line not
+  ticking while Home stays open; the hand-built Record convert and waveform progress bars (a11ySweep-pinned); Home's
+  header chrome at 2560 wide; a small source's preview at its natural size; Line and Pencil layers having no stroke
+  colour in Properties (a missing feature); the Stream Graphics canvas area not being a drop target (the zone is the
+  bar); the Fix wizard's missing Back step; Preset Apply's "Applied" on an unchanged chain; an MKV subtitle track (T-161,
+  refuted); the audio and streamer readers' unmeasured notes. One track so far (renderer: image-studio/PropertiesPanel.tsx
+  and one colour helper); QA main and ffmpeg were still out when this ticket was written, and a finding from them becomes
+  Track B.
+
+  **Track A — a colour box says when it cannot draw what was typed (item 1).**
+  1. **[LOW] Stream Graphics' Fill, Stroke and text Color boxes take any text and draw it black, with no word**
+     (modules/image-studio/PropertiesPanel.tsx:166-185, the rectangle / ellipse Fill and Stroke, and :237-247, the text
+     Color: bare `<input type="text">`s whose every keystroke is `updateLayer(…, { fill | stroke: e.target.value })`). A
+     colour the canvas cannot parse — a hex pasted without its `#` (`ff3131`, the form design tools copy), a typo, an
+     emptied box — is stored as typed: the canvas ignores an unparseable `fillStyle`, so the shape is drawn in the
+     context's default black (an emptied box draws no fill, and a text layer goes invisible), and the value rides into
+     the export, the autosave and Save project. Nothing refuses it or says why, while Video Studio's overlay Color box
+     resolves names and codes and refuses an unknown one in a sentence (TextOverlayEditor.tsx:163-175,
+     `resolveOverlayColor`; USER_GUIDE "Text overlays"), and every number box in the same panel is a DraftField. Fix:
+     - ONE helper, `resolveCanvasColor(typed, supports)` (renderer, beside the image studio's state or in lib/; pure,
+       with the platform check injected so the node unit test drives it): `resolveOverlayColor(typed)` first (a CSS name
+       in any case, `#rrggbb` or `rrggbb`, `#rgb` → `#rrggbb`); otherwise the trimmed text when `supports(text)` is true
+       (the canvas's other colours: `rgba()` / `rgb()` / `hsl()`, `#rgba`, `#rrggbbaa`, `transparent` — the templates'
+       `withAlpha` fills are `rgba(...)`); otherwise `null`. The renderer passes `(v) => CSS.supports('color', v)`.
+     - The three boxes become DraftFields in the overlay Color box's shape: `live` is "the text resolves", so a usable
+       colour still previews on the canvas as it is typed (one Undo step, the `'fill'` / `'stroke'` key as today), and
+       `commit` stores the resolved value or returns a refusal sentence (a constant, in the overlay refusal's voice,
+       naming the accepted forms: a name, a code like #ffcc00, or transparent); the box keeps the last good colour. An
+       empty box is refused the same way (no fill is `transparent`). A placeholder names the forms.
+     - Unchanged: the stored shape of a layer; project validation (a crafted project's colour stays the T-110 (g)
+       class); Line and Pencil layers (no colour box).
+  Covering tests: unit (NEW describe) — `resolveCanvasColor`: names in any case, `#ffcc00`, `ffcc00` → `#ffcc00`,
+  `#fc0` → `#ffcc00`, `rgba(255,0,0,0.4)` and `transparent` kept as typed when `supports` says so, `blu`, `#ff313`, an
+  empty string and `ff31` → null (with a `supports` that refuses them), the overlay resolver's own answers unchanged.
+  e2e (image.spec.ts NEW describe): a rectangle's Fill typed `ff3131` stores and draws `#ff3131` (a stage pixel read:
+  red); `blu` and leaving the box shows the refusal sentence, keeps the previous fill (the pixel unchanged) and stores
+  nothing; the text Color the same; a template layer's `rgba(...)` fill is shown as is and survives an edit of another
+  property; one Undo reverts a typed colour. Red on the base each. Wiring: interactionWiring.test.ts pins that no
+  image-studio colour box is a bare `<input>` committing `e.target.value`. Docs: IC rows for the Properties Fill /
+  Stroke / Color boxes revised in place, a "Dispositions - round 135" section; USER_GUIDE's Stream Graphics Properties
+  sentence (what the boxes take, the refusal); LESSONS at the TOP; TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (the expediter runs test:media and the full suite on the merged tree); no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 135)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
