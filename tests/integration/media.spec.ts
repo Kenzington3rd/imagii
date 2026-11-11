@@ -13136,3 +13136,154 @@ describe('the watermark fits the frame (drawtext, T-182)', () => {
     }, 120_000)
   })
 })
+
+/**
+ * T-183 (2): a name the gate accepts can be written. Executed on the bundled 7.0.2: `assertPlainMp4Name` admits a name of up to 255 characters, and
+ * T-140's partial is `<stem>.<8 hex>.partial<ext>` (17 more), so a 239-255-character export name handed ffmpeg a 256-272-character one: "File name too long"
+ * (238 wrote, 239 and 255 did not). The same class: a ranged burn-in's shifted SRT (+46: a 192-character video name failed with ENAMETOOLONG), the compile /
+ * GIF / Reframe names built from the source and clip, the import copy `<base>-<id>.mp4`, the re-attach's `.cleaned.wav`. Every name here goes through the real
+ * production runner and the real binary, and what comes back is a file ffprobe reads, at the name the runner REPORTS. These run on this platform's file system
+ * (ext4 / tmpfs: 255 BYTES per component, the stricter of the two bounds `fitFileName` holds).
+ */
+describe('a file name near the file system\'s 255 is shortened to fit and still written (real ffmpeg, T-183 (2))', () => {
+  let dir = ''
+  const bytes = (p: string): number => Buffer.byteLength(path.basename(p), 'utf8')
+  const playable = async (file: string, wantAudio = true): Promise<void> => {
+    const probe = await ffprobeJson(file)
+    expect(probe.streams.some((s) => s.codec_type === 'video'), `${path.basename(file).slice(0, 40)}... has a picture`).toBe(true)
+    if (wantAudio) expect(probe.streams.some((s) => s.codec_type === 'audio'), 'and a sound').toBe(true)
+    expect(Number(probe.format.duration ?? 0), 'and a length').toBeGreaterThan(0.5)
+  }
+  const fresh = async (name: string): Promise<string> => mkdtemp(path.join(dir, `${name}-`))
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(workDir, 't183-'))
+  })
+
+  it('an export named with 255 characters writes a playable file at EXACTLY that name, and a second one lands as a fitted " (2)"', async () => {
+    const out = await fresh('export-255')
+    const name = `${'a'.repeat(251)}.mp4`
+    expect(name.length).toBe(255)
+    const first = await runExportJob({ ...makeJob(rampSrc, 'twitter', makeClip({ startSec: 2, endSec: 3 }), 't183-export-1'), outDir: out, outputFilename: name }, () => {})
+    expect(path.basename(first.outputPath), 'the landed name is the one that was asked for').toBe(name)
+    await playable(first.outputPath)
+    expect(Number((await ffprobeJson(first.outputPath)).format.duration)).toBeGreaterThan(0.8)
+    // The same name again: the old export is not replaced, and the " (2)" is a name that fits.
+    const second = await runExportJob({ ...makeJob(rampSrc, 'twitter', makeClip({ startSec: 3, endSec: 4 }), 't183-export-2'), outDir: out, outputFilename: name }, () => {})
+    expect(path.basename(second.outputPath)).toBe(`${'a'.repeat(247)} (2).mp4`)
+    expect(bytes(second.outputPath)).toBe(255)
+    await playable(second.outputPath)
+    expect((await readdir(out)).sort(), 'two exports and no partial left behind').toEqual([path.basename(second.outputPath), name].sort())
+    expect(existsSync(second.outputPath)).toBe(true)
+  }, 180_000)
+
+  it('Export\'s default name `{source}_{clip}_{preset}` of a clip with a very long name is fitted, and the path the job reports is the file that exists', async () => {
+    const out = await fresh('export-default')
+    const res = await runExportJob({ ...makeJob(rampSrc, 'twitter', makeClip({ name: 'c'.repeat(300), startSec: 2, endSec: 3 }), 't183-default'), outDir: out }, () => {})
+    expect(bytes(res.outputPath)).toBeLessThanOrEqual(255)
+    expect(path.basename(res.outputPath).startsWith('ramp_cccc')).toBe(true)
+    expect(path.basename(res.outputPath).endsWith('_twitter.mp4'), 'the preset tag is kept, the clip name is what is cut').toBe(true)
+    expect(path.dirname(res.outputPath)).toBe(out)
+    await playable(res.outputPath)
+    expect(await readdir(out)).toEqual([path.basename(res.outputPath)])
+  }, 120_000)
+
+  it('a name of two-byte letters that is under 255 CHARACTERS but 254 BYTES is written too (the partial is over in bytes, not in characters)', async () => {
+    const out = await fresh('export-bytes')
+    const name = `${'é'.repeat(125)}.mp4`
+    expect(name.length).toBe(129)
+    expect(Buffer.byteLength(name, 'utf8')).toBe(254)
+    const res = await runExportJob({ ...makeJob(rampSrc, 'twitter', makeClip({ startSec: 2, endSec: 3 }), 't183-bytes'), outDir: out, outputFilename: name }, () => {})
+    expect(path.basename(res.outputPath)).toBe(name)
+    await playable(res.outputPath)
+  }, 120_000)
+
+  it('the GIF, the compilation and Reframe name their output from a person\'s name: each is fitted, written, and reported', async () => {
+    const gifDir = await fresh('gif')
+    const gif = await runGifExport({ jobId: 't183-gif', sourcePath: rampSrc, outDir: gifDir, startSec: 2, endSec: 3, width: 160, fps: 10, speed: 1, sourceName: 'g'.repeat(250) })
+    expect(bytes(gif.outputPath)).toBeLessThanOrEqual(255)
+    expect(path.basename(gif.outputPath)).toMatch(/^g{200,}_160px_10fps\.gif$/)
+    expect(await readdir(gifDir)).toEqual([path.basename(gif.outputPath)])
+    expect((await ffprobeJson(gif.outputPath)).streams.some((s) => s.codec_type === 'video')).toBe(true)
+
+    const compDir = await fresh('compile')
+    const comp = await runConcat({
+      jobId: 't183-compile',
+      sourcePath: rampSrc,
+      outDir: compDir,
+      segments: [
+        { startSec: 2, endSec: 3, name: 'a' },
+        { startSec: 4, endSec: 5, name: 'b' }
+      ],
+      fadeMs: 0,
+      width: 640,
+      height: 360,
+      sourceName: 'k'.repeat(250)
+    })
+    expect(bytes(comp.outputPath)).toBeLessThanOrEqual(255)
+    expect(path.basename(comp.outputPath)).toMatch(/^k{200,}_compilation\.mp4$/)
+    expect(await readdir(compDir)).toEqual([path.basename(comp.outputPath)])
+    await playable(comp.outputPath)
+
+    const refDir = await fresh('reframe')
+    const ref = await runReframe(
+      { jobId: 't183-reframe', sourcePath: rampSrc, outputPath: path.join(refDir, `${'r'.repeat(300)}.mp4`), position: 'center', startSec: 2, endSec: 3, outputWidth: 360, outputHeight: 640 },
+      () => {}
+    )
+    expect(path.basename(ref.outputPath)).toBe(`${'r'.repeat(251)}.mp4`)
+    expect(await readdir(refDir)).toEqual([path.basename(ref.outputPath)])
+    await playable(ref.outputPath)
+  }, 300_000)
+
+  describe('a ranged burn-in of a video with a 200-character name', () => {
+    it('writes the captioned clip, and leaves no shifted copy of the transcript behind (the copy was 46 characters over the limit)', async () => {
+      const out = await fresh('burn')
+      const stem = 'v'.repeat(200)
+      const video = path.join(out, `${stem}.mp4`)
+      await ff([
+        '-y', '-f', 'lavfi', '-i', 'testsrc2=size=320x180:rate=15:duration=5', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=5',
+        '-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '48k', video
+      ])
+      // The name the transcription gives its transcript: the video's name and a timestamp.
+      const srtDir = await fresh('burn-srt')
+      const srt = path.join(srtDir, `${stem}-1700000000000.srt`)
+      await writeFile(srt, '1\n00:00:01,200 --> 00:00:02,500\nINSIDE THE RANGE\n', 'utf8')
+      const outputPath = path.join(out, 'captioned.mp4')
+      const res = await runBurnIn({ jobId: 't183-burn', videoPath: video, srtPath: srt, outputPath, fontSizePct: 4, startSec: 1, endSec: 3 }, () => {})
+      expect(res.captioned, 'the cue is inside the range').toBe(true)
+      await playable(outputPath)
+      expect(await readdir(srtDir), 'no shifted copy is left beside the transcript').toEqual([path.basename(srt)])
+    }, 120_000)
+  })
+
+  it('the re-attach\'s scratch WAV of a 250-character output name is written and removed with the job', async () => {
+    const out = await fresh('reattach')
+    const outputPath = path.join(out, `${'o'.repeat(246)}.mp4`)
+    expect(bytes(outputPath)).toBe(250)
+    const extracted = await extractAudioFromVideo(rampSrc)
+    try {
+      const res = await runAudioReattach(
+        { jobId: 't183-reattach', videoPath: rampSrc, sourcePath: extracted.wavPath, outputPath, chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [{ startSec: 4, endSec: 5 }] } },
+        () => {}
+      )
+      expect(res.outputPath).toBe(outputPath)
+    } finally {
+      await extracted.cleanup()
+    }
+    await playable(outputPath)
+    expect(await readdir(out), 'the scratch WAV went with the job').toEqual([path.basename(outputPath)])
+  }, 180_000)
+
+  it('an import copy of a 250-character source name is written (the working copy adds 13 characters to the name)', async () => {
+    const src = path.join(dir, `${'f'.repeat(250)}.flv`)
+    await ff(['-y', '-f', 'lavfi', '-i', 'testsrc2=duration=1:size=320x240:rate=25', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=1', '-shortest', src])
+    const mp4 = await convertForImport(src)
+    try {
+      expect(bytes(mp4)).toBeLessThanOrEqual(255)
+      expect(path.basename(mp4)).toMatch(/^f{200,}-[\w-]{8}\.mp4$/)
+      await playable(mp4)
+    } finally {
+      await rm(mp4, { force: true })
+    }
+  }, 120_000)
+})

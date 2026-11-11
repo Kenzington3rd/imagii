@@ -619,3 +619,25 @@ describe('picture-in-picture ends at the base\'s length whether or not the base 
     expect(args).toContain('-shortest')
   })
 })
+
+// T-183 (2): the compilation's name is `<base>_compilation.mp4`; a long base is cut and the tail stays, on a first run and on a taken name.
+describe('a compilation of a video with a long name keeps `_compilation` (T-183 (2))', () => {
+  it('a 250-character base: the first run and the second both end in the whole tail, and fit', async () => {
+    const go = (): ReturnType<typeof runConcat> =>
+      runConcat({
+        jobId: 'cr-long',
+        sourcePath: '/tmp/in.mp4',
+        outDir: scratch,
+        segments: [{ startSec: 0, endSec: 2, name: 'a' }, { startSec: 5, endSec: 8, name: 'b' }],
+        fadeMs: 0,
+        width: 1280,
+        height: 720,
+        sourceName: 'k'.repeat(250)
+      })
+    const first = (await go()).outputPath
+    const second = (await go()).outputPath
+    expect(path.basename(first)).toMatch(/^k{200,}_compilation\.mp4$/)
+    expect(path.basename(second)).toMatch(/^k{200,}_compilation \(2\)\.mp4$/)
+    expect(Buffer.byteLength(path.basename(second), 'utf8')).toBeLessThanOrEqual(255)
+  })
+})

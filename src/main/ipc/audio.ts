@@ -27,6 +27,7 @@ import {
   assertRange
 } from '../../shared/validators'
 import { assertAlways } from '../../shared/assert'
+import { nameWithTail } from '../../shared/filename'
 import { assertSafeAbsolutePath, assertSafeId } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
 import { clipNameForSentence } from '../ffmpeg/noPicture'
@@ -248,7 +249,7 @@ export function registerAudioIpc(): void {
       assertSafeAbsolutePath(sourcePath, 'sourcePath')
       assertEnum(format, AUDIO_SAVE_FORMATS, 'format')
       const base = path.parse(sourcePath).name
-      return `${base}-cleaned.${audioFileExtension(format)}`
+      return nameWithTail(base, `-cleaned.${audioFileExtension(format)}`)
     }
   )
 

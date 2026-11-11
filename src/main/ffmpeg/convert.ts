@@ -8,6 +8,7 @@ import { EVEN_PICTURE } from './filters'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { CancelledError } from '../../shared/cancel'
 import { burnInPercent } from '../../shared/captions'
+import { fitFileName } from '../../shared/filename'
 
 /**
  * Transcode any ffmpeg-readable container to a preview-safe mp4
@@ -362,7 +363,9 @@ export async function convertForImport(
     const dir = path.join(tmpdir(), 'imagii-import')
     await run.guard(mkdir(dir, { recursive: true }))
     const base = path.basename(inputPath, path.extname(inputPath))
-    const mp4Path = path.join(dir, `${base}-${nanoid(8)}.mp4`)
+    // T-183 (2): the source's name is the person's (a VOD title), and the copy adds 13 characters to it.
+    const tail = `-${nanoid(8)}.mp4`
+    const mp4Path = path.join(dir, `${fitFileName(base, tail)}${tail}`)
     try {
       await convertToMp4('import', inputPath, mp4Path, onProgress)
     } catch (err) {

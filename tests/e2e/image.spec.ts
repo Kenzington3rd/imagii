@@ -1152,7 +1152,7 @@ test.describe('Image Studio — tools and drawing', () => {
       const toolbar = window.locator(TOOLBAR)
       const grid = toolbar.getByLabel('Grid', { exact: true })
       const snap = toolbar.getByLabel('Snap', { exact: true })
-      const size = toolbar.getByLabel('Grid size in pixels')
+      const size = toolbar.getByLabel('Grid size (px)')
 
       // ── the grid overlay is a real third Konva layer of real lines ──
       expect((await stageGeom(window)).layers).toBe(2)
@@ -1216,7 +1216,7 @@ test.describe('Image Studio — typed numbers (T-123 (4))', () => {
     try {
       await startBlank(window)
       const toolbar = window.locator(TOOLBAR)
-      const grid = toolbar.getByLabel('Grid size in pixels')
+      const grid = toolbar.getByLabel('Grid size (px)')
 
       // ── the grid size: 2 to 200 ──
       await expect(grid).toHaveValue('20')
@@ -3344,7 +3344,7 @@ test.describe('Image Studio — handles, draw gestures, lock, snap and typed num
       await expectShapeCount(window, 2)
       const toolbar = window.locator(TOOLBAR)
       await toolbar.getByLabel('Snap', { exact: true }).check()
-      const size = toolbar.getByLabel('Grid size in pixels')
+      const size = toolbar.getByLabel('Grid size (px)')
       await retype(size, '50')
       await leave(size)
       await expect(size).toHaveValue('50')
@@ -7133,6 +7133,76 @@ test.describe('round 127 Track A (T-178 (2)): an autosave main cannot write says
       await expectLayerCount(window, 4)
       await expect.poll(told, { timeout: 60_000, intervals: [500], message: 'a later failure is told again' }).toBe(2)
       expect(pageErrors).toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-183 (4): the grid-size box says what it is ────────────────────────────────────────────────────────────────────────────────────────────
+//
+// The toolbar drew `[ ] Grid [ ] Snap [ 20 ]`: the box's only name was a hover title and an aria-label, so a sighted person saw an unlabelled 20 beside "Snap" (BRANDING: a bare
+// number is not a value; T-153 (7) made bare x / y "X (px)" / "Y (px)" under the same rule). The box sits in a `<label>` whose visible text is "Grid size (px)", the Properties
+// panel's "Size (px)" pattern, with its aria-label kept; and the label's words must not push the toolbar onto a second line at the smallest window.
+test.describe('Image Studio — the grid-size box is labelled "Grid size (px)" and the toolbar stays one line (T-183 (4))', () => {
+  test('the visible text is "Grid size (px)", clicking it focuses the box, and the toolbar is one line with no sideways overflow at 1024, 1280 and 1632 (with and without the advanced tools)', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t183-gridlabel')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      const box = toolbar.getByRole('spinbutton')
+      await expect(box, 'the toolbar has exactly one number box').toHaveCount(1)
+
+      // The words are on screen, beside the box (the same row, to its left), and they are the box's label.
+      const words = toolbar.getByText('Grid size (px)', { exact: true })
+      await expect(words, 'the visible words').toBeVisible()
+      const wordsBox = await words.boundingBox()
+      const boxBox = await box.boundingBox()
+      expect(wordsBox && boxBox, 'both measured').toBeTruthy()
+      if (wordsBox && boxBox) {
+        expect(wordsBox.x + wordsBox.width, 'the words end before the box begins').toBeLessThanOrEqual(boxBox.x + 1)
+        expect(Math.abs(wordsBox.y + wordsBox.height / 2 - (boxBox.y + boxBox.height / 2)), 'the words and the box share a line').toBeLessThanOrEqual(3)
+      }
+      // getByLabel resolves "Grid size (px)" to the box ONLY through the wrapping <label> (the box carries no aria-label of its own, which would outrank it).
+      await expect(toolbar.getByLabel('Grid size (px)'), 'the visible words label the box').toHaveCount(1)
+      await expect(toolbar.getByLabel('Grid size (px)')).toHaveValue('20')
+      // The label is the accessible name, so the name is the visible words (WCAG 2.5.3) and the old aria-label "Grid size in pixels" names nothing.
+      await expect(box).toHaveAccessibleName('Grid size (px)')
+      await expect(toolbar.getByLabel('Grid size in pixels'), 'the old aria-label is gone').toHaveCount(0)
+      // Pressing the words puts the caret in the box (what a label is for).
+      await words.click()
+      await expect(box, 'a press on the words focuses the box').toBeFocused()
+
+      const problems: string[] = []
+      for (const advanced of [false, true]) {
+        if (advanced) await toolbar.getByRole('button', { name: '+ More' }).click()
+        for (const [size, where] of [
+          [MIN_WINDOW, '1024x640 (the minimum)'],
+          [{ width: 1280, height: 728 }, '1280x728'],
+          [DEFAULT_WINDOW, '1632x918 (the default)']
+        ] as const) {
+          await resizeAndSettle(app, window, size)
+          const label = `${where}${advanced ? ' with Line and Pencil shown' : ''}`
+          const m = await toolbar.evaluate((el) => {
+            const bar = el.getBoundingClientRect()
+            const centres: number[] = []
+            for (const c of Array.from(el.querySelectorAll('button, label, input'))) {
+              const r = c.getBoundingClientRect()
+              if (r.width > 0 && r.height > 0) centres.push(r.top + r.height / 2)
+            }
+            return { height: bar.height, spread: Math.max(...centres) - Math.min(...centres), scrollWidth: el.scrollWidth, clientWidth: el.clientWidth }
+          })
+          if (m.height > 56) problems.push(`${label}: the toolbar is ${Math.round(m.height)} px high, it wrapped`)
+          if (m.spread > 6) problems.push(`${label}: the controls' centres are ${Math.round(m.spread)} px apart, they sit on more than one line`)
+          if (m.scrollWidth > m.clientWidth) problems.push(`${label}: the toolbar scrolls sideways (${m.scrollWidth} px in ${m.clientWidth} px)`)
+          await expectOneLine(toolbar.locator('label'), `the toolbar's labels at ${label}`)
+        }
+      }
+      expect(problems, 'the toolbar stays one line, wrapping nothing').toEqual([])
+      await expectNoHorizontalOverflow(toolbar, 'the toolbar')
     } finally {
       await closeStudio(studio)
     }

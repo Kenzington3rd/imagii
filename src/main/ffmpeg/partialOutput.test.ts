@@ -452,3 +452,77 @@ describe('wroteOutput - a real, non-empty file is the run\'s output, whatever it
     expect(await wroteOutput(folder)).toBe(false)
   })
 })
+
+// T-183 (2): the partial is 17 characters longer than its target, so a target of 239-255 characters (a name the gate accepts) got a partial ffmpeg could not create
+// ("File name too long"). The stem is fitted; the tail the rest of the module reads is not touched.
+describe('partialPathFor - a target at the file system\'s limit (T-183 (2))', () => {
+  const bytes = (p: string): number => Buffer.byteLength(path.basename(p), 'utf8')
+
+  it('a 255-character target\'s partial is at most 255 bytes, still a partial, same folder and extension', () => {
+    const target = path.join(dir, `${'a'.repeat(251)}.mp4`)
+    expect(bytes(target)).toBe(255)
+    const partial = partialPathFor(target)
+    expect(bytes(partial)).toBeLessThanOrEqual(255)
+    expect(path.dirname(partial)).toBe(dir)
+    expect(PARTIAL_OUTPUT.test(partial)).toBe(true)
+    expect(path.extname(partial)).toBe('.mp4')
+    expect(path.basename(partial).startsWith('a'.repeat(200))).toBe(true)
+    // The disk takes it (the point: ffmpeg is handed this name).
+    writeFileSync(partial, 'x')
+    expect(existsSync(partial)).toBe(true)
+  })
+
+  it('the first name that did not fit (239 characters) is the first one that is fitted; 238 is left alone', () => {
+    const at = (n: number): string => path.join(dir, `${'b'.repeat(n - 4)}.mp4`)
+    expect(path.basename(partialPathFor(at(238))).startsWith(`${'b'.repeat(234)}.`)).toBe(true)
+    expect(path.basename(partialPathFor(at(238)))).toMatch(/^b{234}\.[0-9a-f]{8}\.partial\.mp4$/)
+    expect(path.basename(partialPathFor(at(239)))).toMatch(/^b{234}\.[0-9a-f]{8}\.partial\.mp4$/)
+    expect(path.basename(partialPathFor(at(240)))).toMatch(/^b{234}\.[0-9a-f]{8}\.partial\.mp4$/)
+    expect(path.basename(partialPathFor(at(255)))).toMatch(/^b{234}\.[0-9a-f]{8}\.partial\.mp4$/)
+  })
+
+  it('multi-byte and astral names are cut to whole characters and the bytes (not the characters) are what is held to 255', () => {
+    for (const glyph of ['\u00e9', '\u6f22', String.fromCodePoint(0x1f600)]) {
+      const target = path.join(dir, `${glyph.repeat(60)}${'z'.repeat(150)}${glyph.repeat(10)}.gif`)
+      const partial = partialPathFor(target)
+      expect(bytes(partial), glyph).toBeLessThanOrEqual(255)
+      expect(Buffer.from(path.basename(partial), 'utf8').toString('utf8'), `${glyph} was not split`).toBe(path.basename(partial))
+      expect(PARTIAL_OUTPUT.test(partial)).toBe(true)
+    }
+  })
+
+  it('a target whose cut would end in a dot or a space gets no trailing dot before the tail', () => {
+    const partial = partialPathFor(path.join(dir, `${'k'.repeat(233)}. ${'m'.repeat(30)}.mp4`))
+    expect(path.basename(partial)).toMatch(/^k{233}\.[0-9a-f]{8}\.partial\.mp4$/)
+  })
+
+  it('a whole render of a 255-character target lands at that exact name (commitPartial), and the partial is gone', async () => {
+    const target = path.join(dir, `${'c'.repeat(251)}.mp4`)
+    const partial = partialPathFor(target)
+    writeFileSync(partial, 'the whole render')
+    const landed = await commitPartial(live, partial, target, 'replace')
+    expect(landed).toBe(target)
+    expect(readFileSync(target, 'utf8')).toBe('the whole render')
+    expect(names()).toEqual([path.basename(target)])
+  })
+
+  it('a canceled run of a 255-character target removes its partial (discardPartial still recognises the fitted name)', async () => {
+    const target = path.join(dir, `${'d'.repeat(251)}.mp4`)
+    const partial = partialPathFor(target)
+    writeFileSync(partial, 'half')
+    await finishPartial(Promise.reject(new Error('x')), { run: live, partial, target, mode: 'replace' }).catch(() => undefined)
+    expect(names()).toEqual([])
+  })
+
+  it('beside mode: a taken 255-character name lands as a fitted " (2)" that is itself a legal name', async () => {
+    const target = path.join(dir, `${'e'.repeat(251)}.mp4`)
+    writeFileSync(target, 'earlier export')
+    const partial = partialPathFor(target)
+    writeFileSync(partial, 'new render')
+    const landed = await commitPartial(live, partial, target, 'beside')
+    expect(path.basename(landed)).toBe(`${'e'.repeat(247)} (2).mp4`)
+    expect(bytes(landed)).toBe(255)
+    expect(readFileSync(landed, 'utf8')).toBe('new render')
+    expect(readFileSync(target, 'utf8')).toBe('earlier export')
+  })
+})

@@ -90,24 +90,26 @@ export function Toolbar(): JSX.Element {
         />
         Snap
       </label>
-      {/* T-123 (4): kept until typing ends; `Number(typed) || 2` appended "40" to an emptied box as 240. */}
-      <DraftField
-        type="number"
-        min={GRID_SIZE_MIN}
-        max={GRID_SIZE_MAX}
-        value={String(gridSize)}
-        live={(typed) => isTypedInRange(typed, GRID_SIZE_MIN, GRID_SIZE_MAX)}
-        commit={(typed) => {
-          const n = clampTyped(typed, GRID_SIZE_MIN, GRID_SIZE_MAX)
-          if (n !== null) setGridSize(n)
-          return null
-        }}
-        className="bg-bg-base rounded px-2 py-1 w-16 text-sm"
-        title="Grid size (px)"
-        // M11 fix (round 15): bare title doesn't show on the spinner — give AT
-        // a real accessible name.
-        aria-label="Grid size in pixels"
-      />
+      {/* T-183 (4): the box says what it is - "Grid size (px)", the Properties panel's "Size (px)" pattern (BRANDING: a bare number is not a value). The label IS the
+          accessible name (the M11 aria-label "Grid size in pixels" is gone: an aria-label outranks a wrapping label, and its words did not contain the visible "(px)", WCAG 2.5.3). */}
+      <label className="flex items-center gap-1.5 text-sm">
+        <span>Grid size (px)</span>
+        {/* T-123 (4): kept until typing ends; `Number(typed) || 2` appended "40" to an emptied box as 240. */}
+        <DraftField
+          type="number"
+          min={GRID_SIZE_MIN}
+          max={GRID_SIZE_MAX}
+          value={String(gridSize)}
+          live={(typed) => isTypedInRange(typed, GRID_SIZE_MIN, GRID_SIZE_MAX)}
+          commit={(typed) => {
+            const n = clampTyped(typed, GRID_SIZE_MIN, GRID_SIZE_MAX)
+            if (n !== null) setGridSize(n)
+            return null
+          }}
+          className="bg-bg-base rounded px-2 py-1 w-16 text-sm"
+          title="Grid size (px)"
+        />
+      </label>
     </div>
   )
 }

@@ -212,3 +212,35 @@ describe('a Cancel while the scratch WAV\'s name is being chosen ends the job at
     await expect(drainRuns(2000)).resolves.toBe('drained')
   })
 })
+
+// T-183 (2): the scratch WAV is `<output>.cleaned.wav`, 12 characters on a name the person chose (a Save dialog name of up to 255), so an output of 244-255 could not have one.
+describe('the re-attach\'s scratch WAV for an output with a very long name (T-183 (2))', () => {
+  it('takes a name of at most 255 bytes, still named for the output, and is removed with the job', async () => {
+    const out = path.join(dir, `${'o'.repeat(246)}.mp4`)
+    const voice = path.join(dir, 'voice.wav')
+    writeFileSync(voice, PRECIOUS)
+    await runAudioReattach(
+      { jobId: 'reattach-long', sourcePath: voice, videoPath: path.join(dir, 'video.mp4'), outputPath: out, chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [] } },
+      () => undefined
+    )
+    const scratch = (spawned[1] as string[]).find((a) => /\.cleaned\.wav$/.test(a))
+    expect(scratch, 'the mux pass reads the scratch WAV').toBeDefined()
+    expect(path.dirname(scratch as string)).toBe(dir)
+    expect(Buffer.byteLength(path.basename(scratch as string), 'utf8')).toBeLessThanOrEqual(255)
+    expect(path.basename(scratch as string)).toMatch(/^o{200,}\.cleaned\.wav$/)
+    for (const args of spawned) {
+      expect(Buffer.byteLength(path.basename(args[args.length - 1] as string), 'utf8'), 'every name ffmpeg is handed').toBeLessThanOrEqual(255)
+    }
+    expect(readdirSync(dir).sort(), 'only the output and the source remain').toEqual([path.basename(out), 'voice.wav'])
+  })
+
+  it('a name that fits keeps the scratch name it always had', async () => {
+    const voice = path.join(dir, 'voice.wav')
+    writeFileSync(voice, PRECIOUS)
+    await runAudioReattach(
+      { jobId: 'reattach-short', sourcePath: voice, videoPath: path.join(dir, 'video.mp4'), outputPath: path.join(dir, 'out.mp4'), chain: { ...DEFAULT_CHAIN_SPEC, cutRegions: [] } },
+      () => undefined
+    )
+    expect((spawned[1] as string[]).find((a) => /\.cleaned\.wav$/.test(a))).toBe(path.join(dir, 'out.cleaned.wav'))
+  })
+})

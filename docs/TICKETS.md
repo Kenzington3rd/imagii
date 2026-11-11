@@ -9419,7 +9419,7 @@ IMG-PREC.
   IMG-PREC) and any e2e spec it touches run whole; the expediter runs the FULL Playwright suite on the merged tree; a
   hand-back with an unrun gate is not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by
   explicit PID only.
-- **Status:** open (round 132)
+- **Status:** done (round 132 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9995,6 +9995,49 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 132 — T-183, the four counted items of sweep 70, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+91a2136. Track A (items 1, 3 and 4): the Export queue row's percent is
+`aria-hidden` with no role and no live region, so a screen reader is
+no longer read every progress tick (the T-144/T-146 rule, now
+everywhere a percent sits beside a bar; ProgressTrack's comment says
+so); the four ducking sliders are one column, so the Threshold readout
+no longer runs out of its column into "Ratio" at the 300 px side
+panel; the Stream Graphics grid-size box sits in a label whose visible
+words "Grid size (px)" are its name. Track B (item 2): `fitFileName`
+in shared/filename.ts cuts a stem at a whole code point so the stem
+and what imagii adds fit a file system's 255 (UTF-8 bytes, which bound
+NTFS's 255 UTF-16 units and ext4's 255 bytes), and `nameWithTail` cuts
+the base and keeps a builder's descriptive tail with room for " (N)".
+The partial, `nextFreePath`, the import copy, the transcript base, the
+ranged burn-in's shifted .srt, the re-attach's scratch WAV, the atomic
+tmp and the Clip Kit folder are fitted; the GIF, compilation, Reframe,
+picture-in-picture, Export default and audio-suggestion names keep
+their tails. A name of 239-255 characters (and the ranged burn-in of a
+long-named video) now writes; ENAMETOOLONG and "File name too long"
+have a sentence of their own. Deviations, accepted: the grid-size
+box's aria-label removed (the kept one outranked the visible label and
+did not hold "(px)", WCAG 2.5.3); two product files beyond Track B's
+list (fsAtomic.ts, frame.ts) found by red tests and its class grep; a
+fourth spelling (Windows' "filename or extension is too long"); names
+built outside main (an Export template, the Clip Kit's renderer-built
+names) are still cut at their end, marked as a simplification in
+`nextFreePath`. Expediter: Track B's mutation (the transcript base
+fitted without its ".srt") was killed; the first hand-back cut
+descriptive tails ("<base>_.gif") and was sent back — `nameWithTail`
+keeps them, with a mutation per builder. Track A's (the grid-size
+words made sr-only) was killed by its wiring pin; its found-not-fixed
+(ProgressTrack's stale comment) was fixed in the track. Ledgers: Track
+A 15 mutations, all killed at e2e and wiring; Track B 21 (14 + 7), all
+killed at unit, 9 also at Layer 5, one Layer 5 survivor disclosed (the
+scratch WAV, unit-killed). Gates on the merged tree: verify x2 green
+(212 files, 6893 tests); test:media 522 passed and 28 skipped of 550
+on the bundled 7.0.2; the full Playwright suite of 828 passed in 56.3
+min, no failures. The first merged verify pair counted 211 files:
+Track B's new descriptiveTails.test.ts was untracked in its clone and
+the frozen diff left it out; it was copied in byte-identical and
+verify re-run twice before the Playwright run.
 
 Round 131 — T-182, the three counted items of sweep 69, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

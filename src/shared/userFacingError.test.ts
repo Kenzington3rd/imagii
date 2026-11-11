@@ -538,3 +538,39 @@ describe('the kept-take sentence (T-142 (1))', () => {
     expect(isRecordingKeptMessage('')).toBe(false)
   })
 })
+
+// T-183 (2): a name over the 255 a file system holds says so, in its own sentence. imagii fits the names it builds; this is for the one it did not.
+describe('userFacingError - a file name that is too long for the drive (T-183 (2))', () => {
+  const TOO_LONG = "Export failed. That file name is too long for the drive. Shorten the clip's or the video's name and try again."
+
+  it.each([
+    ["node's ENAMETOOLONG", "ENAMETOOLONG: name too long, open '/out/clip.partial.mp4'"],
+    ['the code alone', 'ENAMETOOLONG'],
+    ["ffmpeg's own words, inside its runner's message", 'FFmpeg exit 1: [out#0/mp4 @ 0x5581] Error opening output /out/clip.mp4: File name too long\nError opening output files: File name too long'],
+    ['"name too long" on its own, any case', 'Name Too Long'],
+    ["Windows' own phrase", 'The filename or extension is too long.']
+  ])('%s', (_label, inner) => {
+    expect(userFacingError(wrap('video:exportBatch', inner), 'Export failed.').message).toBe(TOO_LONG)
+    expect(userFacingError(new Error(inner), 'Export failed.').message).toBe(TOO_LONG)
+  })
+
+  it('the sentence follows the caller\'s own context sentence, whatever feature raised it', () => {
+    expect(userFacingError(new Error('ENAMETOOLONG: name too long, open x'), 'The burn-in failed.').message).toBe(
+      "The burn-in failed. That file name is too long for the drive. Shorten the clip's or the video's name and try again."
+    )
+  })
+
+  it('the causes that were there keep their words: a full disk, a blocked file, a missing file, even when a name is long too', () => {
+    expect(userFacingError(new Error('ENOSPC: no space left on device, write'), 'Export failed.').message).toBe('Export failed. Your disk is full. Free up some space and try again.')
+    expect(userFacingError(new Error('ENOSPC: no space left on device, open (ENAMETOOLONG elsewhere)'), 'Export failed.').message).toBe('Export failed. Your disk is full. Free up some space and try again.')
+    expect(userFacingError(new Error('EACCES: permission denied, open x'), 'Export failed.').message).toBe('Export failed. Windows blocked access to a file. Close any app using it, or check your antivirus.')
+    expect(userFacingError(new Error('EPERM: operation not permitted, rename x'), 'Export failed.').message).toBe('Export failed. Windows blocked access to a file. Close any app using it, or check your antivirus.')
+    expect(userFacingError(new Error('ENOENT: no such file or directory, open x'), 'Export failed.').message).toBe("Export failed. A file imagii needs isn't there. It may have been moved or deleted.")
+  })
+
+  it('other runner failures and plain errors are unchanged (the fallback, the video tool\'s sentence)', () => {
+    expect(userFacingError(new Error('FFmpeg exit 1: Conversion failed!'), 'Export failed.').message).toContain("imagii's video tool stopped before it finished.")
+    expect(userFacingError(new Error('the name is fine'), 'Export failed.').message).toBe('Export failed.')
+    expect(userFacingError(new Error('Too long a wait'), 'Export failed.').message).toBe('Export failed.')
+  })
+})

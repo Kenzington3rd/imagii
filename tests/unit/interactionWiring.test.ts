@@ -5202,3 +5202,55 @@ describe('round 131 Track A - a refused Undo/Redo write is counted and reported;
     expect(platforms).toBeGreaterThan(0)
   })
 })
+
+// round 132 Track A (T-183 (1), (3), (4)): the wiring the layout and accessibility e2e stand on. Behavior: video-pipelines.spec.ts / audio.spec.ts / image.spec.ts "round 132 Track A"
+// (the real queue read in the accessibility tree, the measured sliders, the measured toolbar). A screen reader hearing a percent is not a DOM fact a unit test can see, so what is
+// pinned here is the markup that decides it.
+describe('round 132 Track A - the Export queue percent is silent, the Duck sliders are one column, the grid-size box is labelled', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const flatOf = (rel: string): string => strip(read(rel)).replace(/\s+/g, ' ')
+
+  it('ExportPanel: the queue percent span is aria-hidden with no role and no aria-live, and no live region wraps a rendered percent', () => {
+    const panel = flatOf('modules/video-studio/ExportPanel.tsx')
+    const at = panel.indexOf('{Math.round(j.percent)}%')
+    expect(at, 'the queue row still draws its percent').toBeGreaterThan(0)
+    const open = panel.lastIndexOf('<span', at)
+    const tag = panel.slice(open, panel.indexOf('>', open) + 1)
+    expect(tag, 'the percent span is aria-hidden').toContain('aria-hidden="true"')
+    expect(tag, 'with no role').not.toContain('role=')
+    expect(tag, 'and no aria-live').not.toContain('aria-live')
+    // The only live region in the panel is T-153's always-mounted wrapper, which closes before the queue and holds no percent.
+    expect(panel.match(/aria-live/g), 'no aria-live anywhere in the panel').toBeNull()
+    expect(panel.match(/role="status"/g), 'one role="status": the T-153 wrapper').toHaveLength(1)
+    const region = panel.indexOf('<div role="status"')
+    const regionEnd = panel.indexOf('</div>', region)
+    expect(region).toBeGreaterThan(0)
+    expect(panel.slice(region, regionEnd), 'the region holds the nothing-queued sentence, not a percent').not.toContain('percent')
+    expect(at, 'the percent is drawn after the region closes').toBeGreaterThan(regionEnd)
+    expect(panel, 'the progressbar still carries the value').toContain('percent={j.percent}')
+  })
+
+  it('SecondaryTrackPanel: the four DuckSliders sit in ONE column, the gap and the rule unchanged, and a slider keeps its label-left readout-right row', () => {
+    const panel = flatOf('modules/audio-studio/SecondaryTrackPanel.tsx')
+    expect(panel).toContain('<div className="grid grid-cols-1 gap-3 text-xs border-l-2 border-accent/30 pl-3 ml-2">')
+    expect(panel, 'no two-column grid left in the card').not.toContain('grid-cols-2')
+    const grid = panel.indexOf('grid grid-cols-1 gap-3')
+    expect(panel.slice(grid).match(/<DuckSlider /g), 'the four sliders are inside it').toHaveLength(4)
+    expect(panel).toContain('<div className="flex items-center justify-between gap-2">')
+    expect(panel).toContain('<span className="font-mono text-ink-base whitespace-nowrap">{readoutText(value, unit)}</span>')
+  })
+
+  it('Toolbar: the grid-size box sits in a <label> whose visible text is "Grid size (px)", which is its name', () => {
+    const bar = flatOf('modules/image-studio/Toolbar.tsx')
+    const label = bar.indexOf('<span>Grid size (px)</span>')
+    expect(label, 'the visible words').toBeGreaterThan(0)
+    const open = bar.lastIndexOf('<label', label)
+    expect(open, 'inside a <label>').toBeGreaterThan(bar.lastIndexOf('</label>', label))
+    const field = bar.indexOf('<DraftField', label)
+    const close = bar.indexOf('</label>', label)
+    expect(field, 'the box is inside the same label').toBeGreaterThan(label)
+    expect(field).toBeLessThan(close)
+    expect(bar.slice(field, close), 'no aria-label of its own: it would outrank the label, and "in pixels" does not contain the visible "(px)"').not.toContain('aria-label')
+    expect(bar.slice(open, label), 'one line: the label is a flex row').toContain('flex items-center')
+  })
+})

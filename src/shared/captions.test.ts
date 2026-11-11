@@ -776,3 +776,54 @@ describe('staleCaptionsMessage - the two sentences of a late transcription (T-17
     expect(staleCaptionsMessage('stream.mp4', 0)).not.toMatch(/Open it again|ready/i)
   })
 })
+
+// T-183 (2): the copy's name is 46 characters longer than the transcript's, so a transcript made from a 192-character video name could not be copied.
+describe('shiftedSrtPath - a transcript whose name is near the limit (T-183 (2))', () => {
+  const bytes = (p: string): number => Buffer.byteLength(path.basename(p), 'utf8')
+  const id = '0a1b2c3d-0000-4000-8000-0123456789ab'
+
+  it('a short name is exactly what it always was', () => {
+    expect(shiftedSrtPath('/c/Stream-1700000000000.srt', id)).toBe(`/c/Stream-1700000000000.srt.clip-${id}.srt`)
+    expect(shiftedSrtPath('C:\\c\\Stream-1700000000000.srt', id)).toBe(`C:\\c\\Stream-1700000000000.srt.clip-${id}.srt`)
+    expect(shiftedSrtPath('Stream.txt', id)).toBe(`Stream.txt.clip-${id}.srt`)
+  })
+
+  it('the copy of a 250-character transcript name is at most 255 bytes, in the same folder, and the sweep still recognises it', () => {
+    const real = path.join('/captions', `${'v'.repeat(246)}.srt`)
+    expect(bytes(real)).toBe(250)
+    const copy = shiftedSrtPath(real, id)
+    expect(bytes(copy)).toBeLessThanOrEqual(255)
+    expect(path.dirname(copy)).toBe(path.dirname(real))
+    expect(isShiftedSrtName(path.basename(copy))).toBe(true)
+    expect(path.basename(copy).endsWith(`.srt.clip-${id}.srt`)).toBe(true)
+    expect(path.basename(copy).startsWith('v'.repeat(200))).toBe(true)
+  })
+
+  it('a whisper-made name (a 200-character video name + a timestamp) is fitted, and a real transcript of it is still not a temp copy', () => {
+    const real = path.join('/captions', `${'w'.repeat(200)}-1700000000000.srt`)
+    const copy = shiftedSrtPath(real, id)
+    expect(bytes(copy)).toBeLessThanOrEqual(255)
+    expect(isShiftedSrtName(path.basename(copy))).toBe(true)
+    expect(isShiftedSrtName(path.basename(real))).toBe(false)
+  })
+
+  it('whole characters only, bytes not characters, and an upper-case .SRT keeps its own spelling in the tail', () => {
+    for (const glyph of ['\u00e9', '\u6f22', String.fromCodePoint(0x1f600)]) {
+      const copy = shiftedSrtPath(path.join('/captions', `${glyph.repeat(120)}.srt`), id)
+      expect(bytes(copy), glyph).toBeLessThanOrEqual(255)
+      expect(Buffer.from(path.basename(copy), 'utf8').toString('utf8'), `${glyph} was not split`).toBe(path.basename(copy))
+      expect(isShiftedSrtName(path.basename(copy))).toBe(true)
+    }
+    const upper = shiftedSrtPath(path.join('/captions', `${'u'.repeat(250)}.SRT`), id)
+    expect(bytes(upper)).toBeLessThanOrEqual(255)
+    expect(isShiftedSrtName(path.basename(upper))).toBe(true)
+    expect(path.basename(upper).endsWith(`.SRT.clip-${id}.srt`)).toBe(true)
+  })
+
+  it('a cut that leaves a trailing dot or space does not put it before the tail', () => {
+    const real = path.join('/captions', `${'t'.repeat(200 - 1)}. ${'s'.repeat(60)}.srt`)
+    const copy = path.basename(shiftedSrtPath(real, id))
+    expect(copy).not.toMatch(/[ .]\.srt\.clip-/)
+    expect(isShiftedSrtName(copy)).toBe(true)
+  })
+})

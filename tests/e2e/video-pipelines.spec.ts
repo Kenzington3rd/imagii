@@ -3007,8 +3007,8 @@ test.describe('ExportPanel', () => {
       // four of them IS the four jobComplete events arriving.
       await expect(card.getByRole('button', { name: 'Show in folder', exact: true })).toHaveCount(4)
       // T-114: and each row's bar is a progressbar named for its job, with its value - a row of four
-      // identical bars was four unnamed divs to a screen reader. The percent beside it is still the
-      // live region that says the number as it moves.
+      // identical bars was four unnamed divs to a screen reader. T-183 (1): the percent beside it is
+      // aria-hidden (the bar carries the value), so it is found by its text, not by a role.
       for (const job of ['Clip 1 · YouTube', 'Clip 1 · X / Twitter', 'Second · YouTube', 'Second · X / Twitter']) {
         const bar = card.getByRole('progressbar', { name: job, exact: true })
         await expect(bar, job).toHaveCount(1)
@@ -3016,7 +3016,7 @@ test.describe('ExportPanel', () => {
         await expect(bar, job).toHaveAttribute('aria-valuemax', '100')
         await expect(bar, job).toHaveAttribute('aria-valuenow', '100')
       }
-      await expect(card.getByRole('status').filter({ hasText: '100%' })).toHaveCount(4)
+      await expect(card.getByText('100%', { exact: true }), 'four rows, each still drawing its 100%').toHaveCount(4)
       // T-92: the first row's button reveals the first row's file.
       await stubShellReveal(app)
       await card.getByRole('button', { name: 'Show in folder', exact: true }).first().click()
@@ -8162,7 +8162,8 @@ test.describe('T-112: review-gate fixes', () => {
       await expect(card.getByText('Not run', { exact: true })).toHaveCount(0)
       await expect(card.getByText(REFUSAL, { exact: true })).toHaveCount(0)
       expect(await readToastLog(window), 'main was never asked twice').not.toContain(REFUSAL)
-      await expect(card.getByRole('status').filter({ hasText: '100%' })).toHaveCount(1)
+      await expect(card.getByText('100%', { exact: true }), 'the one row still draws its 100% (T-183 (1): aria-hidden, found by text)').toHaveCount(1)
+      await expect(card.getByRole('progressbar', { name: /Clip 1 · YouTube/ })).toHaveAttribute('aria-valuenow', '100')
     } finally {
       await app.close()
     }
@@ -15553,6 +15554,82 @@ test.describe('round 131 Track A (T-182 (3)): a logged post keeps its name besid
         await expectNoHorizontalOverflow(list, `the Logged posts list at ${where}`)
       }
       await window.screenshot({ path: path.join(SCREENSHOTS, 'pipelines-14-diary-name-kept.png') })
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-183 (1): the Export queue's percent stops speaking every tick ─────────────────────────────────────────────────────────────────────────
+//
+// Each queue row's percent was `<span role="status" aria-live="polite">`, and every `video:progress` event writes the row, so a screen-reader user exporting a batch heard the percent
+// re-read at each integer change (up to 100 announcements a file, four rows at once). The row's progressbar carries the value; VideoJobsRunning and AudioJobRunning already hide their
+// moving percents (T-144, T-146). The percent is aria-hidden now, still drawn; the panel's own always-mounted status region (T-153) is the only live region in the card.
+test.describe('round 132 Track A (T-183 (1)): the Export queue does not announce its percent', () => {
+  test('during a two-row export the card holds one role=status element (the T-153 region, empty), each percent is aria-hidden and still drawn, and each row\'s bar reports the same number', async () => {
+    test.setTimeout(300_000)
+    const { app, window, outDir } = await launchWithVideo('t183pct')
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await presetBox(window, 'X / Twitter').check()
+      // Hold each encode for 4 s so the rows are on screen, running, while the assertions read them.
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 4000 }])
+      await card.getByRole('button', { name: /^Export 2 files/ }).click()
+      await expect(card.getByRole('button', { name: 'Exporting…' })).toBeDisabled()
+      await expect(card.getByText('Queue', { exact: true })).toBeVisible({ timeout: 30_000 })
+
+      /** In the page, so the read is atomic: every live region in the card, and every row's bar next to the percent drawn beside it. */
+      const read = (): Promise<{ live: string[]; rows: Array<{ name: string; now: string | null; text: string; hidden: string | null; role: string | null; aria: string | null; visible: boolean }> }> =>
+        card.evaluate((el) => {
+          const live = Array.from(el.querySelectorAll('[role="status"], [role="alert"], [role="log"], [aria-live]')).map(
+            (n) => `${n.tagName.toLowerCase()}[role=${n.getAttribute('role')}][aria-live=${n.getAttribute('aria-live')}] "${(n.textContent ?? '').trim()}"`
+          )
+          const rows = Array.from(el.querySelectorAll('[role="progressbar"]')).map((bar) => {
+            const pct = bar.nextElementSibling as HTMLElement | null
+            const r = pct?.getBoundingClientRect()
+            return {
+              name: bar.getAttribute('aria-label') ?? '',
+              now: bar.getAttribute('aria-valuenow'),
+              text: (pct?.textContent ?? '').trim(),
+              hidden: pct?.getAttribute('aria-hidden') ?? null,
+              role: pct?.getAttribute('role') ?? null,
+              aria: pct?.getAttribute('aria-live') ?? null,
+              visible: Boolean(r && r.width > 0 && r.height > 0)
+            }
+          })
+          return { live, rows }
+        })
+
+      const expectQuiet = async (when: string): Promise<void> => {
+        const { live, rows } = await read()
+        expect(rows.map((r) => r.name), `${when}: one bar per row`).toEqual(['Clip 1 · YouTube', 'Clip 1 · X / Twitter'])
+        // The only live region in the card is the panel's own, and it has nothing to say while two files are queued.
+        expect(live, `${when}: the one live region in the card is the T-153 status region, empty`).toEqual(['div[role=status][aria-live=null] ""'])
+        await expect(card.getByRole('status'), `${when}: one role=status element by the accessibility tree`).toHaveCount(1)
+        await expect(card.getByRole('status')).toHaveText('')
+        for (const r of rows) {
+          expect(r.text, `${when}: ${r.name} still draws its percent`).toMatch(/^\d+%$/)
+          expect(r.visible, `${when}: ${r.name}'s percent is on screen`).toBe(true)
+          expect(r.hidden, `${when}: ${r.name}'s percent is aria-hidden`).toBe('true')
+          expect(r.role, `${when}: ${r.name}'s percent has no role`).toBeNull()
+          expect(r.aria, `${when}: ${r.name}'s percent has no aria-live`).toBeNull()
+          expect(`${r.now}%`, `${when}: ${r.name}'s bar reports the number the row draws`).toBe(r.text)
+        }
+      }
+      await expectQuiet('while the first file is encoding')
+      // The accessibility tree agrees: the percents are not in it as text of any role.
+      await expect(card.getByRole('progressbar')).toHaveCount(2)
+
+      await expect.poll(() => mp4sIn(outDir), { timeout: 240_000, intervals: [500] }).toHaveLength(2)
+      await expectToast(window, 'Exported 2 files')
+      await expect(card.getByRole('button', { name: 'Show in folder', exact: true })).toHaveCount(2)
+      await expectQuiet('after the batch')
+      const done = await read()
+      expect(done.rows.map((r) => r.text), 'both rows end at 100%').toEqual(['100%', '100%'])
+      // The outcome words and the T-153 region are untouched: nothing failed, nothing was refused.
+      await expect(card.getByText('Failed', { exact: true })).toHaveCount(0)
     } finally {
       await app.close()
     }

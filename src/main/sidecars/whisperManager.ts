@@ -54,6 +54,7 @@ import {
 import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { assertAlways } from '../../shared/assert'
+import { fitFileName } from '../../shared/filename'
 import { CANCELLED_MESSAGE } from '../../shared/cancel'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
@@ -247,9 +248,11 @@ async function transcribeUnderRun(
   try {
     onProgress({ jobId: req.jobId, phase: 'transcribing' })
 
+    // T-183 (2): the video's name plus `-<timestamp>.srt` (the engine adds the extension), fitted so a long VOD title still gives a name the disk can hold.
+    const stamp = `-${Date.now()}`
     const outputBase = path.join(
       captionsOutputDir(),
-      `${path.parse(req.sourcePath).name}-${Date.now()}`
+      `${fitFileName(path.parse(req.sourcePath).name, `${stamp}.srt`)}${stamp}`
     )
 
     const args = [

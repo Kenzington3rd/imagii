@@ -913,7 +913,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   none of them replaces a file that is already there: a second export with the
   same name is written beside the first as **name (2).mp4**, then **name (3).mp4**,
   and a second Clip Kit of the same clip on the same day gets its own folder,
-  **name-kit-date (2)** (the date is today's on your computer's clock). The **GIF**,
+  **name-kit-date (2)** (the date is today's on your computer's clock). A name too long for
+  the drive (255 characters, counting what imagii adds to the end of it) is shortened to fit, and the toast
+  and **Show in folder** say the name it was saved under. The **GIF**,
   **Compile**, **Reframe** and **Picture-in-picture** panels start on the folder the
   last one of them wrote to (the button shows its name), so the folder is chosen once and not
   every time Video Studio opens; **Choose folder…** changes it for all four, at once: a pick in one

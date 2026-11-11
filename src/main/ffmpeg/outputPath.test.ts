@@ -237,3 +237,73 @@ describe('ensureOutputDir', () => {
     expect(outputFolderRefusal(long)).toContain(`"${'x'.repeat(60)}…"`)
   })
 })
+
+// T-183 (2): a name over a file system's 255 is fitted where the name is chosen, so what a runner is handed (and the toast and Show in folder report) can be written.
+describe('nextFreePath - names at and over the file system limit (T-183 (2))', () => {
+  const bytes = (p: string): number => Buffer.byteLength(path.basename(p), 'utf8')
+  const stemOf = (n: number, c = 'a'): string => c.repeat(n)
+
+  it('a free 255-character name is returned exactly as given', async () => {
+    const wanted = path.join(dir, `${stemOf(251)}.mp4`)
+    expect(await nextFreePath(wanted)).toBe(wanted)
+  })
+
+  it('a taken 255-character name returns a fitted " (2)" that is 255 bytes and can be written; then " (3)"', async () => {
+    touch(`${stemOf(251)}.mp4`)
+    const second = await nextFreePath(path.join(dir, `${stemOf(251)}.mp4`))
+    expect(base(second)).toBe(`${stemOf(247)} (2).mp4`)
+    expect(bytes(second)).toBe(255)
+    writeFileSync(second, 'x')
+    const third = await nextFreePath(path.join(dir, `${stemOf(251)}.mp4`))
+    expect(base(third)).toBe(`${stemOf(247)} (3).mp4`)
+    // A two-digit copy number has a longer tail, so the cut grows with it: " (10).mp4" leaves 246 characters of the name.
+    for (let n = 3; n <= 9; n++) touch(`${stemOf(247)} (${n}).mp4`)
+    const ten = await nextFreePath(path.join(dir, `${stemOf(251)}.mp4`))
+    expect(base(ten)).toBe(`${stemOf(246)} (10).mp4`)
+    expect(bytes(ten)).toBe(255)
+  })
+
+  it('a wanted name OVER 255 is fitted, and the name that comes back is writable', async () => {
+    const got = await nextFreePath(path.join(dir, `${stemOf(300)}.mp4`))
+    expect(base(got)).toBe(`${stemOf(251)}.mp4`)
+    writeFileSync(got, 'x')
+    expect(existsSync(got)).toBe(true)
+    // And the next one is a " (2)" of the fitted name.
+    expect(base(await nextFreePath(path.join(dir, `${stemOf(300)}.mp4`)))).toBe(`${stemOf(247)} (2).mp4`)
+  })
+
+  it('a multi-byte name is cut to whole characters and held to 255 BYTES', async () => {
+    const wanted = path.join(dir, `${'\u00e9'.repeat(150)}.mp4`)
+    const got = await nextFreePath(wanted)
+    expect(bytes(got)).toBeLessThanOrEqual(255)
+    expect(base(got)).toBe(`${'\u00e9'.repeat(125)}.mp4`)
+    writeFileSync(got, 'x')
+    const next = await nextFreePath(wanted)
+    expect(bytes(next)).toBeLessThanOrEqual(255)
+    expect(next).not.toBe(got)
+  })
+
+  it('a name that fits is not touched, taken or not (the " (2)" of a short name is what it always was)', async () => {
+    touch('short.mp4')
+    expect(base(await nextFreePath(path.join(dir, 'short.mp4')))).toBe('short (2).mp4')
+  })
+
+  it('a folder name over 255 is fitted (extension-less: the whole name is the stem), and its " (2)" too', async () => {
+    const wanted = path.join(dir, `${stemOf(300)}.5-kit-20261111`)
+    const first = await nextFreePath(wanted, { directory: true })
+    expect(bytes(first)).toBe(255)
+    mkdirSync(first)
+    const second = await nextFreePath(wanted, { directory: true })
+    expect(bytes(second)).toBe(255)
+    expect(base(second).endsWith(' (2)')).toBe(true)
+    mkdirSync(second)
+    expect(existsSync(second)).toBe(true)
+  })
+
+  it('the Clip Kit folder of a very long clip name is a folder the disk can make', async () => {
+    const kit = await makeKitDir(dir, 'k'.repeat(300))
+    expect(bytes(kit)).toBeLessThanOrEqual(255)
+    expect(base(kit).endsWith(`-kit-${localDate().replace(/-/g, '')}`)).toBe(true)
+    expect(existsSync(kit)).toBe(true)
+  })
+})

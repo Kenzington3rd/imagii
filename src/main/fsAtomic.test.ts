@@ -238,3 +238,36 @@ describe('ATOMIC_TMP is the writer\'s own tmp name and no final name', () => {
   })
 })
 
+
+// T-183 (2): the tmp is 13 characters longer than the target (`.<8 hex>.tmp`), so a target of 243-255 characters - the transcript of a long VOD's name - got a tmp the disk
+// could not create. The tmp's stem is fitted; it stays beside the target, and `ATOMIC_TMP` still reads its tail.
+describe('writeFileAtomic - a target at the file system\'s limit (T-183 (2))', () => {
+  const leaf = (p: string): string => path.basename(p)
+
+  it('a 255-character target is written whole, under exactly that name, with its tmp a name the disk takes and nothing left behind', async () => {
+    const long = path.join(dir, `${'t'.repeat(251)}.srt`)
+    expect(Buffer.byteLength(leaf(long), 'utf8')).toBe(255)
+    await writeFileAtomic(long, 'the transcript')
+    expect(readFileSync(long, 'utf8')).toBe('the transcript')
+    expect(readdirSync(dir)).toEqual([leaf(long)])
+    const tmp = faults.written[0] as string
+    expect(path.dirname(tmp)).toBe(dir)
+    expect(Buffer.byteLength(leaf(tmp), 'utf8')).toBeLessThanOrEqual(255)
+    expect(leaf(tmp)).toMatch(ATOMIC_TMP)
+    expect(leaf(tmp).startsWith('t'.repeat(200))).toBe(true)
+  })
+
+  it('a multi-byte target is fitted in whole characters, by bytes', async () => {
+    const long = path.join(dir, `${'é'.repeat(125)}.srt`)
+    await writeFileAtomic(long, 'x')
+    const tmp = leaf(faults.written[0] as string)
+    expect(Buffer.byteLength(tmp, 'utf8')).toBeLessThanOrEqual(255)
+    expect(tmp).toMatch(/^é+\.[0-9a-f]{8}\.tmp$/)
+    expect(readFileSync(long, 'utf8')).toBe('x')
+  })
+
+  it('a name that fits keeps its tmp exactly `<target>.<hex>.tmp`', async () => {
+    await writeFileAtomic(target, OLD)
+    expect(faults.written[0]).toMatch(new RegExp(`^${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.[0-9a-f]{8}\\.tmp$`))
+  })
+})

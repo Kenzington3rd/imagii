@@ -195,3 +195,31 @@ describe('beginConvertRun is scoped to the take (T-137 (2))', () => {
     expect(openRunCount()).toBe(0)
   })
 })
+
+// T-183 (2): the working copy is `<name>-<id>.mp4`, 13 characters on the person's file name, and a source of 243 or more could not be copied.
+describe('the import copy of a source with a very long name (T-183 (2))', () => {
+  async function copyNameFor(sourceName: string): Promise<string> {
+    const done = settle(convertForImport(`/videos/${sourceName}`))
+    await untilSpawned(1)
+    const out = outputOf(0)
+    spawned[0]?.child.emit('close', 0, null)
+    await done
+    return path.basename(out)
+  }
+
+  it('a 254-character source name gives a working-copy name of at most 255 bytes, in the import folder, still named for the source', async () => {
+    const name = await copyNameFor(`${'f'.repeat(250)}.flv`)
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255)
+    expect(name).toMatch(/^f{200,}-[\w-]{8}\.mp4$/)
+  })
+
+  it('a multi-byte name is held to 255 bytes in whole characters', async () => {
+    const name = await copyNameFor(`${'é'.repeat(125)}.flv`)
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255)
+    expect(name).toMatch(/^é+-[\w-]{8}\.mp4$/)
+  })
+
+  it('a name that fits is exactly what it was', async () => {
+    expect(await copyNameFor('My Stream.flv')).toMatch(/^My Stream-[\w-]{8}\.mp4$/)
+  })
+})

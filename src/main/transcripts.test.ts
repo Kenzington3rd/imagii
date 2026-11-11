@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync, existsSync, readdirSync, symlink
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { countTranscripts, clearTranscripts } from './transcripts'
+import { shiftedSrtPath } from '../shared/captions'
 
 /**
  * T-128 (3), T-110 (s) - "Clear saved transcripts" empties the captions folder of the transcripts and of nothing else.
@@ -126,5 +127,20 @@ describe('clearTranscripts', () => {
     expect(await clearTranscripts(dir)).toEqual({ removed: 1, failed: 0 })
     expect(existsSync(outside), 'the file the link pointed at is not ours and is untouched').toBe(true)
     expect(names()).toEqual(['linked.srt'])
+  })
+})
+
+// T-183 (2): a copy whose transcript's name was cut to fit is still a job's temp, not a transcript: the count and the clear read the same suffix.
+describe('a shifted copy with a fitted name (T-183 (2))', () => {
+  it('is not counted and not cleared, and the long transcript beside it is both', async () => {
+    const real = `${'v'.repeat(200)}-1700000000000.srt`
+    const copy = path.basename(shiftedSrtPath(path.join(dir, real), UUID))
+    expect(copy.length).toBeLessThanOrEqual(255)
+    expect(copy).not.toBe(`${real}.clip-${UUID}.srt`)
+    put(real)
+    put(copy)
+    expect(await countTranscripts(dir)).toBe(1)
+    await clearTranscripts(dir)
+    expect(names()).toEqual([copy])
   })
 })

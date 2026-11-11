@@ -170,9 +170,11 @@ export function SecondaryTrackPanel(): JSX.Element {
             />
             <span>Duck under your voice</span>
           </label>
-          {/* Phase 3.2: ducking parameter sliders only when ducking is on. */}
+          {/* Phase 3.2: ducking parameter sliders only when ducking is on. T-183 (3): ONE column, the house slider row (label left, readout right, the
+              track under it): in the 300 px side column two columns gave each slider 116 px, and "Threshold" + gap + "-26 dBFS" needs 124, so the readout
+              overhung its slider and sat 5 px from the next column's "Ratio". */}
           {secondary.duckUnderPrimary ? (
-            <div className="grid grid-cols-2 gap-3 text-xs border-l-2 border-accent/30 pl-3 ml-2">
+            <div className="grid grid-cols-1 gap-3 text-xs border-l-2 border-accent/30 pl-3 ml-2">
               <DuckSlider
                 label="Threshold"
                 unit="dBFS"

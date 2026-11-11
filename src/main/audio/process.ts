@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process'
 import { unlink } from 'node:fs/promises'
+import path from 'node:path'
 import { ffmpegPath } from '../ffmpeg/paths'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
@@ -39,6 +40,7 @@ import {
   isNoAudioStreamError
 } from '../../shared/audio'
 import { assertAlways } from '../../shared/assert'
+import { fitFileName } from '../../shared/filename'
 
 export type AudioProgressListener = (p: AudioJobProgress) => void
 
@@ -634,7 +636,12 @@ export async function runAudioReattach(
   let tempAudioPath: string
   try {
     // In the run, so a Cancel that lands while the folder is listed is a Cancel (T-98).
-    tempAudioPath = await run.guard(nextFreePath(`${spec.outputPath.replace(/\.mp4$/i, '')}.cleaned.wav`))
+    // T-183 (2): `.cleaned.wav` is 12 characters on the name the person chose (a Save dialog name of up to 255), so the name is fitted for it.
+    const outBase = spec.outputPath.replace(/\.mp4$/i, '')
+    const outName = path.basename(outBase)
+    tempAudioPath = await run.guard(
+      nextFreePath(`${outBase.slice(0, outBase.length - outName.length)}${fitFileName(outName, '.cleaned.wav')}.cleaned.wav`)
+    )
     // The delete below is unconditional, so it must never be aimed at a file
     // the job did not make. T-114: assertAlways - as assert() this logged and CONTINUED under
     // NODE_ENV=production and the `finally` below deleted the person's source

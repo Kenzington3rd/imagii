@@ -101,3 +101,12 @@ describe('audio:pickOutputFile', () => {
     expect(showSaveDialog).not.toHaveBeenCalled()
   })
 })
+
+// T-183 (2): the suggestion is `<base>-cleaned.<ext>`; a long source name is cut and the tail stays.
+describe('audio:suggestOutputName of a long source name (T-183 (2))', () => {
+  it('keeps -cleaned and the extension, at most 255 bytes', async () => {
+    const name = String(await call('audio:suggestOutputName', `${tmpdir()}/${'a'.repeat(250)}.wav`, 'mp3'))
+    expect(name).toMatch(/^a{200,}-cleaned\.mp3$/)
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255)
+  })
+})

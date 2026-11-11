@@ -1,5 +1,6 @@
 import { lstat, mkdir, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { fitFileName } from '../../shared/filename'
 
 /**
  * T-106 — an export never replaces a file that is already there.
@@ -52,9 +53,17 @@ export async function nextFreePath(
   const { dir, name, ext } = path.parse(wanted)
   const stem = options.directory ? `${name}${ext}` : name
   const suffix = options.directory ? '' : ext
-  if (!(await isTaken(wanted))) return wanted
+  // T-183 (2): a name that is over a file system's 255 is fitted before it is looked up, and each " (N)" candidate is fitted for its own longer tail, so
+  // what comes back is always a name that can be written (a final output lands under it, and the toast and Show in folder report the landed path).
+  // simplification: when a name is cut HERE the end of the stem goes first, and a descriptive tail ("_480px_15fps", "_Highlight 3_youtube") goes with it. Main's own
+  // builders (GIF, compilation, PiP, Reframe, the default export name, the audio suggestion) fit their BASE against their tail first (`nameWithTail`) and
+  // never get here; a name built OUTSIDE main (the Clip Kit's renderer-built names, an Export template) arrives whole and is cut at its end. Upgrade: fit at the builder.
+  const fitted = fitFileName(stem, suffix)
+  const first = fitted === stem ? wanted : path.join(dir, `${fitted}${suffix}`)
+  if (!(await isTaken(first))) return first
   for (let n = 2; n <= MAX_COPIES; n++) {
-    const candidate = path.join(dir, `${stem} (${n})${suffix}`)
+    const tail = ` (${n})${suffix}`
+    const candidate = path.join(dir, `${fitFileName(stem, tail)}${tail}`)
     if (!(await isTaken(candidate))) return candidate
   }
   throw new Error(

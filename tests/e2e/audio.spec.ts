@@ -6467,3 +6467,114 @@ test.describe('round 126 Track A (T-177 (2)): the Audio importer says so for a d
     }
   })
 })
+
+// ── T-183 (3): the four ducking sliders are ONE column ──────────────────────────────────────────────────────────────────────────────────────
+//
+// In the 300 px side column a two-column grid gives each slider 116 px, and "Threshold" + the gap + "-26 dBFS" need 124: measured, the readout overhung its slider by 7 px and
+// sat 5 px from the next column's "Ratio" ("Threshold -26 dBFS Ratio 8:1"). T-126 (12)'s gap-2 fixed the 2560 case only. One column is the house row every other slider in Audio
+// Studio uses (label left, readout right, the track under it), so no width can squeeze a readout into its neighbour.
+test.describe('round 132 Track A (T-183 (3)): the ducking sliders fit their column', () => {
+  const NAMES = ['Threshold', 'Ratio', 'Attack', 'Release'] as const
+  type Box = { left: number; right: number; top: number; bottom: number }
+
+  /** In the page: every slider's label box, label-text box, readout box and track box, by name. */
+  async function measure(panel: ReturnType<Page['locator']>): Promise<Record<string, { label: Box; text: Box; readout: Box; track: Box }>> {
+    return panel.evaluate((root, names) => {
+      const box = (el: Element): Box => {
+        const r = el.getBoundingClientRect()
+        return { left: r.left, right: r.right, top: r.top, bottom: r.bottom }
+      }
+      const out: Record<string, { label: Box; text: Box; readout: Box; track: Box }> = {}
+      for (const name of names) {
+        const input = root.querySelector(`input[type="range"][aria-label="${name}"]`)
+        const label = input?.closest('label')
+        const text = label?.querySelector('span.text-ink-muted')
+        const readout = label?.querySelector('span.font-mono')
+        if (!input || !label || !text || !readout) throw new Error(`the ${name} slider was not found whole`)
+        out[name] = { label: box(label), text: box(text), readout: box(readout), track: box(input) }
+      }
+      return out
+    }, [...NAMES])
+  }
+
+  /** The gap between two boxes (0 when they touch or overlap). */
+  const distance = (a: Box, b: Box): number => Math.hypot(Math.max(a.left - b.right, b.left - a.right, 0), Math.max(a.top - b.bottom, b.top - a.bottom, 0))
+
+  function problemsAt(m: Awaited<ReturnType<typeof measure>>, where: string): string[] {
+    const found: string[] = []
+    for (const name of NAMES) {
+      const s = m[name]!
+      if (s.readout.right > s.track.right + 0.5) found.push(`${where}: the ${name} readout ends ${Math.round(s.readout.right - s.track.right)} px past its slider's track`)
+      if (s.readout.left < s.label.left - 0.5) found.push(`${where}: the ${name} readout starts left of its own row`)
+      for (const other of NAMES) {
+        if (other === name) continue
+        const gap = distance(s.readout, m[other]!.text)
+        if (gap < 12) found.push(`${where}: the ${name} readout is ${Math.round(gap)} px from the ${other} label (12 at least)`)
+      }
+    }
+    return found
+  }
+
+  test('with Duck on, at 1024x640, 1632x918 and 2560x1440: the four sliders are one column, each readout is inside its slider and 12 px or more from any other label, at the default Threshold, at its widest and through a drag across its range', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t183-duck')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubOpenDialog(app, studio.fixture)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: ')
+      await expect(panel.getByLabel('Duck under your voice'), 'music defaults Duck on').toBeChecked()
+      const threshold = panel.getByRole('slider', { name: 'Threshold' })
+      await expect(threshold).toBeVisible()
+
+      const problems: string[] = []
+      for (const [size, where] of [
+        [MIN_WINDOW, '1024x640 (the minimum)'],
+        [DEFAULT_WINDOW, '1632x918 (the default)'],
+        [{ width: 2560, height: 1440 }, '2560x1440']
+      ] as const) {
+        await setWindowSize(app, window, size)
+        await threshold.scrollIntoViewIfNeeded()
+
+        // The default value ("-26 dBFS": eight characters, the readout that overhung).
+        await expect(panel.locator('label', { hasText: 'Threshold' })).toContainText('-26 dBFS')
+        const base = await measure(panel)
+        problems.push(...problemsAt(base, `${where}, Threshold at its default`))
+        // ONE column: the same left edge, each slider strictly under the one before it.
+        const lefts = NAMES.map((n) => Math.round(base[n]!.label.left))
+        if (new Set(lefts).size !== 1) problems.push(`${where}: the four sliders are not one column (left edges ${lefts.join(', ')})`)
+        for (let i = 1; i < NAMES.length; i++) {
+          if (base[NAMES[i]!]!.label.top < base[NAMES[i - 1]!]!.label.bottom - 0.5) problems.push(`${where}: ${NAMES[i]} is not under ${NAMES[i - 1]}`)
+        }
+
+        // The widest value (-60 dBFS, still eight characters), reached by the keyboard.
+        await threshold.press('Home')
+        await expect(panel.locator('label', { hasText: 'Threshold' })).toContainText('-60 dBFS')
+        problems.push(...problemsAt(await measure(panel), `${where}, Threshold at -60`))
+        await threshold.press('End')
+        await expect(panel.locator('label', { hasText: 'Threshold' })).toContainText('0 dBFS')
+        problems.push(...problemsAt(await measure(panel), `${where}, Threshold at 0`))
+
+        // A real drag across the track, measured with the button still down at five places.
+        const track = await threshold.boundingBox()
+        expect(track, `${where}: the Threshold track is measured`).toBeTruthy()
+        if (!track) continue
+        const y = track.y + track.height / 2
+        const xs = [0.05, 0.3, 0.5, 0.75, 0.95].map((f) => ({ x: track.x + track.width * f, y }))
+        const seen: string[] = []
+        await dragThrough(window, { x: track.x + track.width * 0.97, y }, xs, async () => {
+          seen.push((await threshold.getAttribute('aria-valuetext')) ?? '')
+          problems.push(...problemsAt(await measure(panel), `${where}, mid-drag at ${seen[seen.length - 1]}`))
+        })
+        expect(new Set(seen).size, `${where}: the drag moved Threshold through several values (${seen.join(' | ')})`).toBeGreaterThan(2)
+        await threshold.fill('-26')
+        await expect(panel.locator('label', { hasText: 'Threshold' })).toContainText('-26 dBFS')
+      }
+      expect(problems, 'every readout is inside its slider and clear of every other label, in one column, at every width and value').toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

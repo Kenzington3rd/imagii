@@ -42,7 +42,7 @@ import { HOOK_MAX_SOURCE_SEC, HOOK_MIN_SEC } from '../../shared/highlights'
 import { assertSafeAbsolutePath, assertSafeId, isSafeAbsolutePath, SAFE_ID_RE } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
 import { isExistingFolder } from '../ffmpeg/outputPath'
-import { safeNamePart } from '../../shared/filename'
+import { nameWithTail, safeNamePart } from '../../shared/filename'
 import { WATERMARK_MAX_LENGTH, WATERMARK_POSITIONS } from '../../shared/watermark'
 import { clipNameForSentence } from '../ffmpeg/noPicture'
 
@@ -382,7 +382,7 @@ export function registerVideoIpc(): void {
       assertUsableCrop(params.cropRect, 'video:reframe', 'cropRect')
       assertUsableRecipe(params, 'video:reframe', 'params')
       const base = outputBaseName(params.sourceName, params.sourcePath, params.clipName)
-      const outputName = `${base}_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`
+      const outputName = nameWithTail(base, `_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`)
       const outputPath = path.join(params.outDir, outputName)
       // Round 17 B1: accept a renderer-supplied jobId so the panel's Cancel
       // button has something to identify the in-flight job. Round 18: route
@@ -603,7 +603,7 @@ export function registerVideoIpc(): void {
       assertEnum(params.position, PIP_POSITIONS, 'position')
       assertFiniteNonNeg(params.margin, 'margin')
       const base = path.parse(params.basePath).name
-      const outputPath = path.join(params.outDir, `${base}_pip.mp4`)
+      const outputPath = path.join(params.outDir, nameWithTail(base, '_pip.mp4'))
       // Round 17 B5: PiP shares concat's activeJobs map, so a renderer-supplied
       // jobId lets cancelConcatJob target this pip job directly.
       return runPipComposite(pickJobId(params.jobId), params.basePath, params.overlayPath, outputPath, {

@@ -621,7 +621,9 @@ export function ExportPanel(): JSX.Element | null {
                   ) : null}
                 </span>
                 {/* T-114: a progressbar named for its job and valued - four identical bars were four
-                    unnamed divs. The percent beside it stays the live region that speaks. */}
+                    unnamed divs. T-183 (1): the bar carries the value, so the percent beside it is aria-hidden (the T-144/T-146 rule:
+                    "a percent that moves several times a second would be read out each time from a polite region"; main forwards ffmpeg's
+                    progress unthrottled, so this one was up to 100 announcements a file). It is drawn as before. */}
                 {/* T-100: red is for a fault. A row the user canceled keeps its label and loses the color that said "something broke"
                     (the track's `tone`). */}
                 <ProgressTrack
@@ -630,11 +632,7 @@ export function ExportPanel(): JSX.Element | null {
                   percent={j.percent}
                   tone={j.error ? (j.canceled ? 'canceled' : 'failed') : 'active'}
                 />
-                <span
-                  className="font-mono text-xs text-ink-muted w-10 shrink-0 whitespace-nowrap text-right"
-                  role="status"
-                  aria-live="polite"
-                >
+                <span className="font-mono text-xs text-ink-muted w-10 shrink-0 whitespace-nowrap text-right" aria-hidden="true">
                   {Math.round(j.percent)}%
                 </span>
                 {/* T-84: the words for a bar that stopped. The toast fades in a

@@ -169,6 +169,22 @@ describe('pruneStaleTempFiles — the captions temp-copy family (T-81)', () => {
     expect(result).toEqual({ scanned: 2, removed: 1 })
   })
 
+  // T-183 (2): the sweep reads the SUFFIX of the name, so a copy whose transcript's name was cut to fit is still the temp it is.
+  it('sweeps a stale shifted copy whose name was fitted to the 255-byte limit, and keeps the long transcript it was made from', async () => {
+    const real = path.join(captionsDir, `${'v'.repeat(200)}-1700000000000.srt`)
+    const fitted = shiftedSrtPath(real, randomUUID())
+    expect(Buffer.byteLength(path.basename(fitted), 'utf8')).toBeLessThanOrEqual(255)
+    expect(path.basename(fitted).startsWith('v'.repeat(150))).toBe(true)
+    await makeFile(captionsDir, path.basename(real), STALE)
+    await makeFile(captionsDir, path.basename(fitted), STALE)
+
+    const result = await pruneStaleTempFiles()
+
+    expect(existsSync(fitted)).toBe(false)
+    expect(existsSync(real)).toBe(true)
+    expect(result).toEqual({ scanned: 1, removed: 1 })
+  })
+
   it('a userData without a captions folder is not an error', async () => {
     const result = await pruneStaleTempFiles()
     expect(result).toEqual({ scanned: 0, removed: 0 })

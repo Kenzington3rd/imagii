@@ -7,8 +7,9 @@
  * `aria-valuenow` - never an invented number. `tone` is for a row that STOPPED: red is for a fault, and the user's own Cancel is not one (T-100).
  * `className` is the width: the track is `flex-1` in a row, or a fixed width (`w-40`) in a table of rows.
  *
- * The percent readout beside a bar, and the words for a stopped row, stay with the panel: they differ (a live region in the Export queue, none
- * where the label already says the phase).
+ * The percent readout beside a bar, and the words for a stopped row, stay with the panel. The percent is `aria-hidden` everywhere it appears (the Export
+ * queue, the closed-video and closed-sound cards) and the bar carries the value: a percent that moves several times a second would be read out each time
+ * from a live region (T-144, T-146; the Export queue was the last live one, T-183 (1)).
  */
 export type ProgressTone = 'active' | 'canceled' | 'failed'
 

@@ -34,6 +34,11 @@ vi.mock('../ffmpeg/reframe', () => ({
   runReframe: (...args: unknown[]) => (runReframe as (...a: unknown[]) => unknown)(...args),
   cancelReframeJob: vi.fn()
 }))
+const runPipComposite = vi.fn(async (_jobId: string, _base: string, _overlay: string, outputPath: string) => ({ outputPath }))
+vi.mock('../ffmpeg/concat', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ffmpeg/concat')>()),
+  runPipComposite: (...args: unknown[]) => (runPipComposite as (...a: unknown[]) => unknown)(...args)
+}))
 vi.mock('../ffmpeg/gif', () => ({
   runGifExport: (...args: unknown[]) => (runGifExport as (...a: unknown[]) => unknown)(...args),
   cancelGifJob: vi.fn()
@@ -268,5 +273,38 @@ describe('Reframe and the GIF carry the clip\'s name after the video\'s, as Expo
     await gif()
     const calls = runGifExport.mock.calls as unknown as Array<[Record<string, unknown>]>
     expect(calls[0]?.[0].sourceName).toBeUndefined()
+  })
+})
+
+// T-183 (2): Reframe's name is `<source>_<clip>_reframe-WxH-<side>.mp4`, built here; a long source or clip name is cut and the tail stays (with room for " (N)").
+describe('Reframe keeps `_reframe-WxH-<side>` when the names are long (T-183 (2))', () => {
+  it('a 250-character source name: the tail is whole and the name leaves room for a copy number', async () => {
+    await reframe({ sourceName: 'r'.repeat(250), clipName: 'Cold open' })
+    const name = path.basename(String(lastReframeSpec().outputPath))
+    expect(name).toMatch(/^r{150,}_reframe-1080x1920-center\.mp4$/)
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255 - ' (9999)'.length)
+  })
+
+  it('a 250-character clip name is cut at its end, the source and the tail stay', async () => {
+    await reframe({ sourceName: 'stream', clipName: 'c'.repeat(250) })
+    expect(path.basename(String(lastReframeSpec().outputPath))).toMatch(/^stream_c{200,}_reframe-1080x1920-center\.mp4$/)
+  })
+})
+
+// T-183 (2): picture-in-picture's name is `<base>_pip.mp4`, built in the handler: a long base is cut and the tail stays.
+describe('picture-in-picture keeps `_pip` when the video\'s name is long (T-183 (2))', () => {
+  it('a 250-character base: the tail is whole and the name leaves room for a copy number', async () => {
+    await call('video:pipComposite', {
+      basePath: path.join(tmpdir(), `${'p'.repeat(250)}.mp4`),
+      overlayPath: path.join(tmpdir(), 'overlay.mp4'),
+      outDir,
+      overlayWidth: 320,
+      position: 'top-left',
+      margin: 8
+    })
+    const calls = runPipComposite.mock.calls as unknown as Array<[string, string, string, string]>
+    const name = path.basename(String(calls[calls.length - 1]?.[3]))
+    expect(name).toMatch(/^p{200,}_pip\.mp4$/)
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255 - ' (9999)'.length)
   })
 })

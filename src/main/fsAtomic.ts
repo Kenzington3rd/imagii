@@ -1,5 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { open, rename, unlink, writeFile } from 'node:fs/promises'
+import path from 'node:path'
+import { fitFileName } from '../shared/filename'
 
 /**
  * The name of a tmp this module makes, as a pattern: `<target>.<8 hex>.tmp`. For code that LISTS a folder a write may be in the middle of (the e2e helpers
@@ -46,7 +48,11 @@ export async function flushToDisk(file: string): Promise<void> {
 // simplification: the new file takes the folder's default attributes and ACL, not the old file's, and a symlink at the target is replaced rather than
 // written through. A person's project, picture, subtitle or board file has neither; the upgrade is to copy the old file's mode onto the tmp before the rename.
 export async function writeFileAtomic(target: string, data: string | Buffer): Promise<void> {
-  const tmp = `${target}.${randomBytes(4).toString('hex')}.tmp`
+  // T-183 (2): the tmp is 13 characters longer than the target, so a target of 243-255 (a transcript of a long VOD's name) got a tmp the disk could not create:
+  // the name is fitted, beside the target as before.
+  const tail = `.${randomBytes(4).toString('hex')}.tmp`
+  const leaf = path.basename(target)
+  const tmp = `${target.slice(0, target.length - leaf.length)}${fitFileName(leaf, tail)}${tail}`
   try {
     await writeFile(tmp, data)
     await flushToDisk(tmp)

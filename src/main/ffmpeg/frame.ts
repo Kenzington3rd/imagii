@@ -11,7 +11,7 @@ import { FRAME_NO_PICTURE_MESSAGE } from './noPicture'
 import { nextFreePath } from './outputPath'
 import { assert, assertAlways } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
-import { localDate, sanitizeFilename } from '../../shared/filename'
+import { fitFileName, localDate, sanitizeFilename } from '../../shared/filename'
 
 // B4 fix (round 16): single-slot tracker for the in-flight extractFrame
 // process. extractFrame is sequential (Clip Kit awaits one before the next),
@@ -148,7 +148,9 @@ export async function makeKitDir(parentDir: string, clipName: string): Promise<s
   const safe = sanitizeFilename(clipName)
   // T-117: the person's calendar day, not UTC's (a kit made at 9 pm in Pacific time is today's).
   const stamp = localDate().replace(/-/g, '')
-  const subDir = `${safe}-kit-${stamp}`
+  // T-183 (2): a clip name has no cap, and the folder is `<name>-kit-<date>` (+ " (9999)" at most): the NAME is fitted, so the folder keeps the tail that says what it is.
+  const tail = `-kit-${stamp}`
+  const subDir = `${fitFileName(safe, `${tail} (9999)`)}${tail}`
   await mkdir(parentDir, { recursive: true })
   const fullPath = await nextFreePath(path.join(parentDir, subDir), { directory: true })
   await mkdir(fullPath)

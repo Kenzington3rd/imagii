@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { expandFilenameTemplate, sanitizeFilename, localDate, localTime, localStamp } from './filename'
+import { expandFilenameTemplate, fitFileName, nameWithTail, sanitizeFilename, localDate, localTime, localStamp } from './filename'
 
 describe('sanitizeFilename', () => {
   it('passes through alphanumeric, dash, underscore unchanged', () => {
@@ -292,5 +292,95 @@ describe('nothing under src names a file or folder from the UTC ISO string (T-11
   it('the scan discriminates', () => {
     expect(UTC_STAMP.test('new Date().toISOString().slice(0, 10)')).toBe(true)
     expect(UTC_STAMP.test('localDate()')).toBe(false)
+  })
+})
+
+// T-183 (2): the name a person gave plus what imagii adds must still be a file name the disk can hold.
+describe('fitFileName - a stem cut to leave room for its suffix (T-183 (2))', () => {
+  const bytes = (s: string): number => Buffer.byteLength(s, 'utf8')
+  /** A lone surrogate does not survive UTF-8 (it comes back as U+FFFD), so a round trip that changes nothing proves no code point was split. */
+  const wholeCodePoints = (s: string): boolean => Buffer.from(s, 'utf8').toString('utf8') === s
+  const ASTRAL = String.fromCodePoint(0x1f600) // 4 bytes in UTF-8, 2 UTF-16 units
+
+  it('keeps a stem that already fits, exactly as it was (even one that ends in a dot or a space)', () => {
+    expect(fitFileName('clip', '.mp4')).toBe('clip')
+    expect(fitFileName('clip.', '.mp4')).toBe('clip.')
+    expect(fitFileName('x'.repeat(251), '.mp4')).toBe('x'.repeat(251))
+  })
+
+  it('cuts a 300-character ASCII stem so that stem + suffix is exactly 255 bytes', () => {
+    const out = fitFileName('a'.repeat(300), '.mp4')
+    expect(out).toBe('a'.repeat(251))
+    expect(bytes(`${out}.mp4`)).toBe(255)
+    // The suffix is counted: a longer tail leaves a shorter stem.
+    expect(bytes(`${fitFileName('a'.repeat(300), ' (2).mp4')} (2).mp4`)).toBe(255)
+    expect(bytes(`${fitFileName('a'.repeat(300), '.0123abcd.partial.mp4')}.0123abcd.partial.mp4`)).toBe(255)
+  })
+
+  it('counts UTF-8 BYTES, not characters: 200 two-byte letters do not fit and are cut to whole letters', () => {
+    const stem = '\u00e9'.repeat(200) // 400 bytes, 200 UTF-16 units
+    const out = fitFileName(stem, '.mp4')
+    expect(bytes(`${out}.mp4`)).toBeLessThanOrEqual(255)
+    expect(out).toBe('\u00e9'.repeat(125)) // 250 bytes + 4 = 254; a 126th letter would be 256
+    expect(wholeCodePoints(out)).toBe(true)
+    // Three-byte characters (CJK) the same way.
+    const cjk = fitFileName('\u6f22'.repeat(100), '.mp4')
+    expect(cjk).toBe('\u6f22'.repeat(83))
+    expect(bytes(`${cjk}.mp4`)).toBeLessThanOrEqual(255)
+  })
+
+  it('never splits a surrogate pair: an astral glyph that does not fit is dropped whole', () => {
+    // 249 ASCII + glyphs: the first glyph needs 4 bytes, room is 251 - 249 = 2, so none fit and none is half-written.
+    const out = fitFileName('x'.repeat(249) + ASTRAL.repeat(5), '.mp4')
+    expect(out).toBe('x'.repeat(249))
+    expect(wholeCodePoints(out)).toBe(true)
+    // One that does fit stays whole: 247 + 4 = 251.
+    const kept = fitFileName('x'.repeat(247) + ASTRAL.repeat(5), '.mp4')
+    expect(kept).toBe('x'.repeat(247) + ASTRAL)
+    expect(wholeCodePoints(kept)).toBe(true)
+    expect(bytes(`${kept}.mp4`)).toBe(255)
+    // A stem of nothing but glyphs: 62 of them (248 bytes) fit in 251.
+    const all = fitFileName(ASTRAL.repeat(100), '.mp4')
+    expect([...all].length).toBe(62)
+    expect(wholeCodePoints(all)).toBe(true)
+  })
+
+  it('trims the spaces and dots a cut leaves at the end (Windows drops them, so the file would land under another name)', () => {
+    expect(fitFileName('x'.repeat(249) + ' .' + 'y'.repeat(20), '.mp4')).toBe('x'.repeat(249))
+    expect(fitFileName('x'.repeat(246) + ' . . ' + 'y'.repeat(20), '.mp4')).toBe('x'.repeat(246))
+    expect(fitFileName('x'.repeat(250) + '. ' + 'y'.repeat(20), '.mp4')).toBe('x'.repeat(250))
+  })
+
+  it('takes the limit as an argument, and a suffix with no room leaves nothing of the stem', () => {
+    expect(fitFileName('abcdef', '.x', 5)).toBe('abc')
+    expect(fitFileName('abcdef', '.mp4', 4)).toBe('')
+    expect(fitFileName('abc', '.mp4', 1)).toBe('')
+  })
+})
+
+describe('nameWithTail - the base is cut, the descriptive tail is kept (T-183 (2))', () => {
+  const bytes = (s: string): number => Buffer.byteLength(s, 'utf8')
+
+  it('a base that fits is `<base><tail>`, exactly', () => {
+    expect(nameWithTail('stream', '_480px_15fps.gif')).toBe('stream_480px_15fps.gif')
+    expect(nameWithTail('x'.repeat(200), '_compilation.mp4')).toBe(`${'x'.repeat(200)}_compilation.mp4`)
+  })
+
+  it('a 250-character base is cut and the whole tail stays, leaving room for a " (9999)" copy', () => {
+    const tail = '_reframe-1080x1920-center.mp4'
+    const out = nameWithTail('b'.repeat(250), tail)
+    expect(out.endsWith(tail)).toBe(true)
+    expect(bytes(out)).toBe(255 - ' (9999)'.length)
+    // The " (2)" of it is a legal name that still has the tail before the extension.
+    const second = `${out.slice(0, -'.mp4'.length)} (9999).mp4`
+    expect(bytes(second)).toBeLessThanOrEqual(255)
+    expect(second.endsWith('_reframe-1080x1920-center (9999).mp4')).toBe(true)
+  })
+
+  it('cuts whole characters by bytes, and a trailing space or dot of the cut base is trimmed', () => {
+    const out = nameWithTail('é'.repeat(200), '-cleaned.mp3')
+    expect(bytes(out)).toBeLessThanOrEqual(255)
+    expect(out).toMatch(/^é+-cleaned\.mp3$/)
+    expect(nameWithTail(`${'k'.repeat(240)}. ${'m'.repeat(40)}`, '_pip.mp4')).toMatch(/^k{240}_pip\.mp4$/)
   })
 })

@@ -107,3 +107,34 @@ describe('runTranscribe - a run with no speech leaves no transcript (T-162 (1))'
     expect(readFileSync(result.srtPath as string, 'utf8')).toBe('1\n00:00:02,000 --> 00:00:04,000\n hello there\n')
   })
 })
+
+// T-183 (2): the transcript is named for the video (`<name>-<timestamp>.srt`), and a long VOD title made a name the engine could not write.
+describe('runTranscribe - the transcript of a video with a very long name (T-183 (2))', () => {
+  const bytes = (p: string): number => Buffer.byteLength(path.basename(p), 'utf8')
+  const SPEECH = '1\n00:00:00,000 --> 00:00:02,000\n hello there\n'
+
+  it('a 250-character video name gives a transcript name of at most 255 bytes, written, and still named for the video', async () => {
+    engineWrites = SPEECH
+    const name = 'v'.repeat(246)
+    const result = await runTranscribe({ jobId: 'l1', sourcePath: `/tmp/${name}.mp4` }, () => undefined)
+    const srt = result.srtPath as string
+    expect(bytes(srt)).toBeLessThanOrEqual(255)
+    expect(path.basename(srt)).toMatch(/^v{200,}-\d{13}\.srt$/)
+    expect(path.dirname(srt)).toBe(path.join(scratch, 'captions'))
+    expect(readFileSync(srt, 'utf8')).toContain('hello there')
+  })
+
+  it('a name of multi-byte characters is held to 255 bytes, in whole characters', async () => {
+    engineWrites = SPEECH
+    const result = await runTranscribe({ jobId: 'l2', sourcePath: `/tmp/${'é'.repeat(200)}.mp4` }, () => undefined)
+    const srt = path.basename(result.srtPath as string)
+    expect(Buffer.byteLength(srt, 'utf8')).toBeLessThanOrEqual(255)
+    expect(srt).toMatch(/^é+-\d{13}\.srt$/)
+  })
+
+  it('a name that fits is unchanged', async () => {
+    engineWrites = SPEECH
+    const result = await runTranscribe({ jobId: 'l3', sourcePath: '/tmp/My Stream.mp4' }, () => undefined)
+    expect(path.basename(result.srtPath as string)).toMatch(/^My Stream-\d{13}\.srt$/)
+  })
+})

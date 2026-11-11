@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto'
 import { rename, stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
+import { fitFileName } from '../../shared/filename'
 import { nextFreePath } from './outputPath'
 
 /**
@@ -50,10 +51,15 @@ import { nextFreePath } from './outputPath'
 /** The name `partialPathFor` makes, as a pattern: for code that LISTS a folder a render may be in the middle of (the e2e helpers), and for `discardPartial`'s guard. */
 export const PARTIAL_OUTPUT = /\.[0-9a-f]{8}\.partial(?:\.[^./\\]*)?$/
 
-/** `<dir>/<stem>.<8 hex>.partial<ext>`: the file ffmpeg is handed in place of `target`. A new name on every call. */
+/**
+ * `<dir>/<stem>.<8 hex>.partial<ext>`: the file ffmpeg is handed in place of `target`. A new name on every call. T-183 (2): the tail is 17 characters, so the
+ * stem is fitted to leave room for it (`fitFileName`): a target of 239-255 characters got a partial ffmpeg could not create. The partial is a hidden temp, its
+ * name need not match the target's, and `PARTIAL_OUTPUT` reads only the tail.
+ */
 export function partialPathFor(target: string): string {
   const { dir, name, ext } = path.parse(target)
-  return path.join(dir, `${name}.${randomBytes(4).toString('hex')}.partial${ext}`)
+  const tail = `.${randomBytes(4).toString('hex')}.partial${ext}`
+  return path.join(dir, `${fitFileName(name, tail)}${tail}`)
 }
 
 /**

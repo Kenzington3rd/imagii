@@ -16,6 +16,7 @@ import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { finishPartial, partialPathFor } from './partialOutput'
 import { ensureOutputDir, nextFreePath } from './outputPath'
+import { nameWithTail } from '../../shared/filename'
 import { assertDefined } from '../../shared/assert'
 import { clipSpeed, type ClipRecipe, type CompileSegment } from '../../shared/clip'
 import { COMPILE_FPS, compileFps } from '../../shared/compileFps'
@@ -358,7 +359,7 @@ async function stitch(spec: ConcatJobSpec, run: LatchRun): Promise<{ outputPath:
   // T-106: `<source>_compilation.mp4` is the name WANTED; a compilation already
   // there is the user's, and this one is written beside it.
   const wanted = await run.guard(
-    nextFreePath(path.join(spec.outDir, `${base}_compilation.mp4`))
+    nextFreePath(path.join(spec.outDir, nameWithTail(base, '_compilation.mp4')))
   )
   // T-140 (1): the join is written to a partial beside the name chosen, and swapped in only when whole (see `partialOutput.ts`).
   const partial = partialPathFor(wanted)

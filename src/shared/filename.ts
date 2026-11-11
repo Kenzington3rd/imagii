@@ -68,6 +68,15 @@ export function expandFilenameTemplate(
 }
 
 /**
+ * T-183 (2): `<base><tail>` for a name main builds from a person's (or a file's) name and a DESCRIPTIVE tail - `_480px_15fps.gif`, `_compilation.mp4`,
+ * `_reframe-1080x1920-center.mp4`, `-cleaned.wav`. The BASE is cut, never the tail: the tail is what tells the person which file is which. Room is left
+ * for `nextFreePath`'s " (9999)" as well, so a taken name's " (2)" does not cut the tail on the second run either.
+ */
+export function nameWithTail(base: string, tail: string): string {
+  return `${fitFileName(base, `${tail} (9999)`)}${tail}`
+}
+
+/**
  * The part of a name a person supplied, made safe to put in a file name: the characters Windows reserves become `_`, the ends are
  * trimmed, and an empty result is "untitled". It is what Export's `{source}`, `{clip}` and `{preset}` tokens go through, and (T-124
  * (17)) what Reframe and the GIF name their output from, so a source called "My Stream.flv" is "My Stream_reframe-..." in all three.
@@ -78,6 +87,38 @@ export function safeNamePart(s: string): string {
 
 function safe(s: string): string {
   return safeNamePart(s)
+}
+
+/** The UTF-8 length of one code point (a lone surrogate counts as the 3 bytes TextEncoder writes for it). */
+function utf8Length(codePoint: number): number {
+  return codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4
+}
+
+function utf8Bytes(s: string): number {
+  let n = 0
+  for (const ch of s) n += utf8Length(ch.codePointAt(0) ?? 0)
+  return n
+}
+
+/**
+ * T-183 (2): the stem of a name that must still be a legal file name once `suffix` is added to it. A person's name (a VOD title, a pasted clip name)
+ * plus what imagii adds - ` (2)`, `.<hex>.partial.mp4`, `-<id>.mp4`, `.srt.clip-<uuid>.srt` - can pass every gate and still be longer than the 255 a
+ * file-system component holds, and the write then fails with "File name too long". The stem is cut at a WHOLE code point (never half a surrogate pair or
+ * a multi-byte character) so that the UTF-8 length of stem + suffix is at most `maxBytes`: UTF-8 bytes bound both ext4's 255 bytes and NTFS's 255 UTF-16
+ * units (a unit is never more than 3 bytes, a pair 4). A stem that already fits comes back unchanged; a CUT stem loses its trailing spaces and dots, which
+ * Windows drops from a name (the file would land under a different name than the one asked for).
+ */
+export function fitFileName(stem: string, suffix: string, maxBytes = 255): string {
+  const room = maxBytes - utf8Bytes(suffix)
+  if (utf8Bytes(stem) <= room) return stem
+  let cut = ''
+  let used = 0
+  for (const ch of stem) {
+    used += utf8Length(ch.codePointAt(0) ?? 0)
+    if (used > room) break
+    cut += ch
+  }
+  return cut.replace(/[ .]+$/, '')
 }
 
 /**

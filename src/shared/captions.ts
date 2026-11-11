@@ -1,4 +1,5 @@
 import { assert } from './assert'
+import { fitFileName } from './filename'
 import { countOf } from './plural'
 
 export interface CaptionsInstallStatus {
@@ -509,7 +510,14 @@ const SHIFTED_SRT_NAME = new RegExp(`\\.srt\\.clip-${UUID}\\.srt$`, 'i')
  */
 export function shiftedSrtPath(srtPath: string, id: string): string {
   assert(new RegExp(`^${UUID}$`, 'i').test(id), 'shifted SRT id must be a UUID')
-  return `${srtPath}.clip-${id}.srt`
+  // T-183 (2): the copy is 46 characters longer than the transcript's name, so the name is fitted (`fitFileName`). The cut falls in the part before the
+  // transcript's own `.srt`, which stays in the tail: `isShiftedSrtName` matches the tail, so a fitted copy is still the temp the sweep recognises.
+  const at = Math.max(srtPath.lastIndexOf('/'), srtPath.lastIndexOf('\\')) + 1
+  const file = srtPath.slice(at)
+  const ext = /\.srt$/i.test(file) ? file.slice(-4) : ''
+  const stem = file.slice(0, file.length - ext.length)
+  const tail = `${ext}.clip-${id}.srt`
+  return `${srtPath.slice(0, at)}${fitFileName(stem, tail)}${tail}`
 }
 
 /** True iff `fileName` is a leftover shifted copy made by `shiftedSrtPath`. */

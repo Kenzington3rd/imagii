@@ -110,6 +110,12 @@ const KNOWN_CAUSES: ReadonlyArray<readonly [RegExp, string]> = [
   [MISSING_FILE, "A file imagii needs isn't there. It may have been moved or deleted."],
   [/\b(?:EBUSY|EPERM|EACCES)\b|resource busy|operation not permitted|access is denied/i, WINDOWS_BLOCKED],
   [RUNNER_PERMISSION_DENIED, WINDOWS_BLOCKED],
+  // T-183 (2): a name over the 255 a file system holds. imagii fits the names it builds (`fitFileName`), so this is the safety net for a name it did not: node's
+  // `ENAMETOOLONG: name too long, open ...` and ffmpeg's `Error opening output <path>: File name too long`. After the rows above, so none of them loses its words.
+  [
+    /\bENAMETOOLONG\b|name too long|filename or extension is too long/i,
+    "That file name is too long for the drive. Shorten the clip's or the video's name and try again."
+  ],
   [
     /net::ERR_|\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH)\b/,
     "imagii couldn't reach the internet. Check your connection and try again."
