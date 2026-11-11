@@ -9586,7 +9586,7 @@ IMG-PREC.
   change what ffmpeg is handed and the burn-in command — IMG-PREC), a build and every touched e2e spec file run whole
   before handback; the expediter runs the FULL Playwright suite on the landed tree; a hand-back with an unrun gate is
   not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 133)
+- **Status:** done (round 133 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -9686,7 +9686,8 @@ IMG-PREC.
   aria-labelledby on the wizard options, is the shape), the
   Reference hover scrim's source line fails contrast on bright
   thumbnails (text-ink-dim on bg-black/60 reads 1.84:1 over white;
-  ink-base or a /85 scrim is the choice), route changes carry no
+  ink-base or a /85 scrim is the choice; FIXED in T-184 (1), round 133:
+  `text-ink-base`, 4.58:1 over white; kept here as history), route changes carry no
   per-route document title or focus move, the Duck/Cleanup slider
   hints and HookIndicator reasons live only in `title`, more
   placeholder-only inputs are named (TextOverlayEditor,
@@ -9757,7 +9758,8 @@ IMG-PREC.
   the one mp4 writer that does not re-encode audio to AAC — an
   Opus/FLAC/PCM source carries its codec into the mp4 (plays in
   Chromium except AC-3-silent; measured) — re-encode to AAC for
-  guaranteed compatibility; (ac) a PiP whose silent base is
+  guaranteed compatibility (FIXED in T-184 (6), round 133: `-c:a aac
+  -b:a 192k`, whole and ranged; kept here as history); (ac) a PiP whose silent base is
   shorter than the overlay runs to the overlay's length with a
   frozen base (`-shortest` has no audio stream to bound it; the
   panel promises nothing about length — decide the expected cut);
@@ -10162,6 +10164,53 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 133 — T-184, the six counted items of sweep 71, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+0d1898e. Track A (items 1, 3, 4 and 5): text drawn over a picture is
+judged over white — the Stream Graphics size / zoom readout sits on an
+opaque `bg-bg-elevated` (5.83:1; it was 3.13:1 over a white document)
+and the Reference Search tile's source line is `text-ink-base`
+(4.58:1; T-110 (l)'s Reference-scrim member, FIXED here); `setSrtPath`
+with a different path clears the preview and holds `{ path, null }`,
+so a project open never pairs its transcript with another run's text;
+the autosave offer and the damaged notice sit in one always-mounted
+status region, and Compile's "Add a second clip to compile." and the
+chat-log sentence in always-mounted regions of their own; the three
+autosave lines take Home's `max-w-4xl`. Track B (items 2 and 6):
+`fitFileName` and `nameWithTail` count in the drive's unit — main
+passes `NAME_UNIT` (UTF-16 on win32, UTF-8 elsewhere) at all 15 call
+sites, so a CJK title Windows holds whole keeps its platform tag; the
+renderer fits where it builds, in the gate's UTF-16 unit with room for
+" (9999)": `expandFilenameTemplate` cuts the source's name first and
+then the clip's, never the preset, date, time, handle, template text
+or extension, and the Clip Kit fits its name once against its longest
+tail, with Show in folder selecting the first file the batch reports;
+the gate's length refusal is the finished sentence; the caption
+burn-in encodes its sound as AAC 192 kb/s, so a WMA, ADPCM or TrueHD
+source burns and Opus / FLAC / PCM no longer ride into the MP4 (T-110
+(ab), FIXED here). Deviations, accepted: one polite status region for
+both autosave banners (the worker's call the ticket allowed);
+`fitFileName`'s unit a required third parameter, so a missed site
+fails typecheck, with `shiftedSrtPath` taking it too; product files
+beyond Track B's list (captions.ts, userFacingError.ts and the T-183
+call sites) for the unit and the shared sentence; TrueHD covered by
+the same flags but not a Layer 5 fixture. Disclosed and not counted: a
+source spent entirely by the cut leaves a leading `_` (a 300-character
+source and clip together); the kit's thumbnails and .srt are fitted in
+UTF-16 only, which is the drive's unit on the shipped Windows build.
+Expediter: the shared video-pipelines.spec.ts and the three shared
+docs were merged as base plus A's then B's additions, every other file
+byte-identical to its clone. Track A's mutation (the held entry
+keeping the old segments) and Track B's (a twice-used token's overflow
+rounded down) were killed at unit. Ledgers: Track A 13 mutations, all
+killed (two first runs were equivalent mutants that reused the
+element, re-run with a key and killed, disclosed); Track B 13, all
+killed at unit, with the Layer 5 and e2e survivors of ASCII-only and
+fresh-folder cases disclosed. Gates on the merged tree: npm run verify
+twice (212 files, 6933 tests each; 65.6 s and 63.2 s of vitest),
+test:media 532 passed and 28 skipped of 560 (554 s), and the full xvfb
+Playwright suite, 839 passed in 61.6 min, no failures.
 
 Round 132 — T-183, the four counted items of sweep 70, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

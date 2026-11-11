@@ -7208,3 +7208,54 @@ test.describe('Image Studio — the grid-size box is labelled "Grid size (px)" a
     }
   })
 })
+
+// T-184 (1): the size / zoom readout sits at the container's bottom-right and, whenever the stage fills the container along its limiting axis (the 1024 px window, a banner in a wide column), over the
+// document's corner. It was `text-ink-dim` on `bg-bg-elevated/80`: over a WHITE document the composite behind the words is rgb(73,66,66) and ink-dim on it is 3.13:1. The backing is opaque now (5.83:1
+// over anything). The window is sized so the stage's aspect IS the container's, which puts the readout over the (white) blank document; "over the picture" is asserted, not assumed.
+test.describe('Image Studio - the size readout stays readable over a white document (T-184 (1))', () => {
+  test('at 1024 px wide, with the stage filling the container, the readout is over the white document, its backing is opaque and its words clear 4.5:1', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t184-readout')
+    const { app, window } = studio
+    try {
+      await startBlank(window)
+      const readout = window.getByText(/^\d+ × \d+ · \d+%$/)
+      await expect(readout).toBeVisible()
+      const [docW, docH] = ((await readout.textContent()) ?? '').split('·')[0]!.split('×').map((n) => Number(n.trim())) as [number, number]
+      const measure = (): Promise<{ container: { w: number; h: number }; stage: DOMRect; readout: DOMRect; windowH: number }> =>
+        window.evaluate(() => {
+          const canvas = document.querySelector('canvas') as HTMLCanvasElement
+          const container = canvas.closest('div.relative') as HTMLElement
+          const note = Array.from(container.querySelectorAll('div')).find((d) => /^\d+ × \d+ · \d+%$/.test((d.textContent ?? '').trim())) as HTMLElement
+          const c = container.getBoundingClientRect()
+          return { container: { w: c.width, h: c.height }, stage: canvas.getBoundingClientRect(), readout: note.getBoundingClientRect(), windowH: window.innerHeight }
+        })
+      // Fit the window so the container's aspect is the document's: the stage then fills both axes and the corner readout is over it.
+      await resizeAndSettle(app, window, { width: MIN_WINDOW.width, height: MIN_WINDOW.height })
+      for (let i = 0; i < 3; i++) {
+        const m = await measure()
+        const wantH = m.container.w * (docH / docW)
+        if (Math.abs(wantH - m.container.h) <= 2) break
+        await resizeAndSettle(app, window, { width: MIN_WINDOW.width, height: Math.round(m.windowH + (wantH - m.container.h)) })
+      }
+      const m = await measure()
+      const overlaps = m.readout.left < m.stage.right && m.readout.right > m.stage.left && m.readout.top < m.stage.bottom && m.readout.bottom > m.stage.top
+      expect(overlaps, `the premise: the readout (${JSON.stringify(m.readout)}) is drawn over the document (${JSON.stringify(m.stage)})`).toBe(true)
+
+      const style = await readout.evaluate((el) => ({ color: getComputedStyle(el).color, background: getComputedStyle(el).backgroundColor }))
+      const channels = (css: string): number[] => (css.match(/[\d.]+/g) ?? []).map(Number)
+      const [br = 0, bg = 0, bb = 0, ba = 1] = channels(style.background)
+      expect(ba, `the backing is opaque (${style.background}): the document under it cannot lighten it`).toBe(1)
+      const lum = (rgb: number[]): number => {
+        const [r = 0, g = 0, b = 0] = rgb.map((v) => v / 255).map((v) => (v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4))
+        return 0.2126 * r + 0.7152 * g + 0.0722 * b
+      }
+      // What a viewer sees behind the words: the backing at its alpha over a WHITE document corner.
+      const seen = [br, bg, bb].map((v) => v * ba + 255 * (1 - ba))
+      const [hi, lo] = [lum(channels(style.color).slice(0, 3)), lum(seen)].sort((a, b) => b - a) as [number, number]
+      expect((hi + 0.05) / (lo + 0.05), 'the words clear WCAG AA over a white document').toBeGreaterThanOrEqual(4.5)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

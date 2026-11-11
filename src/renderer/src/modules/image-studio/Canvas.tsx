@@ -564,7 +564,9 @@ export function Canvas(): JSX.Element {
           ) : null}
         </KonvaLayer>
       </Stage>
-      <div className="absolute bottom-2 right-2 text-xs text-ink-dim font-mono bg-bg-elevated/80 px-2 py-0.5 rounded">
+      {/* T-184 (1): opaque. The readout sits over the document's corner whenever the stage fills its container, and a translucent backing let a white
+          document through (rgb(73,66,66) behind ink-dim, 3.13:1); ink-dim on the solid bg-elevated is 5.83:1 over any content. */}
+      <div className="absolute bottom-2 right-2 text-xs text-ink-dim font-mono bg-bg-elevated px-2 py-0.5 rounded">
         {doc.width} × {doc.height} · {Math.round(stageScale * 100)}%
       </div>
     </div>

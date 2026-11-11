@@ -1668,10 +1668,12 @@ describe('T-122 — the round-72 fixes are wired where the person reaches them',
     const kit = strip(read('modules/video-studio/ClipKitButton.tsx'))
     // The one sanitized name, then the folder asked for with it: the raw `clip.name` never reaches `video:makeKitDir`.
     expect(kit).toMatch(
-      /const safeName = sanitizeFilename\(clip\.name\)\s*useKitRun\.getState\(\)\.patch\(\{ phase: 'Creating folder…' \}\)\s*kitDir = await window\.api\.video\.makeKitDir\(\{\s*parentDir,\s*clipName: safeName\s*\}\)/
+      /const safeName = kitSafeName\(clip\.name\)\s*useKitRun\.getState\(\)\.patch\(\{ phase: 'Creating folder…' \}\)\s*kitDir = await window\.api\.video\.makeKitDir\(\{\s*parentDir,\s*clipName: safeName\s*\}\)/
     )
     expect(kit, 'the folder is asked for with the sanitized name').not.toMatch(/makeKitDir\(\{[^}]*clipName: clip\.name/)
-    expect((kit.match(/sanitizeFilename\(/g) ?? []).length).toBe(1)
+    // T-184 (2): the name is made by `kitSafeName` (the sanitizer, then fitted once); the button no longer calls the sanitizer itself, and `kitSafeName` calls it exactly once.
+    expect((kit.match(/sanitizeFilename\(/g) ?? []).length).toBe(0)
+    expect((strip(read('modules/video-studio/clipKit.ts')).match(/sanitizeFilename\(/g) ?? []).length).toBe(1)
     // Main keeps its gates: they are trust-boundary validation, and the renderer now satisfies them.
     const video = strip(readFileSync(path.resolve(RENDERER_ROOT, '../../main/ipc/video.ts'), 'utf8'))
     expect(video).toMatch(/assertNonEmptyString\(params\.clipName, 'clipName'\)/)

@@ -8,7 +8,7 @@ import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch } from './cancelLatch'
 import { finishPartial, partialPathFor, wroteOutput } from './partialOutput'
 import { FRAME_NO_PICTURE_MESSAGE } from './noPicture'
-import { nextFreePath } from './outputPath'
+import { NAME_UNIT, nextFreePath } from './outputPath'
 import { assert, assertAlways } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
 import { fitFileName, localDate, sanitizeFilename } from '../../shared/filename'
@@ -150,7 +150,7 @@ export async function makeKitDir(parentDir: string, clipName: string): Promise<s
   const stamp = localDate().replace(/-/g, '')
   // T-183 (2): a clip name has no cap, and the folder is `<name>-kit-<date>` (+ " (9999)" at most): the NAME is fitted, so the folder keeps the tail that says what it is.
   const tail = `-kit-${stamp}`
-  const subDir = `${fitFileName(safe, `${tail} (9999)`)}${tail}`
+  const subDir = `${fitFileName(safe, `${tail} (9999)`, NAME_UNIT)}${tail}`
   await mkdir(parentDir, { recursive: true })
   const fullPath = await nextFreePath(path.join(parentDir, subDir), { directory: true })
   await mkdir(fullPath)

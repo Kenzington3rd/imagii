@@ -9,6 +9,7 @@ import { CancelLatch, type LatchRun } from './cancelLatch'
 import { CancelledError } from '../../shared/cancel'
 import { burnInPercent } from '../../shared/captions'
 import { fitFileName } from '../../shared/filename'
+import { NAME_UNIT } from './outputPath'
 
 /**
  * Transcode any ffmpeg-readable container to a preview-safe mp4
@@ -365,7 +366,7 @@ export async function convertForImport(
     const base = path.basename(inputPath, path.extname(inputPath))
     // T-183 (2): the source's name is the person's (a VOD title), and the copy adds 13 characters to it.
     const tail = `-${nanoid(8)}.mp4`
-    const mp4Path = path.join(dir, `${fitFileName(base, tail)}${tail}`)
+    const mp4Path = path.join(dir, `${fitFileName(base, tail, NAME_UNIT)}${tail}`)
     try {
       await convertToMp4('import', inputPath, mp4Path, onProgress)
     } catch (err) {

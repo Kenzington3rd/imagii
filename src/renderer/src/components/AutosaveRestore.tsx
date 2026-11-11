@@ -30,7 +30,22 @@ function formatAge(ms: number): string {
   return `${countOf(Math.floor(ms / 86400000), 'day')} ago`
 }
 
-export function AutosaveRestore(): JSX.Element | null {
+/**
+ * T-184 (4): the banner sits in a status region that is mounted from the first render and empty until the autosave has been read. The offer and the damaged notice arrive
+ * after `autosave.read()` resolves, on the recovery path after a crash, and a live region that appears with its content is not reliably read (ExportPanel's T-153 note).
+ * The region takes no room while it is empty (a block with no margin); the "Last autosave" line is a status line, not news, so it stays outside it. One region for both
+ * banners: the damaged notice is a fault, but an always-mounted polite region announces it as reliably as a late `alert` and the offer needs no second node.
+ */
+function withRegion(banner: JSX.Element | null, line?: JSX.Element): JSX.Element {
+  return (
+    <>
+      <div role="status">{banner}</div>
+      {line}
+    </>
+  )
+}
+
+export function AutosaveRestore(): JSX.Element {
   const navigate = useNavigate()
   const [snapshot, setSnapshot] = useState<AutosaveSnapshot | null>(null)
   const [dismissed, setDismissed] = useState(false)
@@ -108,13 +123,15 @@ export function AutosaveRestore(): JSX.Element | null {
     // single-line "Last autosave: 5 min ago" so the user knows imagii is
     // backing them up. Driven by the cheap autosave.info() call.
     if (info && info.exists && info.ageMs !== undefined) {
-      return (
-        <div className="text-xs text-ink-dim mb-3">
+      // T-184 (5): the same width as Home's grid (`max-w-4xl`), as the two banners below.
+      return withRegion(
+        null,
+        <div className="text-xs text-ink-dim mb-3 max-w-4xl">
           Last autosave: {formatAge(info.ageMs)}
         </div>
       )
     }
-    return null
+    return withRegion(null)
   }
 
   async function restore(): Promise<void> {
@@ -207,8 +224,9 @@ export function AutosaveRestore(): JSX.Element | null {
         : ageText
 
   if (!snapshot.ok) {
-    return (
-      <div className="card p-3 mb-4 border-danger-strong/40 bg-danger-strong/5 text-sm flex items-center gap-3">
+    // T-184 (5): `max-w-4xl` is Home's grid (routes/Home.tsx), so Clear / Dismiss sit with the cards below instead of 1,900 px from the sentence at 2560 wide.
+    return withRegion(
+      <div className="card p-3 mb-4 max-w-4xl border-danger-strong/40 bg-danger-strong/5 text-sm flex items-center gap-3">
         <span className="text-danger flex-shrink-0">
           <Icon name="warning" size={18} />
         </span>
@@ -234,8 +252,8 @@ export function AutosaveRestore(): JSX.Element | null {
     )
   }
 
-  return (
-    <div className="card p-3 mb-4 border-accent/40 bg-accent/5 text-sm flex items-center gap-3">
+  return withRegion(
+    <div className="card p-3 mb-4 max-w-4xl border-accent/40 bg-accent/5 text-sm flex items-center gap-3">
       <span className="text-accent flex-shrink-0">
         <Icon name="save" size={18} />
       </span>

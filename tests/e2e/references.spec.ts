@@ -30,6 +30,7 @@ import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import type { MoodBoardCollection } from '../../src/shared/search'
 import { countOf } from '../../src/shared/plural'
+import { INK_BASE } from '../../src/renderer/src/styles/tokens'
 import { installToastLog, readToastLog } from './toastLog'
 import { withoutAtomicTmp } from './atomicTmp'
 
@@ -4088,6 +4089,44 @@ test.describe('round 131 Track A (T-182 (1)): a refused mood-board Undo says so 
       await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([seeded])
       expect((await readToastLog(window)).filter((t) => t.startsWith("Couldn't undo that."))).toHaveLength(1)
       await expect(redo).toBeEnabled()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-184 (1): the Reference Search tile's hover scrim is `bg-black/60` over the thumbnail, and its source line was `text-ink-dim`: 1.84:1 over a white picture (T-110 (l), sweep 12). It is ink-base now (4.58:1 over white).
+test.describe('T-184 (1): the Reference Search tile\'s source line is ink-base', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  test('the source line under a hovered tile is drawn in ink-base, as the title above it is', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t184-source')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(async ({ ipcMain }, pixel) => {
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', (_e, query: unknown) => ({
+          query: String(query),
+          provider: 'duckduckgo',
+          results: [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'example.test', title: 'A picture' }]
+        }))
+      }, PIXEL)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('anything')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible({ timeout: 10_000 })
+      const tile = window.locator('div.group', { has: window.locator('img[alt="A picture"]') })
+      await tile.hover()
+      const source = tile.getByText('example.test', { exact: true })
+      await expect(source).toBeVisible()
+      const rgb = (hex: string): string => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`
+      const colour = (el: Locator): Promise<string> => el.evaluate((n) => getComputedStyle(n).color)
+      expect(await colour(source), 'the source line is ink-base').toBe(rgb(INK_BASE))
+      expect(await colour(tile.getByText('A picture', { exact: true })), 'the same ink as the title above it').toBe(rgb(INK_BASE))
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })

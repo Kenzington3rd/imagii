@@ -569,8 +569,7 @@ describe('video:exportBatch - the file name and the watermark of a job (T-144)',
     ['leading space', ' clip.mp4'],
     ['an empty string', ''],
     ['a number', 7],
-    ['null', null],
-    ['an over-long name', `${'a'.repeat(252)}.mp4`]
+    ['null', null]
   ]
   it.each(BAD_NAMES)('refuses %s as the output file name', async (_label, name) => {
     const err = await refused(withField('outputFilename', name))
@@ -623,5 +622,43 @@ describe('video:exportBatch - the file name and the watermark of a job (T-144)',
     const next = runBatch([job('b', 'two')], () => undefined)
     await finishNextChild()
     expect(((await next) as { resolved: unknown[] }).resolved).toHaveLength(1)
+  })
+})
+
+/**
+ * T-184 (2) - the gate's length refusal is a finished sentence. The renderer fits the names it builds, so a name over 255 reaches the gate only when nobody fitted it;
+ * the person then reads why (the cause and what to do) instead of "Export failed." with nothing after it. It was an assertion for a log ("Assertion failed: jobs[0].
+ * outputFilename must be a name ending in .mp4", which `userFacingError` rightly turns into the bare fallback). The other refusals of the gate are unchanged.
+ */
+describe('video:exportBatch - a file name over 255 is refused in a sentence a person can act on (T-184 (2))', () => {
+  const SENTENCE = "That file name is too long for the drive. Shorten the clip's or the video's name and try again."
+  const refusedWith = async (name: string): Promise<Error> => {
+    const err = await runBatch([{ ...job('a', 'one'), outputFilename: name }], () => undefined)
+    expect(err).toBeInstanceOf(Error)
+    expect(probes, 'refused before any probe').toEqual([])
+    expect(children, 'and before any ffmpeg').toHaveLength(0)
+    return err as Error
+  }
+
+  it('says exactly the finished sentence, with no assertion prefix and no field path, and userFacingError lets it stand', async () => {
+    const err = await refusedWith(`${'a'.repeat(252)}.mp4`)
+    expect(err.message).toBe(SENTENCE)
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    const shown = userFacingError(err, 'Export failed.')
+    quiet.mockRestore()
+    expect(shown.message).toBe(SENTENCE)
+    expect(shown.cancelled).toBe(false)
+  })
+
+  it('the limit is 255 UTF-16 units exactly: 255 is let through, 256 is refused', async () => {
+    expect((await refusedWith(`${'a'.repeat(252)}.mp4`)).message).toBe(SENTENCE) // 256
+    const run = runBatch([{ ...job('a', 'one'), outputFilename: `${'a'.repeat(251)}.mp4` }], () => undefined) // 255
+    await finishNextChild()
+    expect(((await run) as { resolved: unknown[] }).resolved).toHaveLength(1)
+  })
+
+  it("a name that is both over-long and not an .mp4 keeps the .mp4 refusal (the length sentence is not a catch-all)", async () => {
+    const err = await refusedWith(`${'a'.repeat(300)}.exe`)
+    expect(err.message).toMatch(/jobs\[0\]\.outputFilename must be a name ending in \.mp4/)
   })
 })

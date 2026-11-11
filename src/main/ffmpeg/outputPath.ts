@@ -1,6 +1,6 @@
 import { lstat, mkdir, stat } from 'node:fs/promises'
 import path from 'node:path'
-import { fitFileName } from '../../shared/filename'
+import { fitFileName, type NameUnit } from '../../shared/filename'
 
 /**
  * T-106 — an export never replaces a file that is already there.
@@ -33,6 +33,13 @@ import { fitFileName } from '../../shared/filename'
  * instead of `-y` on the final output — and turn that exit into a retry.
  */
 
+/**
+ * T-184 (2): what this drive's 255 is counted in, named ONCE for every place main fits a name (`fitFileName` / `nameWithTail`). The shipped build is Windows-only,
+ * where NTFS holds 255 UTF-16 units; anywhere else (the dev and CI hosts: ext4) it is 255 UTF-8 bytes. Read where this module loads, which is once, on the process the
+ * names are written from.
+ */
+export const NAME_UNIT: NameUnit = process.platform === 'win32' ? 'utf16' : 'utf8'
+
 /** A folder with this many copies of one name is not an export folder; stop walking. */
 const MAX_COPIES = 9999
 
@@ -55,15 +62,18 @@ export async function nextFreePath(
   const suffix = options.directory ? '' : ext
   // T-183 (2): a name that is over a file system's 255 is fitted before it is looked up, and each " (N)" candidate is fitted for its own longer tail, so
   // what comes back is always a name that can be written (a final output lands under it, and the toast and Show in folder report the landed path).
-  // simplification: when a name is cut HERE the end of the stem goes first, and a descriptive tail ("_480px_15fps", "_Highlight 3_youtube") goes with it. Main's own
-  // builders (GIF, compilation, PiP, Reframe, the default export name, the audio suggestion) fit their BASE against their tail first (`nameWithTail`) and
-  // never get here; a name built OUTSIDE main (the Clip Kit's renderer-built names, an Export template) arrives whole and is cut at its end. Upgrade: fit at the builder.
-  const fitted = fitFileName(stem, suffix)
+  // simplification: when a name is cut HERE the end of the stem goes first, and a descriptive tail ("_480px_15fps", "_Highlight 3_youtube") goes with it. T-184 (2):
+  // every builder now fits its own name against its tail first - main's (GIF, compilation, PiP, Reframe, the default export name, the audio suggestion: `nameWithTail`)
+  // and the renderer's (Export's template, `expandFilenameTemplate`, and the Clip Kit's `kitSafeName`, both in the gate's UTF-16 unit and with room for " (9999)") - so
+  // what arrives here is already under the limit and keeps its tail. What is still cut here is a name nobody builds: a caller that hands `nextFreePath` a name of its own
+  // (a Save dialog's choice, a drag-in), and a name that is over in the DRIVE's unit when the builder fitted in another (a CJK name on a non-Windows host: the builder's UTF-16
+  // count is the gate's, not ext4's bytes). Those lose the end of the stem and any tail with it. Upgrade: pass the tail in (`nextFreePath(wanted, { keep: tail })`).
+  const fitted = fitFileName(stem, suffix, NAME_UNIT)
   const first = fitted === stem ? wanted : path.join(dir, `${fitted}${suffix}`)
   if (!(await isTaken(first))) return first
   for (let n = 2; n <= MAX_COPIES; n++) {
     const tail = ` (${n})${suffix}`
-    const candidate = path.join(dir, `${fitFileName(stem, tail)}${tail}`)
+    const candidate = path.join(dir, `${fitFileName(stem, tail, NAME_UNIT)}${tail}`)
     if (!(await isTaken(candidate))) return candidate
   }
   throw new Error(

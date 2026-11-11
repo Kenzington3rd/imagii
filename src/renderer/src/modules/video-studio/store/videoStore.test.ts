@@ -2254,3 +2254,80 @@ describe('holdTranscriptFor - a late transcript waits for its video (T-174 (5))'
     expect(useVideoStore.getState().derived.transcript).toBeNull()
   })
 })
+
+/**
+ * T-184 (3): a project open calls `setSrtPath(part.srtPath)` AFTER `loadSource` gave back the video's held transcript. It merged only the path, so a video transcribed
+ * (P2), closed, and opened through a project saved with an older `.srt` (P1) held `srtPath` P1 over P2's segments: the Captions panel previewed one run's text while Save
+ * .srt, Burn into video and the Clip Kit used another's file. A DIFFERENT path clears the preview and the held segments; the same path keeps them.
+ */
+describe('setSrtPath with a different path drops the other transcript\'s preview (T-184 (3))', () => {
+  const P1 = '/captions/stream-1700000000000.srt'
+  const P2 = '/captions/stream-1700000999999.srt'
+  const SEGMENTS_P2 = [{ startSec: 0, endSec: 2, text: 'from P2' }]
+
+  beforeEach(() => {
+    vi.stubGlobal('window', {
+      api: { video: { fileUrl: (p: string) => `imagii-file://${p}`, probe: async () => ({ ...FAKE_SOURCE.probe, duration: 60 }) } }
+    })
+    useVideoStore.getState().clearSource()
+    useVideoStore.getState().forgetHeldTranscripts()
+  })
+  afterEach(() => {
+    useVideoStore.getState().forgetHeldTranscripts()
+    vi.unstubAllGlobals()
+  })
+
+  /** The reader's sequence up to the project open: transcribe P2, Close, open the video again (it gets P2 back). */
+  async function transcribedThenReopened(): Promise<void> {
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().setSrtPathFor('/v/a.mp4', P2)).toBe(true)
+    expect(useVideoStore.getState().setDerivedFor('/v/a.mp4', { transcript: SEGMENTS_P2 })).toBe(true)
+    useVideoStore.getState().clearSource()
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath, 'the premise: P2 came back with its segments').toBe(P2)
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS_P2)
+  }
+
+  it('the reader\'s sequence: the project\'s P1 has no preview (P2\'s text is not shown over it), and the held entry is { P1, null }', async () => {
+    await transcribedThenReopened()
+    useVideoStore.getState().setSrtPath(P1)
+    expect(useVideoStore.getState().srtPath).toBe(P1)
+    expect(useVideoStore.getState().derived.transcript, 'no preview of the other run').toBeNull()
+    // The held entry: Close and open again gives back P1 with no segments, not P2's.
+    useVideoStore.getState().clearSource()
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().srtPath).toBe(P1)
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+  })
+
+  it('only the transcript goes: the rest of `derived` is as it was', async () => {
+    await transcribedThenReopened()
+    useVideoStore.getState().setDerived({ highlightChat: 'pasted' })
+    useVideoStore.getState().setSrtPath(P1)
+    expect(useVideoStore.getState().derived.highlightChat).toBe('pasted')
+  })
+
+  it('control: the same path keeps its preview (a project of the transcript that was just made opens with it), here and after a Close', async () => {
+    await transcribedThenReopened()
+    useVideoStore.getState().setSrtPath(P2)
+    expect(useVideoStore.getState().srtPath).toBe(P2)
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS_P2)
+    useVideoStore.getState().clearSource()
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS_P2)
+  })
+
+  it('a path onto a video that holds no transcript is just the path (the T-174 first-run state)', async () => {
+    await useVideoStore.getState().loadSource('/v/a.mp4')
+    useVideoStore.getState().setSrtPath(P1)
+    expect(useVideoStore.getState().srtPath).toBe(P1)
+    expect(useVideoStore.getState().derived.transcript).toBeNull()
+  })
+
+  it('clearing the path is as it was: null forgets the path and leaves the segments the panel shows', async () => {
+    await transcribedThenReopened()
+    useVideoStore.getState().setSrtPath(null)
+    expect(useVideoStore.getState().srtPath).toBeNull()
+    expect(useVideoStore.getState().derived.transcript).toEqual(SEGMENTS_P2)
+  })
+})

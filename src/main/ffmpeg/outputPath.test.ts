@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { ensureOutputDir, isExistingFolder, nextFreePath, outputFolderRefusal } from './outputPath'
@@ -305,5 +305,92 @@ describe('nextFreePath - names at and over the file system limit (T-183 (2))', (
     expect(bytes(kit)).toBeLessThanOrEqual(255)
     expect(base(kit).endsWith(`-kit-${localDate().replace(/-/g, '')}`)).toBe(true)
     expect(existsSync(kit)).toBe(true)
+  })
+})
+
+/**
+ * T-184 (2) - the drive's unit is named in ONE place and every place main fits a name uses it.
+ *
+ * `NAME_UNIT` is `'utf16'` on Windows (NTFS holds 255 UTF-16 units: a kanji is one) and `'utf8'` elsewhere (ext4 holds 255 bytes). It is read when the module loads, so the
+ * platform is mocked and the module imported afresh. The Windows unit cannot be exercised against a real folder on this host (a 200-kanji name is 600 bytes, which ext4
+ * refuses at `lstat`), so the integration half mocks the file system's `lstat` and asks `nextFreePath` what name it would use; Layer 5 holds the ASCII names on real files.
+ */
+describe('NAME_UNIT - the unit the drive counts a name in (T-184 (2))', () => {
+  const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform') as PropertyDescriptor
+  const KANJI = '漢'
+
+  async function loadOn(platform: string): Promise<typeof import('./outputPath')> {
+    Object.defineProperty(process, 'platform', { ...realPlatform, value: platform })
+    vi.resetModules()
+    return import('./outputPath')
+  }
+
+  afterEach(() => {
+    Object.defineProperty(process, 'platform', realPlatform)
+    vi.doUnmock('node:fs/promises')
+    vi.resetModules()
+  })
+
+  it("is 'utf16' under a mocked win32 and 'utf8' everywhere else", async () => {
+    expect((await loadOn('win32')).NAME_UNIT).toBe('utf16')
+    expect((await loadOn('linux')).NAME_UNIT).toBe('utf8')
+    expect((await loadOn('darwin')).NAME_UNIT).toBe('utf8')
+  })
+
+  it('nextFreePath follows it: a 200-kanji name is kept whole on win32 and cut to whole characters on linux', async () => {
+    vi.doMock('node:fs/promises', () => ({
+      lstat: async () => {
+        throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' })
+      },
+      mkdir: async () => undefined,
+      stat: async () => ({ isDirectory: () => true })
+    }))
+    const wanted = path.join('/out', `${KANJI.repeat(200)}.mp4`)
+    expect(await (await loadOn('win32')).nextFreePath(wanted)).toBe(wanted)
+    expect(await (await loadOn('linux')).nextFreePath(wanted)).toBe(path.join('/out', `${KANJI.repeat(83)}.mp4`))
+  })
+
+  it('every place main fits a name passes it: no fitFileName, nameWithTail or shiftedSrtPath call in src/main is without NAME_UNIT', () => {
+    const mainDir = path.join(__dirname, '..')
+    const files: string[] = []
+    const walk = (d: string): void => {
+      for (const entry of readdirSync(d, { withFileTypes: true })) {
+        const full = path.join(d, entry.name)
+        if (entry.isDirectory()) walk(full)
+        else if (/\.ts$/.test(entry.name) && !/\.test\.ts$/.test(entry.name)) files.push(full)
+      }
+    }
+    walk(mainDir)
+    let sites = 0
+    const bare: string[] = []
+    for (const file of files) {
+      const text = readFileSync(file, 'utf8')
+      for (const m of text.matchAll(/\b(fitFileName|nameWithTail|shiftedSrtPath)\(/g)) {
+        // The arguments, to the matching close paren (strings and template literals skipped, so a "(9999)" in one does not count).
+        let depth = 1
+        let i = (m.index ?? 0) + m[0].length
+        let quote: string | null = null
+        const start = i
+        for (; i < text.length && depth > 0; i++) {
+          const c = text[i]
+          if (quote) {
+            if (c === '\\') i++
+            else if (c === quote) quote = null
+          } else if (c === "'" || c === '"' || c === '`') quote = c
+          else if (c === '(') depth++
+          else if (c === ')') depth--
+        }
+        const args = text.slice(start, i - 1)
+        // The definitions and the doc comments are not calls: a call has no `function ` / `export` before it and is not inside a comment line.
+        const lineStart = text.lastIndexOf('\n', m.index ?? 0) + 1
+        const line = text.slice(lineStart, text.indexOf('\n', m.index ?? 0))
+        if (/^\s*(\*|\/\/|\/\*)/.test(line) || /function\s+\w+\($/.test(text.slice(lineStart, (m.index ?? 0) + m[0].length))) continue
+        sites++
+        if (!/\bNAME_UNIT\b/.test(args)) bare.push(`${path.relative(mainDir, file)}: ${m[1]}(${args.slice(0, 40)}`)
+      }
+    }
+    expect(bare).toEqual([])
+    // The fifteen call sites there are in main today: a rename that made the scan find none must not pass.
+    expect(sites).toBeGreaterThanOrEqual(15)
   })
 })

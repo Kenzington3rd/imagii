@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { open, rename, unlink, writeFile } from 'node:fs/promises'
 import path from 'node:path'
 import { fitFileName } from '../shared/filename'
+import { NAME_UNIT } from './ffmpeg/outputPath'
 
 /**
  * The name of a tmp this module makes, as a pattern: `<target>.<8 hex>.tmp`. For code that LISTS a folder a write may be in the middle of (the e2e helpers
@@ -52,7 +53,7 @@ export async function writeFileAtomic(target: string, data: string | Buffer): Pr
   // the name is fitted, beside the target as before.
   const tail = `.${randomBytes(4).toString('hex')}.tmp`
   const leaf = path.basename(target)
-  const tmp = `${target.slice(0, target.length - leaf.length)}${fitFileName(leaf, tail)}${tail}`
+  const tmp = `${target.slice(0, target.length - leaf.length)}${fitFileName(leaf, tail, NAME_UNIT)}${tail}`
   try {
     await writeFile(tmp, data)
     await flushToDisk(tmp)

@@ -6,7 +6,7 @@ import { probeVideo } from './probe'
 import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { finishPartial, partialPathFor } from './partialOutput'
-import { ensureOutputDir, nextFreePath } from './outputPath'
+import { NAME_UNIT, ensureOutputDir, nextFreePath } from './outputPath'
 import { nameWithTail } from '../../shared/filename'
 import { assertDefined } from '../../shared/assert'
 import type { CropRect } from '../../shared/clip'
@@ -81,7 +81,7 @@ async function makeGif(spec: GifJobSpec, run: LatchRun): Promise<{ outputPath: s
   // T-125 (10): the folder is there before the name is chosen.
   await run.guard(ensureOutputDir(spec.outDir))
   const wanted = await run.guard(
-    nextFreePath(path.join(spec.outDir, nameWithTail(base, `_${spec.width}px_${Math.round(spec.fps)}fps.gif`)))
+    nextFreePath(path.join(spec.outDir, nameWithTail(base, `_${spec.width}px_${Math.round(spec.fps)}fps.gif`, NAME_UNIT)))
   )
   // T-140 (1): written to a partial beside the name chosen, swapped in only when whole (`partialOutput.ts`).
   const partial = partialPathFor(wanted)

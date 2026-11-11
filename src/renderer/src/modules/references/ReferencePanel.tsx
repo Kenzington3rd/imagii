@@ -196,7 +196,8 @@ export function ReferencePanel(): JSX.Element {
                   the scrim lit after the pointer had left. */}
               <div className="absolute inset-0 opacity-0 group-hover:opacity-100 has-[:focus-visible]:opacity-100 transition-opacity bg-black/60 flex flex-col items-center justify-center gap-2 p-2 text-center">
                 <span className="text-xs text-ink-base line-clamp-2" title={result.title}>{result.title}</span>
-                <span className="text-xs text-ink-dim">{result.source}</span>
+                {/* T-184 (1): ink-base - the scrim is bg-black/60 over a thumbnail, and ink-dim on it was 1.84:1 over a white one. */}
+                <span className="text-xs text-ink-base">{result.source}</span>
                 {/* T-28: never disabled. "You have no board yet" is a reason
                     to ASK for one, not a reason to refuse the click — the
                     disabled state is what made the first-save prompt

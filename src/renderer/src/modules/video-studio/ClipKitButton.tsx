@@ -2,10 +2,9 @@ import { useRef, useState } from 'react'
 import toast from 'react-hot-toast'
 import { nanoid } from 'nanoid'
 import path from 'path-browserify'
-import type { Clip } from '@shared/clip'
+import type { Clip, ExportResult } from '@shared/clip'
 import { CancelledError } from '@shared/cancel'
 import { userFacingError } from '@shared/userFacingError'
-import { sanitizeFilename } from '@shared/filename'
 import { buildWatermark } from '@shared/watermark'
 import { KIT_PLATFORM_IDS, outputDurationSec, type PlatformInfo } from './presets'
 import {
@@ -18,7 +17,9 @@ import {
   kitExportLabel,
   kitLimitTargets,
   kitOtherVideoCaption,
+  kitRevealPath,
   kitRunCaption,
+  kitSafeName,
   kitSrtFilename,
   kitThumbFilename,
   kitThumbLabel,
@@ -237,8 +238,8 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         // refuses one, and the raw name used to reach it: the kit failed after the folder
         // pick with the bare "Clip Kit failed.". The sanitizer's 'clip' fallback satisfies
         // the gate (main sanitizes again, which is idempotent) and the folder and every file
-        // come from the one name.
-        const safeName = sanitizeFilename(clip.name)
+        // come from the one name. T-184 (2): and it is fitted once (`kitSafeName`), so no kit file is over the gate's 255.
+        const safeName = kitSafeName(clip.name)
         useKitRun.getState().patch({ phase: 'Creating folder…' })
         kitDir = await window.api.video.makeKitDir({
           parentDir,
@@ -277,8 +278,9 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
           landed += 1
           useKitRun.getState().patch({ phase: kitExportLabel(finished, queue.length) })
         })
+        let results: ExportResult[] = []
         try {
-          await window.api.video.exportBatch(queue)
+          results = await window.api.video.exportBatch(queue)
         } finally {
           offJobComplete()
         }
@@ -341,7 +343,8 @@ export function ClipKitButton({ clip }: ClipKitButtonProps): JSX.Element | null 
         // file the queue wrote, whatever the YouTube slot turned out to be named
         // (T-112: it is a Short when the CROP is vertical, so the name is read off
         // the queue instead of being worked out a second time here).
-        const firstOutput = path.join(kitDir, queue[0]?.outputFilename ?? `${safeName}_youtube.mp4`)
+        // T-184 (2): the file the batch REPORTS it wrote (its landed path), not the name built here: a name main fitted or numbered is a different file.
+        const firstOutput = kitRevealPath(results, path.join(kitDir, queue[0]?.outputFilename ?? `${safeName}_youtube.mp4`))
         void window.api.video.revealInFolder(firstOutput)
       } catch (err) {
         // T-112: nothing finished, so there is nothing to keep. Main removes the folder only if it

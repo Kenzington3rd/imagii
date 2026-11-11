@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import type { Clip, WatermarkSpec } from '@shared/clip'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
+import type { Clip, ExportResult, WatermarkSpec } from '@shared/clip'
 import {
   YOUTUBE_SHORT_LIMIT_SEC,
   buildKitQueue,
@@ -12,7 +14,9 @@ import {
   kitExportLabel,
   kitOtherVideoCaption,
   kitLimitTargets,
+  kitRevealPath,
   kitRunCaption,
+  kitSafeName,
   kitSrtFilename,
   kitThumbFilename,
   kitThumbLabel,
@@ -580,5 +584,93 @@ describe('kitOtherVideoCaption - a kit whose video is not the open one (T-171 (4
       'Started on another video: Clip Kit for "Cold open" from 2026-11-05 21-14-08.mp4.'
     )
     expect(kitOtherVideoCaption('', 'a.mp4')).toBe('Started on another video: Clip Kit for an unnamed clip from a.mp4.')
+  })
+})
+
+/**
+ * T-184 (2) - a long clip name is fitted ONCE, against the longest kit tail, so every kit file is under the gate's 255 UTF-16 units, keeps its own tail and shares the
+ * one prefix; and Show in folder selects the file the batch reports, not the name the kit built.
+ */
+describe('the Clip Kit fits a long clip name once (T-184 (2))', () => {
+  const VERTICAL = { filePath: '/v/stream.mp4', width: 1080, height: 1920 }
+  const GATE = 255
+  const NEXT_FREE = ' (9999)'.length
+
+  /** Every file name the kit asks main for, for a clip of this name: the five videos (the YouTube slot a Short when vertical), the .srt and the three thumbnails. */
+  function kitNames(clipName: string, source = VERTICAL): { safe: string; videos: string[]; srt: string; thumbs: string[] } {
+    const safe = kitSafeName(clipName)
+    const queue = buildKitQueue({ source, clip: { ...CLIP, name: clipName }, kitDir: '/kit', safeName: safe, watermark: null, newJobId: () => 'j' })
+    return {
+      safe,
+      videos: queue.map((j) => j.outputFilename ?? ''),
+      srt: kitSrtFilename(safe),
+      thumbs: [0, 1, 2].map((i) => kitThumbFilename(safe, i))
+    }
+  }
+
+  it('a short name is exactly what sanitizeFilename made of it', () => {
+    expect(kitSafeName('Clip 1')).toBe(sanitizeFilename('Clip 1'))
+    expect(kitSafeName('')).toBe('clip')
+    expect(kitSafeName('Cold open')).toBe('Cold_open')
+  })
+
+  it('a 300-character clip name: every kit name is within 255 units with room for " (9999)", keeps its tail, and all share one prefix', () => {
+    const { safe, videos, srt, thumbs } = kitNames('c'.repeat(300))
+    const all = [...videos, srt, ...thumbs]
+    for (const name of all) {
+      expect(name.length, name).toBeLessThanOrEqual(GATE - NEXT_FREE)
+      expect(name.startsWith(safe), name).toBe(true)
+    }
+    expect(videos.map((v) => v.slice(safe.length))).toEqual(['_youtube_short.mp4', '_reels.mp4', '_tiktok.mp4', '_twitter.mp4', '_facebook.mp4'])
+    expect(srt.slice(safe.length)).toBe('_captions.srt')
+    expect(thumbs.map((t) => t.slice(safe.length))).toEqual(['_thumb_1.jpg', '_thumb_2.jpg', '_thumb_3.jpg'])
+    // The cut is made against the LONGEST tail (`_youtube_short.mp4`), so its file is the one that lands on the limit.
+    expect(safe.length).toBe(GATE - '_youtube_short.mp4 (9999)'.length)
+    expect(`${safe}_youtube_short.mp4 (9999)`.length).toBe(GATE)
+  })
+
+  it('a 200-character CJK clip name is counted in UTF-16 units (the gate\'s own), so it is kept whole, and a 300-character one is cut by units', () => {
+    const jp = '\u6f22'.repeat(200)
+    const whole = kitNames(jp)
+    expect(whole.safe).toBe(jp)
+    for (const name of [...whole.videos, whole.srt, ...whole.thumbs]) expect(name.length).toBeLessThanOrEqual(GATE - NEXT_FREE)
+    const cut = kitNames('\u6f22'.repeat(300))
+    expect(cut.safe).toBe('\u6f22'.repeat(GATE - '_youtube_short.mp4 (9999)'.length))
+    expect(cut.videos.every((v) => v.length <= GATE - NEXT_FREE)).toBe(true)
+  })
+
+  it('the landscape kit (a plain YouTube slot) is fitted the same way', () => {
+    const { safe, videos } = kitNames('L'.repeat(400), LANDSCAPE)
+    expect(videos[0]).toBe(`${safe}_youtube.mp4`)
+    expect(videos.every((v) => v.length <= GATE - NEXT_FREE)).toBe(true)
+  })
+
+  it('a name that is only characters the sanitizer drops is still "clip"', () => {
+    expect(kitSafeName('???')).toBe('clip')
+  })
+})
+
+describe('kitRevealPath - Show in folder selects the file the batch reports (T-184 (2))', () => {
+  const result = (outputPath: string, jobId = 'j'): ExportResult => ({ jobId, outputPath, durationMs: 1 })
+
+  it('is the first landed path the batch reports, not the name the kit built', () => {
+    expect(kitRevealPath([result('/kit/name (2).mp4', 'a'), result('/kit/other.mp4', 'b')], '/kit/name_youtube.mp4')).toBe('/kit/name (2).mp4')
+  })
+
+  it('skips a result with no path, and falls back to the built name only when the batch reported nothing', () => {
+    expect(kitRevealPath([result('', 'a'), result('/kit/b.mp4', 'b')], '/kit/built.mp4')).toBe('/kit/b.mp4')
+    expect(kitRevealPath([], '/kit/built.mp4')).toBe('/kit/built.mp4')
+  })
+})
+
+describe('ClipKitButton uses them (T-184 (2))', () => {
+  const source = readFileSync(path.join(__dirname, 'ClipKitButton.tsx'), 'utf8')
+
+  it('names its files from kitSafeName, keeps the batch\'s answer, and reveals the path it reports', () => {
+    expect(source).toMatch(/const safeName = kitSafeName\(clip\.name\)/)
+    expect(source).not.toMatch(/sanitizeFilename\(clip\.name\)/)
+    expect(source).toMatch(/results = await window\.api\.video\.exportBatch\(queue\)/)
+    expect(source).toMatch(/const firstOutput = kitRevealPath\(results, /)
+    expect(source).toMatch(/revealInFolder\(firstOutput\)/)
   })
 })

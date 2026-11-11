@@ -119,7 +119,10 @@ held by this list alone, so a new one must be added below:
   (`record-studio/RecordStudio.tsx`) are black the way an export's bars are, so a retheme must not tint the matte of a
   video. `bg-black/60` is the dim over a reference thumbnail that makes the Save and "→ Canvas" buttons legible on any
   picture (`references/MoodBoardPanel.tsx`, `references/ReferencePanel.tsx`): the picture under it is arbitrary, so
-  the scrim is black, not a surface token. (`Modal`'s `bg-black/70` scrim is the fifth black wash and is described under
+  the scrim is black, not a surface token. Text on it is `text-ink-base` (4.58:1 over a white picture; `text-ink-dim` is
+  1.84:1 there, T-184 (1)): any text drawn over a picture is judged over WHITE, the worst content under it, and the Stream
+  Graphics size / zoom readout sits on an opaque `bg-bg-elevated` (5.83:1) because a translucent backing lets a white
+  document through. (`Modal`'s `bg-black/70` scrim is the fifth black wash and is described under
   Modals.) No token names pure black or a translucent scrim tier. `designTokensInSync.test.ts` fails on a `bg-black` in a
   renderer file this list does not name.
 - **The transparency checkerboard: `CHECKER_A` and `CHECKER_B` (T-71, T-123).** Two warm darks in `styles/tokens.ts`
@@ -414,6 +417,9 @@ imagii must look right on **1080p, 1440p (2K), and 4K** monitors.
   from 1.75, otherwise 1x, so HiDPI exports match what the user sees.
 - Chromium handles CSS pixels correctly at any DPR; Konva auto-tracks
   `devicePixelRatio`. Do not add manual DPI scaling to CSS.
+- **A banner that acts on a grid takes the grid's width (T-184 (5)).** Home's autosave offer, damaged notice and "Last
+  autosave" line are `max-w-4xl`, the same as the cards under them, so Restore / Clear / Later sit beside the question
+  they answer instead of about 1,900 px from it at 2560 wide.
 
 ---
 

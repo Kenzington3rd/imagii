@@ -6,7 +6,7 @@ import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
 import { CancelLatch, type LatchRun } from '../ffmpeg/cancelLatch'
 import { finishPartial, partialPathFor } from '../ffmpeg/partialOutput'
 import { refuseOutputOverInputs } from '../ffmpeg/sameFile'
-import { nextFreePath } from '../ffmpeg/outputPath'
+import { NAME_UNIT, nextFreePath } from '../ffmpeg/outputPath'
 import {
   aselectForCuts,
   buildChain,
@@ -640,7 +640,7 @@ export async function runAudioReattach(
     const outBase = spec.outputPath.replace(/\.mp4$/i, '')
     const outName = path.basename(outBase)
     tempAudioPath = await run.guard(
-      nextFreePath(`${outBase.slice(0, outBase.length - outName.length)}${fitFileName(outName, '.cleaned.wav')}.cleaned.wav`)
+      nextFreePath(`${outBase.slice(0, outBase.length - outName.length)}${fitFileName(outName, '.cleaned.wav', NAME_UNIT)}.cleaned.wav`)
     )
     // The delete below is unconditional, so it must never be aimed at a file
     // the job did not make. T-114: assertAlways - as assert() this logged and CONTINUED under

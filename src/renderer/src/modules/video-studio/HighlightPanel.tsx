@@ -216,7 +216,11 @@ export function HighlightPanel(): JSX.Element | null {
           />
         ) : null}
         {/* T-168 (5): a log that parses to nothing is scored audio-only and the Chat bar stays 0 - say why, in the sentence the Chat spike finder prints. */}
-        {showChatInput && chatUnreadable ? <p className="text-xs text-warn mt-1">{CHAT_LOG_FORMAT_MESSAGE}</p> : null}
+        {/* T-184 (4): in an always-mounted status region - a log that parses to nothing is raised on a keystroke, and this sentence is its only report. The region is
+            a block with no margin, so it takes no room while it is empty. */}
+        <div role="status">
+          {showChatInput && chatUnreadable ? <p className="text-xs text-warn mt-1">{CHAT_LOG_FORMAT_MESSAGE}</p> : null}
+        </div>
       </div>
 
       {scanning ? (

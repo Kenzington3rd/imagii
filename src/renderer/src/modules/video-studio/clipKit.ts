@@ -1,4 +1,5 @@
-import { clipForExport, clipSpeed, type Clip, type ExportJobSpec, type PlatformId, type WatermarkSpec } from '@shared/clip'
+import { clipForExport, clipSpeed, type Clip, type ExportJobSpec, type ExportResult, type PlatformId, type WatermarkSpec } from '@shared/clip'
+import { fitFileName, sanitizeFilename } from '@shared/filename'
 import { countOf } from '@shared/plural'
 import { cropFrameSize } from '@shared/safeZone'
 import {
@@ -76,6 +77,32 @@ const YOUTUBE_SHORT_INFO: PlatformInfo = {
 export function kitLimitTargets(source: KitSource, clip: Pick<Clip, 'cropRect'>): PlatformInfo[] {
   const vertical = isVerticalFrame(source, clip)
   return KIT_PLATFORM_IDS.map((p) => (p === 'youtube' && vertical ? YOUTUBE_SHORT_INFO : PLATFORM_INFO[p]))
+}
+
+/**
+ * T-184 (2): the longest tail a kit file carries after the clip's name (`_youtube_short.mp4`; `_captions.srt` and `_thumb_N.jpg` are shorter) and the " (9999)"
+ * `nextFreePath` may add before the extension, which is room kept so a second kit into the same folder still keeps its tail.
+ */
+const KIT_LONGEST_TAIL = '_youtube_short.mp4 (9999)'
+
+/**
+ * The clip's name as every kit file is named after it (T-122: letters, numbers, `_` and `-` of any script; `sanitizeFilename`), FITTED ONCE (T-184 (2)). A clip's name has
+ * no cap (the rename field takes any length), and the gate refuses a file name over 255 UTF-16 units, so a long name was refused before any encode and the person read
+ * only "Clip Kit failed." The name is cut at its end so that the LONGEST kit tail still fits: every kit file then shares the one prefix and keeps its own tail (the
+ * platform, `_captions`, `_thumb_N`), instead of each being cut on its own and the files no longer sorting together. The units are UTF-16, the gate's own; main's folder name
+ * (`makeKitDir`) fits the same name again for its own tail and is the same prefix or longer.
+ */
+export function kitSafeName(clipName: string): string {
+  return fitFileName(sanitizeFilename(clipName), KIT_LONGEST_TAIL, 'utf16')
+}
+
+/**
+ * The file Show in folder selects when a kit is done (T-184 (2)): the first file the batch REPORTS it wrote. `nextFreePath` and the name fitting on main can land a file
+ * under another name than the one the kit built (a second kit into the same folder is `... (2).mp4`), so the built name may name nothing. A batch that reported
+ * nothing falls back to `builtPath`, the name the first job asked for.
+ */
+export function kitRevealPath(results: ReadonlyArray<ExportResult>, builtPath: string): string {
+  return results.find((r) => r.outputPath)?.outputPath ?? builtPath
 }
 
 /**

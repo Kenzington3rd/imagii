@@ -13287,3 +13287,213 @@ describe('a file name near the file system\'s 255 is shortened to fit and still 
     }
   }, 120_000)
 })
+
+/**
+ * T-184 (2): a name the RENDERER builds is fitted where it is built, and goes through the real gate and the real runner. T-183 fitted what main builds and left the
+ * renderer's names to arrive whole: Export's `{source}_{clip}_{preset}` of a long VOD title and the Clip Kit's `${clip}_<slot>.mp4` were refused at `assertPlainMp4Name`
+ * ("Export failed." / "Clip Kit failed.", executed: a 245-character source makes 264). Here the name comes from the renderer's own builder (`expandFilenameTemplate`,
+ * `kitSafeName` + `buildKitQueue`), is handed to the real `video:exportBatch` handler (the gate, `validateExportJob`, then `runExportJob` on the bundled ffmpeg), and what comes
+ * back is a file ffprobe reads, at the path the batch REPORTS. The Windows unit (UTF-16: a kanji is one unit) cannot be exercised against this host's ext4 (a 200-kanji
+ * name is 600 bytes); `filename.test.ts` and `outputPath.test.ts` hold it at the unit layer and docs/INTERACTION_COVERAGE.md names the boundary.
+ */
+describe('a long name the renderer built passes the gate and is written (real ffmpeg, T-184 (2))', () => {
+  const handlers = new Map<string, (e: unknown, ...args: unknown[]) => Promise<unknown>>()
+  let dir = ''
+  let kit: typeof import('../../src/renderer/src/modules/video-studio/clipKit')
+  let names: typeof import('../../src/shared/filename')
+  const bytes = (p: string): number => Buffer.byteLength(path.basename(p), 'utf8')
+  const sender = { isDestroyed: () => false, send: () => undefined }
+  const exportBatch = (jobs: unknown[]): Promise<Array<{ jobId: string; outputPath: string }>> => {
+    const handler = handlers.get('video:exportBatch')
+    if (!handler) throw new Error('video:exportBatch is not registered')
+    return handler({ sender }, jobs) as Promise<Array<{ jobId: string; outputPath: string }>>
+  }
+  const playable = async (file: string): Promise<void> => {
+    const probe = await ffprobeJson(file)
+    expect(probe.streams.some((s) => s.codec_type === 'video'), `${path.basename(file).slice(0, 30)}... has a picture`).toBe(true)
+    expect(probe.streams.some((s) => s.codec_type === 'audio'), 'and a sound').toBe(true)
+    expect(Number(probe.format.duration ?? 0), 'and a length').toBeGreaterThan(0.5)
+  }
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(workDir, 't184-names-'))
+    vi.resetModules()
+    vi.doMock('electron', () => ({
+      ipcMain: { handle: (channel: string, fn: (e: unknown, ...args: unknown[]) => Promise<unknown>) => void handlers.set(channel, fn) },
+      dialog: {},
+      BrowserWindow: {},
+      shell: {},
+      app: { getPath: () => os.tmpdir() }
+    }))
+    const { registerVideoIpc } = await import('../../src/main/ipc/video')
+    registerVideoIpc()
+    kit = await import('../../src/renderer/src/modules/video-studio/clipKit')
+    names = await import('../../src/shared/filename')
+  }, 120_000)
+
+  afterAll(() => {
+    vi.doUnmock('electron')
+  })
+
+  it("Export: a 300-character source and the default template - the name the renderer built is within 248 units, ends `_<preset>.mp4`, and is written at that name", async () => {
+    const out = await mkdtemp(path.join(dir, 'export-'))
+    const outputFilename = names.expandFilenameTemplate(null, { source: 'S'.repeat(300), clip: 'Highlight 1', preset: 'twitter', ext: 'mp4' })
+    expect(outputFilename.length).toBeLessThanOrEqual(255 - ' (9999)'.length)
+    expect(outputFilename.endsWith('_Highlight 1_twitter.mp4')).toBe(true)
+    const results = await exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ name: 'Highlight 1', startSec: 2, endSec: 3 }), 't184-export'), outDir: out, outputFilename }])
+    expect(results).toHaveLength(1)
+    expect(path.basename(results[0]!.outputPath), 'the landed name is the one the renderer built').toBe(outputFilename)
+    await playable(results[0]!.outputPath)
+    expect(await readdir(out), 'one file, no partial').toEqual([outputFilename])
+    // The same batch again: the first export is not replaced, and the " (2)" is a name that still has the preset before the extension.
+    const again = await exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ name: 'Highlight 1', startSec: 3, endSec: 4 }), 't184-export-2'), outDir: out, outputFilename }])
+    expect(path.basename(again[0]!.outputPath)).toBe(outputFilename.replace(/\.mp4$/, ' (2).mp4'))
+    expect(bytes(again[0]!.outputPath)).toBeLessThanOrEqual(255)
+    await playable(again[0]!.outputPath)
+  }, 180_000)
+
+  it("Export: a 300-character source AND a 300-character clip: the name the renderer built is written, and the preset is what survives with the clip's start", async () => {
+    const out = await mkdtemp(path.join(dir, 'export-both-'))
+    const outputFilename = names.expandFilenameTemplate(null, { source: 'S'.repeat(300), clip: 'C'.repeat(300), preset: 'twitter', ext: 'mp4' })
+    expect(outputFilename.length).toBeLessThanOrEqual(248)
+    expect(outputFilename).toMatch(/^_?C{200,}_twitter\.mp4$/)
+    const results = await exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ name: 'C'.repeat(300), startSec: 2, endSec: 3 }), 't184-both'), outDir: out, outputFilename }])
+    expect(path.basename(results[0]!.outputPath)).toBe(outputFilename)
+    await playable(results[0]!.outputPath)
+  }, 120_000)
+
+  it("a name the gate would refuse is still refused, in the finished sentence (the trust boundary stays)", async () => {
+    const out = await mkdtemp(path.join(dir, 'refused-'))
+    const outputFilename = `${'S'.repeat(300)}.mp4`
+    await expect(exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ startSec: 2, endSec: 3 }), 't184-refused'), outDir: out, outputFilename }])).rejects.toThrow(
+      "That file name is too long for the drive. Shorten the clip's or the video's name and try again."
+    )
+    expect(await readdir(out), 'nothing was encoded').toEqual([])
+  }, 60_000)
+
+  it('Export: a title the renderer counts in UTF-16 units (100 kanji) is written on this host too - main re-fits it in the host\'s own unit, and nothing fails', async () => {
+    const out = await mkdtemp(path.join(dir, 'export-kanji-'))
+    const title = '漢'.repeat(100)
+    const outputFilename = names.expandFilenameTemplate(null, { source: title, clip: 'c', preset: 'twitter', ext: 'mp4' })
+    expect(outputFilename, 'whole in the renderer: 100 units, however many bytes').toBe(`${title}_c_twitter.mp4`)
+    const results = await exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ name: 'c', startSec: 2, endSec: 3 }), 't184-kanji'), outDir: out, outputFilename }])
+    expect(bytes(results[0]!.outputPath), 'ext4 holds 255 bytes: the host unit cut it to whole characters').toBeLessThanOrEqual(255)
+    await playable(results[0]!.outputPath)
+  }, 120_000)
+
+  it('Clip Kit: a clip named with 300 characters - five videos written, each with its platform tail and one shared prefix, a thumbnail too, and Show in folder gets a path that exists', async () => {
+    const out = await mkdtemp(path.join(dir, 'kit-'))
+    const clipName = 'K'.repeat(300)
+    const safeName = kit.kitSafeName(clipName)
+    const probe = await probeVideo(rampSrc)
+    const queue = kit.buildKitQueue({
+      source: { filePath: rampSrc, width: probe.width, height: probe.height },
+      clip: makeClip({ name: clipName, startSec: 2, endSec: 3 }),
+      kitDir: out,
+      safeName,
+      watermark: null,
+      newJobId: (() => {
+        let n = 0
+        return () => `t184-kit-${n++}`
+      })()
+    })
+    expect(queue).toHaveLength(5)
+    const results = await exportBatch(queue)
+    expect(results).toHaveLength(5)
+    const tails = ['_youtube.mp4', '_reels.mp4', '_tiktok.mp4', '_twitter.mp4', '_facebook.mp4']
+    for (const [i, r] of results.entries()) {
+      const base = path.basename(r.outputPath)
+      expect(base.startsWith(safeName), `${base.slice(-20)} shares the prefix`).toBe(true)
+      expect(base.endsWith(tails[i] ?? ''), `${base.slice(-20)} keeps its tail`).toBe(true)
+      expect(bytes(r.outputPath)).toBeLessThanOrEqual(255)
+      await playable(r.outputPath)
+    }
+    const thumb = path.join(out, kit.kitThumbFilename(safeName, 0))
+    await extractFrame(rampSrc, 2.5, thumb)
+    expect(existsSync(thumb), 'the thumbnail is written under its own tail').toBe(true)
+    expect(kit.kitRevealPath(results, path.join(out, queue[0]?.outputFilename ?? '')), 'Show in folder gets the landed path').toBe(results[0]!.outputPath)
+    expect(existsSync(kit.kitRevealPath(results, 'nowhere.mp4'))).toBe(true)
+    // A second kit into the same folder: every file lands as a " (2)", and the reveal is the NEW first file, not the built name (which is the first kit's file).
+    const second = await exportBatch(queue.map((j, i) => ({ ...j, jobId: `t184-kit2-${i}` })))
+    const built = path.join(out, queue[0]?.outputFilename ?? '')
+    expect(existsSync(built), 'the built name is the FIRST kit\'s file').toBe(true)
+    const revealed = kit.kitRevealPath(second, built)
+    expect(revealed).not.toBe(built)
+    expect(path.basename(revealed)).toBe(`${safeName}_youtube (2).mp4`)
+    expect(existsSync(revealed)).toBe(true)
+  }, 300_000)
+})
+
+/**
+ * T-184 (6): the caption burn-in encodes its sound as AAC at 192 kb/s. It was `-c:a copy`, and an MP4 cannot hold every codec a native-container video carries: WMA and
+ * ADPCM make ffmpeg exit ("codec not currently supported in container", exit 234, executed by the ffmpeg reader with the product's `runBurnIn`, whole and ranged),
+ * and the person read "check that the source file still plays and the folder has room" about a file that plays. Every fixture is made with the bundled ffmpeg's own
+ * encoders, and the product's `runBurnIn` runs on it, whole and ranged. A soundless source is the control: the audio flags have no stream to apply to.
+ */
+describe('the caption burn-in writes any sound an MP4 can carry (real ffmpeg, T-184 (6))', () => {
+  let dir = ''
+  let srt = ''
+  const FPS = 15
+  const make = async (name: string, audio: string[] | null, container: string, extra: string[] = []): Promise<string> => {
+    const file = path.join(dir, `${name}.${container}`)
+    await ff([
+      '-y', '-f', 'lavfi', '-i', `testsrc2=size=320x180:rate=${FPS}:duration=4`,
+      ...(audio ? ['-f', 'lavfi', '-i', 'sine=frequency=440:sample_rate=44100:duration=4'] : []),
+      '-c:v', container === 'webm' ? 'libvpx' : 'libx264', ...(container === 'webm' ? ['-deadline', 'realtime', '-cpu-used', '8'] : ['-preset', 'ultrafast', '-pix_fmt', 'yuv420p']),
+      ...(audio ?? []), ...extra, file
+    ])
+    return file
+  }
+  const burn = async (video: string, tag: string, range?: [number, number]): Promise<string> => {
+    const outputPath = path.join(dir, `${tag}-captioned.mp4`)
+    const res = await runBurnIn(
+      { jobId: `t184-6-${tag}`, videoPath: video, srtPath: srt, outputPath, fontSizePct: 4, ...(range ? { startSec: range[0], endSec: range[1] } : {}) },
+      () => {}
+    )
+    expect(res.captioned, 'the cue is inside the range').toBe(true)
+    return outputPath
+  }
+  /** The file's sound is AAC and its length is the picture's, within a frame. */
+  const expectAac = async (file: string): Promise<void> => {
+    const probe = await ffprobeJson(file)
+    const audio = probe.streams.filter((s) => s.codec_type === 'audio')
+    expect(audio.map((s) => s.codec_name), `${path.basename(file)}: one audio stream, AAC`).toEqual(['aac'])
+    const video = probe.streams.find((s) => s.codec_type === 'video')
+    expect(video, 'and a picture').toBeDefined()
+    expect(Math.abs(Number(audio[0]?.duration) - Number(video?.duration)), 'the sound runs as long as the picture, within a frame').toBeLessThanOrEqual(1 / FPS)
+  }
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(workDir, 't184-burn-'))
+    srt = path.join(dir, 'captions.srt')
+    await writeFile(srt, '1\n00:00:01,200 --> 00:00:02,800\nINSIDE THE RANGE\n', 'utf8')
+  }, 60_000)
+
+  it.each([
+    ['wmav2 in an MKV', 'wmav2', 'mkv'],
+    ['adpcm_ima_wav in an AVI', 'adpcm_ima_wav', 'avi'],
+    ['Opus in a WebM (T-110 (ab): it was copied into the MP4)', 'libopus', 'webm']
+  ])('%s: whole and ranged, the burn is written with AAC sound the length of the picture', async (_label, codec, container) => {
+    const source = await make(`src-${codec}`, ['-c:a', codec], container)
+    // The fixture really holds the codec the copy could not carry, or the AAC below proves nothing.
+    const held = (await ffprobeJson(source)).streams.find((s) => s.codec_type === 'audio')?.codec_name
+    expect(held, 'the source holds that codec').toBe(codec === 'libopus' ? 'opus' : codec)
+    await expectAac(await burn(source, `${codec}-whole`))
+    await expectAac(await burn(source, `${codec}-ranged`, [1, 3]))
+  }, 240_000)
+
+  it('a source with sound already AAC is still AAC after a burn (the control that nothing regressed)', async () => {
+    const source = await make('src-aac', ['-c:a', 'aac', '-b:a', '64k'], 'mp4')
+    await expectAac(await burn(source, 'aac-whole'))
+    await expectAac(await burn(source, 'aac-ranged', [1, 3]))
+  }, 120_000)
+
+  it('a soundless source stays soundless, whole and ranged: the audio flags have no stream to apply to, and ffmpeg does not refuse them', async () => {
+    const source = await make('src-soundless', null, 'mp4')
+    expect((await ffprobeJson(source)).streams.map((s) => s.codec_type), 'the fixture has no sound').toEqual(['video'])
+    for (const [tag, range] of [['soundless-whole', undefined], ['soundless-ranged', [1, 3] as [number, number]]] as const) {
+      const out = await burn(source, tag, range)
+      expect((await ffprobeJson(out)).streams.map((s) => s.codec_type), `${tag}: a picture and no sound`).toEqual(['video'])
+    }
+  }, 120_000)
+})

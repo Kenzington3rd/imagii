@@ -15635,3 +15635,213 @@ test.describe('round 132 Track A (T-183 (1)): the Export queue does not announce
     }
   })
 })
+
+// ── T-184 Track A (3), (4): a project open never pairs its transcript with another's preview; a sentence that appears on an action is announced ────────────────────────────────────
+//
+// (3) A video transcribed (P2), closed, and opened through a project saved with an older .srt (P1): `loadSource` gave P2's segments back and the project open merged only the path, so the Captions
+// panel previewed P2's text while Save .srt / Burn / the Clip Kit used P1's file. A different path now clears the preview (the panel is where a project open with an srtPath and no preview always was).
+// (4) "Add a second clip to compile." and the chat log's format line are the only report of a removal / a keystroke: each sits in an always-mounted `role="status"` region (ExportPanel's T-153 shape).
+// "Already mounted" is read off the page: the regions that exist EMPTY before the action are tagged, and the sentence must arrive inside one of those elements.
+test.describe('T-184 Track A (3), (4): the project-open preview, and the announced sentences', () => {
+  /** Tag every live region that is empty now; after the action, the sentence must be inside one of them (an element that mounted WITH its text carries no tag). */
+  async function tagEmptyRegions(window: Page): Promise<number> {
+    return window.evaluate(() => {
+      const regions = Array.from(document.querySelectorAll('[role="status"], [role="alert"]')).filter((el) => (el.textContent ?? '') === '')
+      regions.forEach((el) => el.setAttribute('data-t184-mounted', 'empty'))
+      return regions.length
+    })
+  }
+  const insideTagged = (window: Page, sentence: string): Locator => window.locator('[data-t184-mounted="empty"]').filter({ hasText: sentence })
+
+  test('(4) removing the second clip puts "Add a second clip to compile." into a status region that was already mounted', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t184compile', clipSrc)
+    try {
+      const SENTENCE = 'Add a second clip to compile.'
+      const clips = clipListCard(window)
+      await clips.getByRole('button', { name: '+ Add clip' }).click()
+      await expect(clips.locator('li')).toHaveCount(2)
+      const card = compileCard(window)
+      await expect(card.getByText(SENTENCE), 'two clips: nothing to say').toHaveCount(0)
+      expect(await tagEmptyRegions(window), 'a live region exists in the page before the sentence').toBeGreaterThan(0)
+      window.once('dialog', (d) => void d.accept())
+      await clips.locator('li').nth(1).getByRole('button', { name: 'Remove clip' }).click()
+      await expect(card.getByText(SENTENCE)).toBeVisible()
+      await expect(insideTagged(window, SENTENCE), 'the sentence arrived inside a region that was already mounted').toHaveCount(1)
+      await expect(card.getByRole('status').filter({ hasText: SENTENCE }), 'and the card names it a status region').toHaveCount(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('(4) a chat log that parses to nothing puts its format line into a status region that was already mounted, and empty regions take no room', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t184chat', clipSrc)
+    try {
+      const SENTENCE = 'No timestamped messages found. Each line should start like [12:34] username: message'
+      const card = highlightCard(window)
+      await card.getByRole('button', { name: 'Add chat log (optional)' }).click()
+      const box = card.locator('textarea')
+      await expect(card.getByText(SENTENCE)).toHaveCount(0)
+      expect(await tagEmptyRegions(window), 'a live region exists before the sentence').toBeGreaterThan(0)
+      // The empty region is no row: nothing sits between the box and the card's next block.
+      const region = card.locator('[data-t184-mounted="empty"]')
+      await expect(region).toHaveCount(1)
+      expect((await region.boundingBox())?.height, 'empty, it takes no room').toBe(0)
+      await box.fill('12:34 user: msg')
+      await expect(card.getByText(SENTENCE)).toBeVisible()
+      await expect(insideTagged(window, SENTENCE), 'the sentence arrived inside a region that was already mounted').toHaveCount(1)
+      await box.fill('[12:34] user: msg')
+      await expect(card.getByText(SENTENCE), 'a readable log: the region is emptied again').toHaveCount(0)
+      await expect(region, 'and it is still the same element').toHaveCount(1)
+    } finally {
+      await app.close()
+    }
+  })
+
+  const READY = { exeInstalled: true, exePath: 'whisper-cli.exe', modelInstalled: true, modelPath: 'model.bin', modelsDir: 'models', ready: true }
+  const NEWER = 'the newer transcript\'s words'
+  const OLDER = 'the older transcript\'s words'
+
+  test('(3) transcribe, Close, open a project saved with an OLDER .srt: no preview of the newer text, and Save .srt writes the project\'s file', async () => {
+    test.setTimeout(300_000)
+    const studio = await launchHome('t184srt')
+    const { app, window, userDataDir, outDir } = studio
+    try {
+      const captionsDir = path.join(userDataDir, 'captions')
+      mkdirSync(captionsDir, { recursive: true })
+      const newer = path.join(captionsDir, 't184srt-1700000999999.srt')
+      const older = path.join(captionsDir, 't184srt-1700000000000.srt')
+      const olderText = `1\n00:00:00,000 --> 00:00:01,000\n${OLDER}\n`
+      writeFileSync(newer, `1\n00:00:00,000 --> 00:00:01,000\n${NEWER}\n`, 'utf8')
+      writeFileSync(older, olderText, 'utf8')
+      await app.evaluate(({ ipcMain }, arg) => {
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', () => arg.ready)
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', (_e, req: { jobId: string }) => ({
+          jobId: req.jobId,
+          srtPath: arg.srt,
+          segments: [{ startSec: 0, endSec: 1, text: arg.line }],
+          durationMs: 5
+        }))
+      }, { ready: READY, srt: newer, line: NEWER })
+      const project = path.join(root, `t184srt-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        project,
+        JSON.stringify({ schemaVersion: 2, savedAt: Date.now(), appVersion: '1.0.0', videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath: older } }),
+        'utf8'
+      )
+      const saved = path.join(outDir, 'project-captions.srt')
+      await stubDialogs(app, { open: [project], save: [saved] })
+
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await dropOnVideoImporter(window, clipSrc, path.basename(clipSrc))
+      await expect(window.locator('header').getByText(path.basename(clipSrc), { exact: true })).toBeVisible({ timeout: 120_000 })
+      const card = captionsCard(window)
+      const preview = card.getByLabel('Transcript preview')
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      await expect(preview, 'the premise: the newer run is previewed').toContainText(NEWER, { timeout: 15_000 })
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 10_000 })
+
+      // Open the project saved with the older .srt, from Home.
+      await window.locator('a[href="#/home"]').first().click()
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 60_000 })
+      await expect(card.getByRole('button', { name: 'Save .srt' }), 'the project\'s transcript is in place').toBeVisible()
+      await expect(preview, 'no preview: the newer run\'s text is not shown over the older file').toHaveCount(0)
+      await expect(card.getByText(NEWER)).toHaveCount(0)
+
+      await card.getByRole('button', { name: 'Save .srt' }).click()
+      await expectToast(window, 'SRT saved')
+      expect(readFileSync(saved, 'utf8'), 'Save .srt wrote the project\'s file, whose words are the older ones').toBe(olderText)
+    } finally {
+      await app.close().catch(() => undefined)
+    }
+  })
+})
+
+// T-184 (2), Track B: a long name is shortened where it is built, and the files are still written. T-183 fitted what MAIN builds; the Export panel's template name and the
+// Clip Kit's `${clip}_<slot>.mp4` are built in the renderer and arrived whole at `assertPlainMp4Name`, which refuses a name over 255 before any encode: the person read "Export
+// failed." / "Clip Kit failed." with nothing after it. `expandFilenameTemplate` and `kitSafeName` now fit them (UTF-16 units, the gate's own, with room for " (9999)"); this drives
+// the real app, real ffmpeg, to the files on disk. The win32 unit itself cannot be exercised on this host's ext4 (INTERACTION_COVERAGE.md names the boundary).
+test.describe('round 133 Track B (T-184 (2)): a long name is shortened to fit and the files are written', () => {
+  test('Export: a source copied to a 240-character file name exports two presets - both files are written, each ends with its preset tag', async () => {
+    test.setTimeout(600_000)
+    const longSource = path.join(root, 'source', `${'v'.repeat(240)}.mp4`)
+    copyFileSync(clipSrc, longSource)
+    const { app, window, outDir } = await launchWithVideo('t184-export', longSource)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const exp = exportCard(window)
+      await presetBox(window, 'X / Twitter').check()
+      await exp.getByRole('button', { name: 'Choose folder…' }).click()
+      await exp.getByRole('button', { name: 'Export 2 files', exact: true }).click()
+      // One of two outcomes ends the wait, so a refusal at the gate fails fast and says what it said: both files, or the batch's failure toast.
+      const outcome = async (): Promise<string> => {
+        if (mp4sIn(outDir).length === 2) return 'written'
+        return (await readToastLog(window)).find((t) => t.includes('Export failed')) ?? 'running'
+      }
+      await expect.poll(outcome, { timeout: 540_000, intervals: [500] }).not.toBe('running')
+      expect(await outcome(), 'a 240-character source with the default template').toBe('written')
+      const files = mp4sIn(outDir)
+      // Neither was refused ("Export failed."), and the queue says nothing failed.
+      await expectToast(window, 'Exported 2 files')
+      await expect(exp.getByText('Failed', { exact: true })).toHaveCount(0)
+      expect(files.map((f) => f.replace(/^v+/, '')), 'each file keeps the clip and its own preset tag').toEqual(['_Clip 1_twitter.mp4', '_Clip 1_youtube.mp4'])
+      for (const f of files) {
+        expect(f.length, `${f.slice(-20)} leaves room for nextFreePath's " (9999)"`).toBeLessThanOrEqual(255 - ' (9999)'.length)
+        expect(f.startsWith('v'.repeat(200)), 'the video\'s name is what was cut, not the tail').toBe(true)
+        expect(Number((await ffprobeJson(path.join(outDir, f))).format?.duration), `${f.slice(-20)} plays`).toBeGreaterThan(0.5)
+      }
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Clip Kit: a clip renamed to 300 characters runs the kit - five videos, three thumbnails, each with its tail - and Show in folder reveals a file that exists', async () => {
+    test.setTimeout(600_000)
+    const { app, window, outDir } = await launchWithVideo('t184-kit')
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await stubShellReveal(app)
+      const rename = clipListCard(window).getByRole('textbox', { name: /^Rename clip/ })
+      await rename.fill('k'.repeat(300))
+      await expect(rename).toHaveValue('k'.repeat(300))
+
+      const kit = kitButton(window)
+      await kit.click()
+      const outcome = async (): Promise<string> => {
+        const log = await readToastLog(window)
+        if (log.some((t) => t.includes('Saved your Clip Kit'))) return 'saved'
+        return log.find((t) => t.includes('Clip Kit failed')) ?? 'running'
+      }
+      await expect.poll(outcome, { timeout: 540_000, intervals: [1000] }).not.toBe('running')
+      expect(await outcome(), 'a kit asked for on a 300-character clip name').toBe('saved')
+
+      // The name is fitted once, against the longest tail (`_youtube_short.mp4`) and " (9999)": every file shares that one prefix.
+      const prefix = 'k'.repeat(255 - '_youtube_short.mp4 (9999)'.length)
+      const kitDir = path.join(outDir, `${prefix}-kit-${kitStamp()}`)
+      expect(withEverything(readdirSync(kitDir)).sort()).toEqual([
+        `${prefix}_facebook.mp4`,
+        `${prefix}_reels.mp4`,
+        `${prefix}_thumb_1.jpg`,
+        `${prefix}_thumb_2.jpg`,
+        `${prefix}_thumb_3.jpg`,
+        `${prefix}_tiktok.mp4`,
+        `${prefix}_twitter.mp4`,
+        `${prefix}_youtube.mp4`
+      ])
+      await expect(kit).toHaveText('Clip Kit (5 + thumbs)', { timeout: 30_000 })
+      // Show in folder selects the first file the batch reported it wrote, and that file is there.
+      await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([path.join(kitDir, `${prefix}_youtube.mp4`)])
+      expect(existsSync(path.join(kitDir, `${prefix}_youtube.mp4`))).toBe(true)
+      expect(videoStream(await ffprobeJson(path.join(kitDir, `${prefix}_thumb_2.jpg`))).codec_name, 'a thumbnail under its own tail is a picture').toBe('mjpeg')
+    } finally {
+      await app.close()
+    }
+  })
+})

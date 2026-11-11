@@ -252,7 +252,7 @@ describe('shiftSrtToRange — the SRT on the clip clock (T-81)', () => {
 describe('shiftedSrtPath / isShiftedSrtName — the temp copy and its sweep agree (T-81)', () => {
   it('names the copy beside the real SRT, and the sweep recognises exactly that name', () => {
     const real = path.join('captions', 'My Stream-1700000000000.srt')
-    const copy = shiftedSrtPath(real, randomUUID())
+    const copy = shiftedSrtPath(real, randomUUID(), 'utf8')
     expect(path.dirname(copy)).toBe(path.dirname(real))
     expect(copy.startsWith(real)).toBe(true)
     expect(isShiftedSrtName(path.basename(copy))).toBe(true)
@@ -269,7 +269,7 @@ describe('shiftedSrtPath / isShiftedSrtName — the temp copy and its sweep agre
   })
 
   it('refuses an id that the sweep could not recognise', () => {
-    expect(() => shiftedSrtPath('a.srt', 'not-a-uuid')).toThrow(/UUID/)
+    expect(() => shiftedSrtPath('a.srt', 'not-a-uuid', 'utf8')).toThrow(/UUID/)
   })
 })
 
@@ -783,15 +783,15 @@ describe('shiftedSrtPath - a transcript whose name is near the limit (T-183 (2))
   const id = '0a1b2c3d-0000-4000-8000-0123456789ab'
 
   it('a short name is exactly what it always was', () => {
-    expect(shiftedSrtPath('/c/Stream-1700000000000.srt', id)).toBe(`/c/Stream-1700000000000.srt.clip-${id}.srt`)
-    expect(shiftedSrtPath('C:\\c\\Stream-1700000000000.srt', id)).toBe(`C:\\c\\Stream-1700000000000.srt.clip-${id}.srt`)
-    expect(shiftedSrtPath('Stream.txt', id)).toBe(`Stream.txt.clip-${id}.srt`)
+    expect(shiftedSrtPath('/c/Stream-1700000000000.srt', id, 'utf8')).toBe(`/c/Stream-1700000000000.srt.clip-${id}.srt`)
+    expect(shiftedSrtPath('C:\\c\\Stream-1700000000000.srt', id, 'utf8')).toBe(`C:\\c\\Stream-1700000000000.srt.clip-${id}.srt`)
+    expect(shiftedSrtPath('Stream.txt', id, 'utf8')).toBe(`Stream.txt.clip-${id}.srt`)
   })
 
   it('the copy of a 250-character transcript name is at most 255 bytes, in the same folder, and the sweep still recognises it', () => {
     const real = path.join('/captions', `${'v'.repeat(246)}.srt`)
     expect(bytes(real)).toBe(250)
-    const copy = shiftedSrtPath(real, id)
+    const copy = shiftedSrtPath(real, id, 'utf8')
     expect(bytes(copy)).toBeLessThanOrEqual(255)
     expect(path.dirname(copy)).toBe(path.dirname(real))
     expect(isShiftedSrtName(path.basename(copy))).toBe(true)
@@ -801,7 +801,7 @@ describe('shiftedSrtPath - a transcript whose name is near the limit (T-183 (2))
 
   it('a whisper-made name (a 200-character video name + a timestamp) is fitted, and a real transcript of it is still not a temp copy', () => {
     const real = path.join('/captions', `${'w'.repeat(200)}-1700000000000.srt`)
-    const copy = shiftedSrtPath(real, id)
+    const copy = shiftedSrtPath(real, id, 'utf8')
     expect(bytes(copy)).toBeLessThanOrEqual(255)
     expect(isShiftedSrtName(path.basename(copy))).toBe(true)
     expect(isShiftedSrtName(path.basename(real))).toBe(false)
@@ -809,12 +809,12 @@ describe('shiftedSrtPath - a transcript whose name is near the limit (T-183 (2))
 
   it('whole characters only, bytes not characters, and an upper-case .SRT keeps its own spelling in the tail', () => {
     for (const glyph of ['\u00e9', '\u6f22', String.fromCodePoint(0x1f600)]) {
-      const copy = shiftedSrtPath(path.join('/captions', `${glyph.repeat(120)}.srt`), id)
+      const copy = shiftedSrtPath(path.join('/captions', `${glyph.repeat(120)}.srt`), id, 'utf8')
       expect(bytes(copy), glyph).toBeLessThanOrEqual(255)
       expect(Buffer.from(path.basename(copy), 'utf8').toString('utf8'), `${glyph} was not split`).toBe(path.basename(copy))
       expect(isShiftedSrtName(path.basename(copy))).toBe(true)
     }
-    const upper = shiftedSrtPath(path.join('/captions', `${'u'.repeat(250)}.SRT`), id)
+    const upper = shiftedSrtPath(path.join('/captions', `${'u'.repeat(250)}.SRT`), id, 'utf8')
     expect(bytes(upper)).toBeLessThanOrEqual(255)
     expect(isShiftedSrtName(path.basename(upper))).toBe(true)
     expect(path.basename(upper).endsWith(`.SRT.clip-${id}.srt`)).toBe(true)
@@ -822,7 +822,7 @@ describe('shiftedSrtPath - a transcript whose name is near the limit (T-183 (2))
 
   it('a cut that leaves a trailing dot or space does not put it before the tail', () => {
     const real = path.join('/captions', `${'t'.repeat(200 - 1)}. ${'s'.repeat(60)}.srt`)
-    const copy = path.basename(shiftedSrtPath(real, id))
+    const copy = path.basename(shiftedSrtPath(real, id, 'utf8'))
     expect(copy).not.toMatch(/[ .]\.srt\.clip-/)
     expect(isShiftedSrtName(copy)).toBe(true)
   })

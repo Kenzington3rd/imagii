@@ -186,3 +186,41 @@ describe('runBurnIn never says Captions burned in for a file with no picture (T-
     expect(err?.message).not.toBe(BURN_IN_NO_PICTURE_MESSAGE)
   })
 })
+
+/**
+ * T-184 (6) - the burn-in encodes its sound as AAC at 192 kb/s, whole and ranged. It was `-c:a copy`: an MP4 cannot hold WMA, ADPCM or TrueHD sound ("codec not
+ * currently supported in container", exit 234 / 88), and the person read "check that the source file still plays" about a file that plays. This pins the argv the
+ * real `runBurnIn` hands ffmpeg; Layer 5 (media.spec.ts) is the proof that ffmpeg accepts it on real wmav2 / adpcm / Opus / soundless sources.
+ */
+describe('runBurnIn encodes the sound as AAC 192k for every source (T-184 (6))', () => {
+  async function argvOf(opts: { ranged?: boolean }): Promise<string[]> {
+    let seen: string[] = []
+    onSpawn = (child, args) => {
+      seen = args
+      writeFileSync(args[args.length - 1] as string, Buffer.alloc(100, 1))
+      child.stdout.emit('data', 'frame=30\nprogress=end\n')
+      child.emit('close', 0)
+    }
+    expect(await settle(job(opts))).toBeNull()
+    return seen
+  }
+  const flag = (args: string[], name: string): string | undefined => args[args.indexOf(name) + 1]
+
+  it.each([
+    ['a whole-video burn', { ranged: false }],
+    ['a ranged burn', { ranged: true }]
+  ])('%s: `-c:a aac -b:a 192k`, no `copy`, and the video is still libx264', async (_label, opts) => {
+    const args = await argvOf(opts)
+    expect(flag(args, '-c:a')).toBe('aac')
+    expect(flag(args, '-b:a')).toBe('192k')
+    expect(args).not.toContain('copy')
+    expect(flag(args, '-c:v')).toBe('libx264')
+    // The bitrate belongs to the audio encoder: it comes right after it, before the container flags.
+    expect(args.indexOf('-b:a')).toBe(args.indexOf('-c:a') + 2)
+    expect(args.indexOf('-b:a')).toBeLessThan(args.indexOf('-movflags'))
+  })
+
+  it('maps no stream by hand, so a source with no sound is still soundless (nothing for the audio flags to apply to)', async () => {
+    expect(await argvOf({ ranged: false })).not.toContain('-map')
+  })
+})

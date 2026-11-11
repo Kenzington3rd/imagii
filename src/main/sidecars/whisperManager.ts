@@ -55,6 +55,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { createReadStream } from 'node:fs'
 import { assertAlways } from '../../shared/assert'
 import { fitFileName } from '../../shared/filename'
+import { NAME_UNIT } from '../ffmpeg/outputPath'
 import { CANCELLED_MESSAGE } from '../../shared/cancel'
 
 export type CaptionsProgressListener = (p: CaptionsProgress) => void
@@ -252,7 +253,7 @@ async function transcribeUnderRun(
     const stamp = `-${Date.now()}`
     const outputBase = path.join(
       captionsOutputDir(),
-      `${fitFileName(path.parse(req.sourcePath).name, `${stamp}.srt`)}${stamp}`
+      `${fitFileName(path.parse(req.sourcePath).name, `${stamp}.srt`, NAME_UNIT)}${stamp}`
     )
 
     const args = [
@@ -483,7 +484,7 @@ export async function runBurnIn(
       captioned = false
     } else if (range || burnText !== rawSrt) {
       // A ranged burn always reads its shifted copy; a whole-video one only when cleaning changed the file (an unchanged one burns where it is).
-      tempSrt = shiftedSrtPath(req.srtPath, randomUUID())
+      tempSrt = shiftedSrtPath(req.srtPath, randomUUID(), NAME_UNIT)
       await writeFile(tempSrt, burnText, 'utf8')
       burnSrt = tempSrt
     } else {
@@ -544,8 +545,14 @@ export async function runBurnIn(
       'medium',
       '-pix_fmt',
       'yuv420p',
+      // T-184 (6): the sound is ENCODED as AAC at 192 kb/s, the Export presets' encoder, for every source. It was `-c:a copy`, which carries whatever the source holds into
+      // an .mp4: Opus, FLAC and PCM were written (a file QuickTime and some players cannot play, T-110 (ab)), and WMA, ADPCM and TrueHD are not allowed in an .mp4 at all, so
+      // ffmpeg exited with "codec not currently supported in container" and the person read "check that the source file still plays" about a file that plays. A soundless
+      // source has no audio stream for the flags to apply to, so it stays soundless (no `-map`: the default picks the one best audio stream, and none is none).
       '-c:a',
-      'copy',
+      'aac',
+      '-b:a',
+      '192k',
       // B6 fix (round 15): the user-facing burn-in MP4 also needs faststart so
       // web players can seek without buffering the moov atom from the tail.
       '-movflags',

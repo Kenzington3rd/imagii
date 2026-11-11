@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto'
 import { rename, stat, unlink } from 'node:fs/promises'
 import path from 'node:path'
 import { fitFileName } from '../../shared/filename'
+import { NAME_UNIT } from './outputPath'
 import { nextFreePath } from './outputPath'
 
 /**
@@ -59,7 +60,7 @@ export const PARTIAL_OUTPUT = /\.[0-9a-f]{8}\.partial(?:\.[^./\\]*)?$/
 export function partialPathFor(target: string): string {
   const { dir, name, ext } = path.parse(target)
   const tail = `.${randomBytes(4).toString('hex')}.partial${ext}`
-  return path.join(dir, `${fitFileName(name, tail)}${tail}`)
+  return path.join(dir, `${fitFileName(name, tail, NAME_UNIT)}${tail}`)
 }
 
 /**

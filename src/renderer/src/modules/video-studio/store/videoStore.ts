@@ -619,6 +619,14 @@ export const useVideoStore = create<VideoStudioState>((set, get) => {
       set({ currentTime: target, seekRequest: { seconds: target } })
     },
     setSrtPath: (p: string | null) => {
+      // T-184 (3): a DIFFERENT path is a different transcript, so the segments that were held for the old one are not its preview: a project open used to merge only the path
+      // into what `loadSource` had given back, and the Captions panel previewed one run's text over another's file. The held entry becomes `{ p, null }`; the same path
+      // (a project of the transcript that was just made) keeps its segments, and clearing the path (null) is left as it was.
+      if (p !== null && p !== get().srtPath) {
+        holdTranscript(get().source, { srtPath: p, transcript: null })
+        set({ srtPath: p, derived: { ...get().derived, transcript: null } })
+        return
+      }
       holdTranscript(get().source, { srtPath: p })
       set({ srtPath: p })
     },

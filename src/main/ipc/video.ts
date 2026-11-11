@@ -41,8 +41,9 @@ import { assertAlways } from '../../shared/assert'
 import { HOOK_MAX_SOURCE_SEC, HOOK_MIN_SEC } from '../../shared/highlights'
 import { assertSafeAbsolutePath, assertSafeId, isSafeAbsolutePath, SAFE_ID_RE } from '../../shared/pathSafety'
 import { sendIfAlive } from '../sendIfAlive'
-import { isExistingFolder } from '../ffmpeg/outputPath'
+import { NAME_UNIT, isExistingFolder } from '../ffmpeg/outputPath'
 import { nameWithTail, safeNamePart } from '../../shared/filename'
+import { FILE_NAME_TOO_LONG } from '../../shared/userFacingError'
 import { WATERMARK_MAX_LENGTH, WATERMARK_POSITIONS } from '../../shared/watermark'
 import { clipNameForSentence } from '../ffmpeg/noPicture'
 
@@ -131,11 +132,16 @@ function assertUsableRecipe(clip: Record<string, unknown>, channel: string, name
  * into `_`, and is what Export's template and Clip Kit's names already went through; it keeps the spaces, dots and brackets a clip's name carries, which
  * `sanitizeFilename`'s letters-and-digits-only set would have refused on every ordinary export. Then no control character, a stem with something in it
  * (so `.` and `..` are out), within a file system's 255 characters, and the `.mp4` every export is.
+ *
+ * T-184 (2): the 255 is the one refusal a person can act on, so it is a finished sentence (`FILE_NAME_TOO_LONG`, which `userFacingError` lets stand: it names the cause and
+ * what to do) instead of an assertion for a log. The renderer fits its names before they get here (`expandFilenameTemplate`, `kitSafeName`), so only a name nobody fitted reaches it.
  */
 function assertPlainMp4Name(name: unknown, label: string): asserts name is string {
   assertNonEmptyString(name, label)
   assertAlways(!/[\u0000-\u001f]/.test(name) && safeNamePart(name) === name, `${label} must be a plain file name, with no path in it or character a file name cannot hold`)
-  assertAlways(name.length <= 255 && /\.mp4$/.test(name) && name.length > '.mp4'.length, `${label} must be a name ending in .mp4`)
+  assertAlways(/\.mp4$/.test(name) && name.length > '.mp4'.length, `${label} must be a name ending in .mp4`)
+  // A plain Error, not an assertion: `assertAlways` prefixes "Assertion failed:", which would stand in front of the sentence the person reads.
+  if (name.length > 255) throw new Error(FILE_NAME_TOO_LONG)
 }
 
 /** T-144: a watermark crosses as drawtext text and numbers, so it is the shape `buildWatermark` makes: text within the handle's cap, a real corner, finite figures. */
@@ -382,7 +388,7 @@ export function registerVideoIpc(): void {
       assertUsableCrop(params.cropRect, 'video:reframe', 'cropRect')
       assertUsableRecipe(params, 'video:reframe', 'params')
       const base = outputBaseName(params.sourceName, params.sourcePath, params.clipName)
-      const outputName = nameWithTail(base, `_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`)
+      const outputName = nameWithTail(base, `_reframe-${params.targetWidth}x${params.targetHeight}-${params.position}.mp4`, NAME_UNIT)
       const outputPath = path.join(params.outDir, outputName)
       // Round 17 B1: accept a renderer-supplied jobId so the panel's Cancel
       // button has something to identify the in-flight job. Round 18: route
@@ -603,7 +609,7 @@ export function registerVideoIpc(): void {
       assertEnum(params.position, PIP_POSITIONS, 'position')
       assertFiniteNonNeg(params.margin, 'margin')
       const base = path.parse(params.basePath).name
-      const outputPath = path.join(params.outDir, nameWithTail(base, '_pip.mp4'))
+      const outputPath = path.join(params.outDir, nameWithTail(base, '_pip.mp4', NAME_UNIT))
       // Round 17 B5: PiP shares concat's activeJobs map, so a renderer-supplied
       // jobId lets cancelConcatJob target this pip job directly.
       return runPipComposite(pickJobId(params.jobId), params.basePath, params.overlayPath, outputPath, {

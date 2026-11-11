@@ -8,7 +8,7 @@ import { cancelledOr, killAsCancelled } from './cancelMark'
 import { CancelLatch, type LatchRun } from './cancelLatch'
 import { finishPartial, partialPathFor } from './partialOutput'
 import { FFMPEG_EMPTY_OUTPUT, PictureFrames, exportNoPictureMessage, wroteNoPicture } from './noPicture'
-import { ensureOutputDir, nextFreePath } from './outputPath'
+import { NAME_UNIT, ensureOutputDir, nextFreePath } from './outputPath'
 import { nameWithTail } from '../../shared/filename'
 import { clipSpeed } from '../../shared/clip'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
@@ -78,7 +78,7 @@ async function encodeJob(
   const outputName =
     job.outputFilename && job.outputFilename.trim()
       ? job.outputFilename
-      : nameWithTail(`${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}`, `_${presetTag}.mp4`)
+      : nameWithTail(`${safeFileBase(sourceBase)}_${safeFileBase(job.clip.name)}`, `_${presetTag}.mp4`, NAME_UNIT)
   // T-106: the name the settings give is the name WANTED. A file already there is
   // somebody's earlier export, and this job writes beside it, not over it.
   // T-125 (10): the folder is there before the name is chosen (a remembered one may have been deleted or live on an unplugged drive).

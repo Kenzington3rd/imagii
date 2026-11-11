@@ -4721,3 +4721,141 @@ test.describe('round 130 Track A (T-181 (1)): a navigation leaves the crash scre
     }
   })
 })
+
+/**
+ * T-184 (4) and (5): the offer to restore an autosave and the notice that one is damaged arrive on their own, after `autosave.read()` resolves, on the recovery path
+ * after a crash - and were plain `<div>`s no screen reader was told about (a live region that appears with its content is not reliably read: ExportPanel's T-153 note).
+ * They now sit in a `role="status"` region that is mounted from the first render and empty until the read lands. And each of the three lines (the offer, the damaged
+ * notice, "Last autosave") spanned the whole window, so at 2560 wide Restore / Clear / Later sat about 1,900 px from the question they answer; all three take Home's grid's
+ * `max-w-4xl`.
+ *
+ * "Before the read resolves" is a state the test creates: main's `autosave:read` is replaced by a handler that waits for a gate, the page reloads (so the banner mounts
+ * against the held read), and the regions that exist EMPTY at that point are tagged; the sentence must then arrive inside one of those same elements.
+ */
+test.describe('T-184 (4), (5): the autosave banner is announced and sits with its grid', () => {
+  const OFFER = { ok: true, project: canvasProject('Kept rect'), info: { exists: true, filePath: 'autosave.json', ageMs: 120_000 } }
+  const DAMAGED = { ok: false, reason: 'invalid JSON', info: { exists: true, filePath: 'autosave.json', ageMs: 5_000 } }
+
+  async function gateAutosaveRead(app: ElectronApplication, result: unknown): Promise<void> {
+    await app.evaluate(({ ipcMain }, res) => {
+      const g = globalThis as unknown as { __releaseRead?: () => void }
+      const gate = new Promise<void>((resolve) => {
+        g.__releaseRead = resolve
+      })
+      ipcMain.removeHandler('autosave:read')
+      ipcMain.handle('autosave:read', async () => {
+        await gate
+        return res
+      })
+    }, result)
+  }
+  const releaseAutosaveRead = (app: ElectronApplication): Promise<void> =>
+    app.evaluate(() => (globalThis as unknown as { __releaseRead?: () => void }).__releaseRead?.())
+
+  /** Home with the read held: the status regions that exist and are empty are tagged, then the read is released and the sentence must land in a tagged one. */
+  async function sentenceArrivesInAnAlreadyMountedRegion(label: string, result: unknown, sentence: RegExp): Promise<void> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await gateAutosaveRead(app, result)
+      await window.reload()
+      await waitForHome(window)
+      await expect(window.getByText(sentence), 'the read is held: nothing is drawn yet').toHaveCount(0)
+      const empty = await window.evaluate(() => {
+        const regions = Array.from(document.querySelectorAll('[role="status"], [role="alert"]')).filter((el) => (el.textContent ?? '') === '')
+        regions.forEach((el) => el.setAttribute('data-t184-mounted', 'empty'))
+        return regions.length
+      })
+      expect(empty, 'a live region exists before the read resolves').toBeGreaterThan(0)
+      await releaseAutosaveRead(app)
+      await expect(window.getByText(sentence)).toBeVisible({ timeout: 20_000 })
+      await expect(
+        window.locator('[data-t184-mounted="empty"]').filter({ hasText: sentence }),
+        'the sentence arrived INSIDE a region that was already mounted and empty'
+      ).toHaveCount(1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  }
+
+  test('the restore offer arrives inside a status region that was mounted before the read resolved', async () => {
+    test.setTimeout(120_000)
+    await sentenceArrivesInAnAlreadyMountedRegion('t184-offer-live', OFFER, /imagii autosaved your work/)
+  })
+
+  test('the damaged-autosave notice arrives inside a status region that was mounted before the read resolved', async () => {
+    test.setTimeout(120_000)
+    await sentenceArrivesInAnAlreadyMountedRegion('t184-damaged-live', DAMAGED, /imagii found an autosave from .*, but it's damaged/)
+  })
+
+  const edges = (loc: ReturnType<Page['locator']>): Promise<{ left: number; right: number }> =>
+    loc.evaluate((el) => {
+      const r = el.getBoundingClientRect()
+      return { left: r.left, right: r.right }
+    })
+
+  test('at 2560x1440 the offer ends where the grid ends, Restore is next to its question, and the "Last autosave" line is as wide as the grid', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t184-offer-width')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, canvasProject('Kept rect'))
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await resizeAndSettle(app, window, { width: 2560, height: 1440 })
+      const sentence = window.getByText(/imagii autosaved your work/)
+      await expect(sentence).toBeVisible({ timeout: 20_000 })
+      const grid = await edges(window.locator('a[href="#/record"]').locator('xpath=ancestor::div[contains(@class,"grid")][1]'))
+      expect(grid.right, 'the premise: Home\'s grid is 896 wide, from the page margin').toBeLessThanOrEqual(937)
+      const card = await edges(sentence.locator('xpath=ancestor::div[contains(@class,"card")][1]'))
+      expect(card.right, 'the banner ends where the grid ends (red: it ran to the window\'s edge)').toBeLessThanOrEqual(grid.right + 1)
+      const start = (await edges(sentence)).left
+      for (const name of ['Restore', 'Clear', 'Later']) {
+        const button = await edges(window.getByRole('button', { name, exact: true }))
+        expect(button.left - start, `${name} is within 900 px of the sentence it answers`).toBeLessThan(900)
+      }
+      // The dismissed state's status line takes the same width.
+      await window.getByRole('button', { name: 'Later' }).click()
+      const line = window.getByText(/^Last autosave: /)
+      await expect(line).toBeVisible()
+      expect((await edges(line)).right, 'the status line is the grid\'s width, not the window\'s').toBeLessThanOrEqual(grid.right + 1)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('at 2560x1440 the damaged notice ends where the grid ends and its Clear is next to its sentence', async () => {
+    test.setTimeout(120_000)
+    const root = makeRoot('t184-damaged-width')
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, '{"schemaVersion":2,"savedAt":175534')
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await resizeAndSettle(app, window, { width: 2560, height: 1440 })
+      const sentence = window.getByText(/imagii found an autosave from .*, but it's damaged/)
+      await expect(sentence).toBeVisible({ timeout: 20_000 })
+      const grid = await edges(window.locator('a[href="#/record"]').locator('xpath=ancestor::div[contains(@class,"grid")][1]'))
+      const card = await edges(sentence.locator('xpath=ancestor::div[contains(@class,"card")][1]'))
+      expect(card.right, 'the notice ends where the grid ends').toBeLessThanOrEqual(grid.right + 1)
+      const start = (await edges(sentence)).left
+      for (const name of ['Clear', 'Dismiss']) {
+        const button = await edges(window.getByRole('button', { name, exact: true }))
+        expect(button.left - start, `${name} is within 900 px of the sentence`).toBeLessThan(900)
+      }
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

@@ -35,6 +35,23 @@ export function localStamp(d: Date = new Date()): string {
   return `${localDate(d)}T${localTime(d)}-${pad2(d.getSeconds())}`
 }
 
+/**
+ * T-184 (2): a name Export builds is at most this many UTF-16 units, so `nextFreePath`'s " (9999)" still fits under the 255 the gate (`assertPlainMp4Name`,
+ * `name.length <= 255`) and a Windows file name hold. The Export panel is the only caller and its name goes to that gate, so this fits in the gate's own unit.
+ */
+const TEMPLATE_NAME_MAX = 255 - ' (9999)'.length
+
+/** What a template makes once its parts are in: the reserved characters out, runs of `_` one, the ends trimmed. */
+function templateStem(template: string, values: Record<string, string>): string {
+  const replaced = template.replace(/\{(source|clip|preset|date|time|handle)\}/g, (_m, key: string) => values[key] ?? '')
+  return replaced.replace(/[\\/:*?"<>|]/g, '_').replace(/__+/g, '_').trim() || 'export'
+}
+
+/** `value` with at least `over` UTF-16 units taken off its end, at a whole code point. */
+function shorten(value: string, over: number): string {
+  return fitFileName(value, '', 'utf16', Math.max(0, value.length - over))
+}
+
 export function expandFilenameTemplate(
   template: string | null | undefined,
   ctx: FilenameContext
@@ -45,35 +62,34 @@ export function expandFilenameTemplate(
   // `sanitizeFilename`: with `\p{M}` matched anywhere an emoji's variation selector (U+FE0F) rides out as an
   // invisible name.
   const handleClean = ((ctx.handle ?? '').match(/(?:[\p{L}\p{N}_]\p{M}*)+/gu) ?? []).join('')
-  const replaced = t.replace(/\{(source|clip|preset|date|time|handle)\}/g, (_m, key) => {
-    switch (key) {
-      case 'source':
-        return safe(ctx.source)
-      case 'clip':
-        return safe(ctx.clip ?? 'clip')
-      case 'preset':
-        return safe(ctx.preset ?? 'export')
-      case 'date':
-        return localDate()
-      case 'time':
-        return localTime()
-      case 'handle':
-        return handleClean
-      default:
-        return ''
-    }
-  })
-  const cleaned = replaced.replace(/[\\/:*?"<>|]/g, '_').replace(/__+/g, '_').trim() || 'export'
-  return `${cleaned}.${ctx.ext.replace(/^\./, '')}`
+  const values: Record<string, string> = {
+    source: safe(ctx.source),
+    clip: safe(ctx.clip ?? 'clip'),
+    preset: safe(ctx.preset ?? 'export'),
+    date: localDate(),
+    time: localTime(),
+    handle: handleClean
+  }
+  const ext = `.${ctx.ext.replace(/^\./, '')}`
+  const room = TEMPLATE_NAME_MAX - ext.length
+  // T-184 (2): a name over `room` is shortened HERE, where it is built, and what tells the files apart is kept: the video's name ({source}) is cut first, then the
+  // clip's ({clip}); the preset, the date, the time, the handle, the template's own text and the extension are never cut. (Left whole, the name was refused at the
+  // gate and the person read only "Export failed.") A template whose fixed parts alone are over is left for the gate to refuse in its own sentence.
+  for (const key of ['source', 'clip'] as const) {
+    const uses = t.split(`{${key}}`).length - 1
+    const over = templateStem(t, values).length - room
+    if (uses > 0 && over > 0) values[key] = shorten(values[key] ?? '', Math.ceil(over / uses))
+  }
+  return `${templateStem(t, values)}${ext}`
 }
 
 /**
  * T-183 (2): `<base><tail>` for a name main builds from a person's (or a file's) name and a DESCRIPTIVE tail - `_480px_15fps.gif`, `_compilation.mp4`,
  * `_reframe-1080x1920-center.mp4`, `-cleaned.wav`. The BASE is cut, never the tail: the tail is what tells the person which file is which. Room is left
- * for `nextFreePath`'s " (9999)" as well, so a taken name's " (2)" does not cut the tail on the second run either.
+ * for `nextFreePath`'s " (9999)" as well, so a taken name's " (2)" does not cut the tail on the second run either. `unit` is the drive's (`fitFileName`).
  */
-export function nameWithTail(base: string, tail: string): string {
-  return `${fitFileName(base, `${tail} (9999)`)}${tail}`
+export function nameWithTail(base: string, tail: string, unit: NameUnit): string {
+  return `${fitFileName(base, `${tail} (9999)`, unit)}${tail}`
 }
 
 /**
@@ -89,14 +105,22 @@ function safe(s: string): string {
   return safeNamePart(s)
 }
 
-/** The UTF-8 length of one code point (a lone surrogate counts as the 3 bytes TextEncoder writes for it). */
-function utf8Length(codePoint: number): number {
+/**
+ * T-184 (2): what a file name's 255 is counted in. NTFS (the shipped Windows build) holds 255 UTF-16 code units, so a Hangul, kana or kanji character is ONE and an
+ * astral glyph two; ext4 (the dev and CI hosts) holds 255 UTF-8 BYTES, where those characters are three and four. `'utf8'` was the only count in T-183 and
+ * charged a Japanese title three times what Windows does, so a name Windows would have written whole was cut.
+ */
+export type NameUnit = 'utf8' | 'utf16'
+
+/** What one code point costs in `unit` (a lone surrogate is one UTF-16 unit, and the 3 bytes TextEncoder writes for it in UTF-8). */
+function unitLength(codePoint: number, unit: NameUnit): number {
+  if (unit === 'utf16') return codePoint > 0xffff ? 2 : 1
   return codePoint < 0x80 ? 1 : codePoint < 0x800 ? 2 : codePoint < 0x10000 ? 3 : 4
 }
 
-function utf8Bytes(s: string): number {
+function unitsOf(s: string, unit: NameUnit): number {
   let n = 0
-  for (const ch of s) n += utf8Length(ch.codePointAt(0) ?? 0)
+  for (const ch of s) n += unitLength(ch.codePointAt(0) ?? 0, unit)
   return n
 }
 
@@ -104,17 +128,17 @@ function utf8Bytes(s: string): number {
  * T-183 (2): the stem of a name that must still be a legal file name once `suffix` is added to it. A person's name (a VOD title, a pasted clip name)
  * plus what imagii adds - ` (2)`, `.<hex>.partial.mp4`, `-<id>.mp4`, `.srt.clip-<uuid>.srt` - can pass every gate and still be longer than the 255 a
  * file-system component holds, and the write then fails with "File name too long". The stem is cut at a WHOLE code point (never half a surrogate pair or
- * a multi-byte character) so that the UTF-8 length of stem + suffix is at most `maxBytes`: UTF-8 bytes bound both ext4's 255 bytes and NTFS's 255 UTF-16
- * units (a unit is never more than 3 bytes, a pair 4). A stem that already fits comes back unchanged; a CUT stem loses its trailing spaces and dots, which
- * Windows drops from a name (the file would land under a different name than the one asked for).
+ * a multi-byte character) so that the length of stem + suffix in `unit` is at most `max` (T-184 (2): main passes the drive's unit, `NAME_UNIT`; the renderer
+ * passes `'utf16'`, the gate's own). A stem that already fits comes back unchanged; a CUT stem loses its trailing spaces and dots, which Windows drops from
+ * a name (the file would land under a different name than the one asked for).
  */
-export function fitFileName(stem: string, suffix: string, maxBytes = 255): string {
-  const room = maxBytes - utf8Bytes(suffix)
-  if (utf8Bytes(stem) <= room) return stem
+export function fitFileName(stem: string, suffix: string, unit: NameUnit, max = 255): string {
+  const room = max - unitsOf(suffix, unit)
+  if (unitsOf(stem, unit) <= room) return stem
   let cut = ''
   let used = 0
   for (const ch of stem) {
-    used += utf8Length(ch.codePointAt(0) ?? 0)
+    used += unitLength(ch.codePointAt(0) ?? 0, unit)
     if (used > room) break
     cut += ch
   }

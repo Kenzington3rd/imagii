@@ -134,7 +134,7 @@ describe('clearTranscripts', () => {
 describe('a shifted copy with a fitted name (T-183 (2))', () => {
   it('is not counted and not cleared, and the long transcript beside it is both', async () => {
     const real = `${'v'.repeat(200)}-1700000000000.srt`
-    const copy = path.basename(shiftedSrtPath(path.join(dir, real), UUID))
+    const copy = path.basename(shiftedSrtPath(path.join(dir, real), UUID, 'utf8'))
     expect(copy.length).toBeLessThanOrEqual(255)
     expect(copy).not.toBe(`${real}.clip-${UUID}.srt`)
     put(real)

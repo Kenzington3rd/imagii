@@ -491,3 +491,45 @@ describe('the selection handles take their colors from the palette (T-164 (8))',
     expect([ACCENT, INK_BASE].map((c) => c.toLowerCase())).not.toContain('#00a1ff')
   })
 })
+
+/**
+ * T-184 (1): text drawn over a picture or a document, through a translucent backing, is judged against the WORST content under it (white). The Stream Graphics
+ * readout was `text-ink-dim` on `bg-bg-elevated/80` (3.13:1 over a white document's corner) and the Reference Search tile's source line `text-ink-dim` on the
+ * hover scrim `bg-black/60` (1.84:1 over a white thumbnail). The fixes: the readout's backing is opaque, the source line is ink-base. E2E: image.spec.ts "the size
+ * readout stays readable over a white document (T-184 (1))" and references.spec.ts "the Reference Search tile's source line is ink-base (T-184 (1))".
+ */
+describe('text over a picture clears AA over white content (T-184 (1))', () => {
+  const WHITE = '#ffffff'
+  const BLACK = '#000000' // `bg-black/60` is the documented raw-colour exception (DESIGN_GUIDE)
+  const read = (rel: string): string => code(path.resolve(RENDERER_ROOT, rel))
+
+  it('ink-dim on the opaque bg-elevated is 5.8:1, and the translucent backing it replaces failed over white', () => {
+    expect(contrast(INK_DIM, BG_ELEVATED)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(INK_DIM, over(BG_ELEVATED, WHITE, 0.8)), 'the old /80 composite over a white corner').toBeLessThan(4.5)
+  })
+
+  it('ink-base on the bg-black/60 scrim clears 4.5:1 over white, and ink-dim does not', () => {
+    const scrim = over(BLACK, WHITE, 0.6)
+    expect(contrast(INK_BASE, scrim)).toBeGreaterThanOrEqual(4.5)
+    expect(contrast(INK_DIM, scrim), 'the old source-line pairing').toBeLessThan(4.5)
+  })
+
+  it('the mood board\'s remove button (ink-base on bg-base/80) clears it over white', () => {
+    expect(contrast(INK_BASE, over(BG_BASE, WHITE, 0.8))).toBeGreaterThanOrEqual(4.5)
+  })
+
+  it('wiring: the Canvas readout sits on the opaque bg-elevated, no alpha', () => {
+    const canvas = read('modules/image-studio/Canvas.tsx')
+    const readout = canvas.slice(canvas.lastIndexOf('<div className="absolute bottom-2 right-2'))
+    const classes = /className="([^"]*)"/.exec(readout)?.[1] ?? ''
+    expect(classes).toMatch(/\btext-ink-dim\b/)
+    expect(classes).toMatch(/\bbg-bg-elevated\b(?!\/)/)
+    expect(classes, 'no translucent backing').not.toMatch(/bg-bg-elevated\/|bg-bg-base\/|bg-black\//)
+  })
+
+  it('wiring: the Reference Search tile\'s source line is ink-base', () => {
+    const panel = read('modules/references/ReferencePanel.tsx')
+    expect(panel).toMatch(/<span className="text-xs text-ink-base">\{result\.source\}<\/span>/)
+    expect(panel).not.toMatch(/text-ink-dim">\{result\.source\}/)
+  })
+})

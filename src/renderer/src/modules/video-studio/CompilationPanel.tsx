@@ -91,9 +91,11 @@ export function CompilationPanel(): JSX.Element | null {
         {formatFps(compileFps([source.probe.fps]))}), in clip list order. Each clip keeps its crop,
         speed, color, text and effects.
       </p>
-      {needsSecondClip ? (
-        <p className="text-xs text-warn">Add a second clip to compile.</p>
-      ) : null}
+      {/* T-184 (4): always mounted (ExportPanel's T-153 shape, GifPanel's before it): removing the second clip raises this sentence, and a live region that
+          appears with its content is not reliably read. Empty, it is still a flex item with a gap on each side, so `-mb-3` takes back the second one. */}
+      <div role="status" className={needsSecondClip ? undefined : '-mb-3'}>
+        {needsSecondClip ? <p className="text-xs text-warn">Add a second clip to compile.</p> : null}
+      </div>
       {/* T-105: how each clip fits the compilation's 16:9 frame, in the export
           grid's own words (the same verdict, the compilation as the target).
           A crop that is not 16:9 keeps only the middle of its picture, and the

@@ -105,6 +105,13 @@ export function isMissingFileError(err: unknown): boolean {
   return MISSING_FILE.test(ipcErrorMessage(err, ''))
 }
 
+/**
+ * T-183 (2) / T-184 (2): the sentence for a name over the 255 a file system holds. One constant for both places that say it: the table below (node's or ffmpeg's own
+ * words for the write that failed) and main's gate on an export's file name (`assertPlainMp4Name`), so a name refused before any encode reads as one refused by the disk.
+ */
+export const FILE_NAME_TOO_LONG =
+  "That file name is too long for the drive. Shorten the clip's or the video's name and try again."
+
 const KNOWN_CAUSES: ReadonlyArray<readonly [RegExp, string]> = [
   [/\bENOSPC\b|no space left on device/i, 'Your disk is full. Free up some space and try again.'],
   [MISSING_FILE, "A file imagii needs isn't there. It may have been moved or deleted."],
@@ -112,10 +119,7 @@ const KNOWN_CAUSES: ReadonlyArray<readonly [RegExp, string]> = [
   [RUNNER_PERMISSION_DENIED, WINDOWS_BLOCKED],
   // T-183 (2): a name over the 255 a file system holds. imagii fits the names it builds (`fitFileName`), so this is the safety net for a name it did not: node's
   // `ENAMETOOLONG: name too long, open ...` and ffmpeg's `Error opening output <path>: File name too long`. After the rows above, so none of them loses its words.
-  [
-    /\bENAMETOOLONG\b|name too long|filename or extension is too long/i,
-    "That file name is too long for the drive. Shorten the clip's or the video's name and try again."
-  ],
+  [/\bENAMETOOLONG\b|name too long|filename or extension is too long/i, FILE_NAME_TOO_LONG],
   [
     /net::ERR_|\b(?:ENOTFOUND|ECONNREFUSED|ECONNRESET|ETIMEDOUT|EAI_AGAIN|ENETUNREACH)\b/,
     "imagii couldn't reach the internet. Check your connection and try again."

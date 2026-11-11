@@ -150,8 +150,8 @@ describe('pruneStaleTempFiles — the captions temp-copy family (T-81)', () => {
 
   it('sweeps a stale orphaned shifted copy and nothing that is the user\'s', async () => {
     const real = path.join(captionsDir, 'Stream-1700000000000.srt')
-    const staleOrphan = shiftedSrtPath(real, randomUUID())
-    const freshOrphan = shiftedSrtPath(real, randomUUID())
+    const staleOrphan = shiftedSrtPath(real, randomUUID(), 'utf8')
+    const freshOrphan = shiftedSrtPath(real, randomUUID(), 'utf8')
     const staleOther = path.join(captionsDir, 'notes.txt')
     await makeFile(captionsDir, path.basename(real), STALE) // a real transcript, however old
     await makeFile(captionsDir, path.basename(staleOrphan), STALE)
@@ -172,7 +172,7 @@ describe('pruneStaleTempFiles — the captions temp-copy family (T-81)', () => {
   // T-183 (2): the sweep reads the SUFFIX of the name, so a copy whose transcript's name was cut to fit is still the temp it is.
   it('sweeps a stale shifted copy whose name was fitted to the 255-byte limit, and keeps the long transcript it was made from', async () => {
     const real = path.join(captionsDir, `${'v'.repeat(200)}-1700000000000.srt`)
-    const fitted = shiftedSrtPath(real, randomUUID())
+    const fitted = shiftedSrtPath(real, randomUUID(), 'utf8')
     expect(Buffer.byteLength(path.basename(fitted), 'utf8')).toBeLessThanOrEqual(255)
     expect(path.basename(fitted).startsWith('v'.repeat(150))).toBe(true)
     await makeFile(captionsDir, path.basename(real), STALE)

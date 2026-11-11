@@ -368,7 +368,9 @@ that names the file being converted.)
   into video** on the 9:16 file.
 - **Captions** — transcribes the speech, then saves an `.srt` or burns styled
   captions into a new MP4. Captions are English only. They burn into the
-  original video, not the platform exports. **Save .srt** keeps the captions for
+  original video, not the platform exports. The video's sound is written as AAC
+  (192 kb/s), so a recording whose sound an MP4 cannot hold (Windows Media or
+  ADPCM, for example) still burns, and a video with no sound stays without one. **Save .srt** keeps the captions for
   the whole video, even with **Burn captions over selected clip range only**
   checked; only **Burn into video** follows that box. The **Preset** buttons set the style
   in one click and the one in use shows as pressed (move any dial and none does); a line
@@ -914,8 +916,9 @@ Gather inspiration and grab ready-made stream assets. References has three tabs.
   same name is written beside the first as **name (2).mp4**, then **name (3).mp4**,
   and a second Clip Kit of the same clip on the same day gets its own folder,
   **name-kit-date (2)** (the date is today's on your computer's clock). A name too long for
-  the drive (255 characters, counting what imagii adds to the end of it) is shortened to fit, and the toast
-  and **Show in folder** say the name it was saved under. The **GIF**,
+  the drive (Windows' 255 characters, counting what imagii adds to the end of it) is shortened to fit: the
+  video's or the clip's name is cut and the platform, size or kind at the end of the name is kept, and the toast
+  and **Show in folder** say the name it was saved under (Clip Kit's too: it selects the first file it wrote). The **GIF**,
   **Compile**, **Reframe** and **Picture-in-picture** panels start on the folder the
   last one of them wrote to (the button shows its name), so the folder is chosen once and not
   every time Video Studio opens; **Choose folder…** changes it for all four, at once: a pick in one
