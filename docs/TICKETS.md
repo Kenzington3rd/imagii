@@ -9441,7 +9441,10 @@ IMG-PREC.
   dropped focus after a busy disable (T-140); the mono-in-mix −3 dB pan law (T-173 (2)); polish — the Custom presets
   Delete names, References' Undo / Redo with no title, Title starters, a modal's sr-only h2, toast wordings, the emote
   toast's missing "px", "webcam hole" against "Facecam hole", the wizard's unit, Variants cards, the 10x16 delete and
-  14x14 speed-reset targets. One track.
+  14x14 speed-reset targets. Two tracks, disjoint files: Track A = items 1, 3, 4 and 5 (renderer: Canvas.tsx,
+  ReferencePanel.tsx, videoStore.ts, AutosaveRestore.tsx, CompilationPanel.tsx, HighlightPanel.tsx); Track B = items 2
+  and 6 (names and the burn-in: shared/filename.ts, the Clip Kit's renderer builders clipKit.ts / ClipKitButton.tsx,
+  main's call sites, ipc/video.ts's gate sentence, whisperManager.ts).
 
   **Track A — text over a picture clears AA (1); a long name is fitted where it is built and measured in the drive's own
   unit (2); a project open never pairs its transcript with another's preview (3); a notice that appears on its own is
