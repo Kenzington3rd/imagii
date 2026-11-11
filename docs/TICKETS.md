@@ -9705,6 +9705,74 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 135 — see the Done entry)
 
+## T-187 — sweep-74 fixes (round 136)
+
+- **Spec:** the seventy-fourth sweep's verified findings (candidate clean pass #1 on 151e524, the T-186 tree; the count
+  stays at 0). Item 1 found by UX reader 2 by source trace and reproduced by the expediter in a built app (a consequence
+  of T-186's commit-on-leave; QA renderer reader B noted the same gap unverified). Item 2 found and measured by design
+  reader 1 (a new consequence of the documented scrolling column, at T-186's new refusal site). Item 3 found and executed
+  by QA main (the rule TICKETS T-144 and its LESSONS entry say Export's names already pass, never tested with a control
+  character). Not counted: QA renderer reader A's two Enters in one colour-box visit being one Undo step (USER_GUIDE's
+  "one run of typing in a name, text, color or number field … is one Undo" names colour fields, and Enter keeps the
+  window open by T-147's accepted deviation); an `rgba(...)` value scrolling inside its 147 px Fill box (an input's
+  value scrolls; the documented column); `currentcolor` and `light-dark()` passing `CSS.supports` (contrived);
+  `transparent` text (typed by the person); no document-background colour control and Record's checkboxes not
+  remembered (a missing feature, polish); the hsl() / #rrggbbaa fills `newText` cannot read (its documented ceiling);
+  the hostile-renderer argv values and a `{source}` named CON (contrived; T-110 (bx)); the audio and streamer readers'
+  unmeasured notes. Two tracks, disjoint files: Track A = items 1 and 2 (renderer: components/DraftField.tsx); Track B =
+  item 3 (shared/filename.ts `safeNamePart`, main/ffmpeg/export.ts `safeFileBase`). The ffmpeg reader was
+  still out when this ticket was written; a finding from it becomes Track C.
+
+  **Track A — a box that is left commits, however it is left, and its refusal is seen (items 1 and 2).**
+  1. **[MED] A colour typed into Stream Graphics' Fill, Stroke or Color is thrown away when the next click is on the
+     canvas** (components/DraftField.tsx: the draft is committed only by `onBlur` / Enter; image-studio/Canvas.tsx:210-213
+     deselects on the Konva stage's mousedown, and PropertiesPanel.tsx:28 then unmounts the focused box before the
+     browser's blur, which React drops during the commit). Type `#ffcc00`, click the empty canvas to see it: the shape
+     keeps its old colour, with no sentence and no Undo step (reproduced in a built app of 151e524: before and after
+     `rgba(255, 49, 49, 0.4)`). T-186 made these boxes commit when typing ends; clicking the canvas IS leaving the box
+     (USER_GUIDE: "applied when you leave the box"). Fix (the root cause, in the shared component, so every DraftField
+     unmounted with a pending draft behaves as a blur): DraftField keeps its pending draft, the latest `commit` and the
+     live-committed text in refs, and a cleanup that runs when the field unmounts commits a pending draft that a live
+     commit has not already stored (no setState in the cleanup; a refusal at unmount stores nothing and says nothing,
+     because the box is gone). Nothing else changes: blur and Enter commit as now, a draft committed by blur is not
+     committed again at unmount.
+  2. **[LOW] A refusal drawn below the visible part of a scrolled column says nothing a sighted person sees**
+     (DraftField's `<p role="alert">`; measured at 1024x640: a text layer's Color box at the foot of Stream Graphics'
+     right column, `zzz` and Enter, the sentence at y 627-675 below the column's visible 228-620 and the window; a
+     refused box carries no visual mark). Fix: when a refusal appears, DraftField scrolls it into view
+     (`scrollIntoView({ block: 'nearest' })` on the sentence, so a column that already shows it does not move).
+  Covering tests: e2e (image.spec.ts NEW describe) — a rectangle's Fill typed `#ffcc00` then a mouse click on empty
+  canvas stores `#ffcc00` (and the stage pixel is yellow), and one Undo puts the old colour back; the text Color the
+  same; a refused `zzz` then a canvas click stores nothing and leaves the colour as it was; at 1024x640 a text layer's
+  Color refusal is inside the scrolled column's visible rect after Enter. Red on the base each. Unit: DraftField's
+  unmount commit (a pending draft committed once; a draft already committed by blur not committed again; a live-committed
+  draft not committed again) where the component harness allows, otherwise a wiring pin. Docs: IC rows revised in place,
+  a "Dispositions - round 136, Track A" section; LESSONS at the TOP; TESTING paragraph; USER_GUIDE only if words change.
+
+  **Track B — a control character in a name is an underscore, as the other forbidden characters are (item 3).**
+  3. **[LOW] A tab (or any control character) in a clip or custom-preset name makes main refuse the whole Export batch
+     with only "Export failed."** (shared/filename.ts:100-102 `safeNamePart` and its copy main/ffmpeg/export.ts:32-34
+     `safeFileBase` replace only `\ / : * ? " < > |`; the gate main/ipc/video.ts:141 refuses `[\u0000-\u001f]`, and
+     `validateExportJob` runs over every job before any starts, so every clip and preset is refused; the assertion text is
+     no finished sentence, so the person reads "Export failed."; Reframe, GIF and picture-in-picture hand ffmpeg the
+     control character in the output path). A text input keeps a pasted tab (only line breaks are stripped), so a name
+     copied from a spreadsheet or a chat log carries one. Fix: ONE forbidden-character class in shared/filename.ts (the
+     ten reserved characters plus the C0 controls and DEL, `[\\/:*?"<>|\u0000-\u001f\u007f]`), used by `safeNamePart` and
+     by export.ts's `safeFileBase` (which keeps its own `clip` fallback), so every name builder turns them into `_` and
+     the gate's rule holds by construction (`safeNamePart` stays idempotent). The gate is unchanged.
+  Covering tests: unit — filename.test.ts: `safeNamePart` turns a tab, `\u0001` and DEL into `_`, stays idempotent, and
+  `expandFilenameTemplate` with a tab in the clip name gives a name the gate's rule accepts; the T-183 / T-184 cases still
+  green; export.ts's default name with a tab in the clip name. Layer 5 (media.spec.ts NEW describe, bundled 7.0.2): a
+  clip named `Clutch<TAB>play` exported through the real `video:exportBatch` handler is written, ffprobe-checked, at
+  `…_Clutch_play_<preset>.mp4` (red on the base: refused at the gate); Reframe with the same clip name is written with
+  no control character in its name. Docs: IC rows; LESSONS at the TOP; TESTING paragraph; the T-144 LESSONS claim
+  corrected in place.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (Track B also `npm run test:media`); the expediter runs the full suite on the merged
+  tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 136)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
