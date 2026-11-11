@@ -9904,6 +9904,105 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 138 — see the Done entry)
 
+## T-190 — sweep-77 fixes (round 139)
+
+- **Spec:** the seventy-seventh sweep's verified findings (candidate clean pass #1 on 3478fa3, the T-189 tree; the count
+  stays at 0). Item 1 found by streamer reader A (a new consequence of T-189 (1): the focus it now puts on Stop takes
+  the repeat of the Enter that pressed Start), with its sibling found by the expediter in source; item 2 found by UX
+  reader 1 in its weighed list and counted by the expediter (the T-189 (1) class on the same toolbar); item 3 found and
+  measured by design reader 1 in a scratch build at 1024, 1920 and 2560 px; item 4 found by UX reader 2 (a sibling site
+  of done T-146's "Show in folder for the first file written ALWAYS"); item 5 found by streamer reader B (a promise of
+  done T-166 (4) the stylesheet makes impossible); item 6 found by the Electron reader and verified by the expediter in
+  app-builder-lib (sweep 75's reader had read the inner app exe's version block, not the portable wrapper's). All six
+  confirmed against source. Not counted: Line and the first source tile taking an Enter repeat (an idempotent
+  re-select); "SRT saved" (a quick copy to the path just chosen, the T-91 "PNG saved" class); progress feeds pausing
+  while Video Studio is unmounted (they resume on the next event and Cancel stays; cosmetic); the single-letter tool
+  keys with no remap (WCAG 2.1.4; an initiative, a settings feature); the Captions Setup disclosure without
+  `aria-expanded` (its Show / Hide text carries the state); Shift+Insert and the tutorial's arrows missing from the `?`
+  table; Chromium's default focus ring on bare buttons (the guide fails only `outline-none` with no ring); soft
+  upscaled Record thumbnails; the USER_GUIDE "without reading it" wording for a 50-150 MiB project (T-153 refuses by
+  characters); the ledgered T-110 letters each reader named. Item 6 is the expediter's (package.json): landed in this
+  ticket's own commit with its pin test (tests/unit/docClaims.test.ts, NEW describe "the downloaded exe describes the
+  product BRANDING positions (T-190 (6))", red on 3478fa3). Two worker tracks, disjoint files: Track A = items 1-3
+  (record-studio/RecordStudio.tsx, audio-studio/SecondaryTrackPanel.tsx, image-studio/Toolbar.tsx); Track B = items 4
+  and 5 plus item 6's docs (video-studio/CaptionsPanel.tsx, lib/savedToast.tsx, components/ErrorBoundary.tsx,
+  docs/USER_GUIDE.md:97). The ffmpeg reader was still out when this ticket was written; a finding from it becomes
+  Track C.
+
+  **Track A — a held key, a revealed tool and a source name stay where the person left them (items 1-3).**
+  1. **[LOW] A held Enter on "Start recording" ends the take it just started** (record-studio/RecordStudio.tsx:793: Stop
+     has no `onKeyDown`). Start is disabled while it works, T-189 (1)'s effect on `[phase]` puts focus on Stop when the
+     phase becomes `recording`, and the auto-repeat of the Enter still held lands on Stop and clicks it: the take ends at
+     once (the T-120 / T-141 (4) held-Enter class). Sibling, same mechanism: audio-studio/SecondaryTrackPanel.tsx's
+     Remove held — T-189 (1) puts focus on the first role button ("Background music"), the repeat clicks it, and the
+     file chooser opens. Fix: `onKeyDown={ignoreHeldEnter}` (lib/repeatPress.ts) on Stop and on each role button — a
+     control that receives the swap's focus and would ACT on a repeat. Class sweep: every receiver of a T-189 swap focus
+     (STYLE_GUIDE's swap-rule site list) and of the older swap sites (the Fix wizard and Variants steps, the safe-zone and
+     Clear-transcripts dialogs): name each with what a repeat does (Line, the first source tile and the Gain slider: an
+     idempotent re-select or nothing).
+  2. **[LOW] Line and Pencil revealed by L or P vanish again at the next V, R or O, and a focused Line takes focus to
+     the page** (image-studio/Toolbar.tsx:43-45: `showAdvanced = advancedOpen || activeIsAdvanced`; L / P set the tool
+     and never `advancedOpen`). Press L: both tools appear and "+ More" goes; press V: they vanish and "+ More" is back,
+     and with Line focused the V press unmounts it (focus to `<body>`, the T-189 (1) class). Fix: a reveal is sticky
+     for the Toolbar's life, whichever way it came — an advanced tool becoming active sets `advancedOpen` (an effect
+     keyed on `activeIsAdvanced`, declared beside the T-189 one); the T-189 focus rule is unchanged.
+  3. **[LOW] At 1080p and up, Record's source grid hides every source's name below its visible height, and clips the
+     selected tile's ring** (RecordStudio.tsx:849-870: `grid-cols-1 sm:grid-cols-2 gap-2 max-h-96 overflow-y-auto`, a
+     `w-full` thumbnail). Measured by design reader 1 with three stubbed 16:9 sources: at 1920x1080 the tiles are 704x444
+     in a 384 px grid, so each first-row name sits below the grid's visible bottom (name bottom y=598, grid bottom 563),
+     and at 2560x1440 the same (742 vs 563); the selected tile's `ring-2` is a box-shadow that the grid's overflow clips
+     on the top and left edges at every size (the tile's left and top equal the grid's). The name is the tile's identity
+     (DESIGN_GUIDE: the tooltip is the only other place its end exists). Fix: tiles keep one size at every window —
+     `grid-cols-[repeat(auto-fill,minmax(<min>,1fr))]` in place of the two fixed columns, `<min>` chosen (start at
+     14rem) so the 1024 px minimum still shows two columns and a whole tile (thumbnail, name, caption) is shorter than
+     the grid at every size; and the grid gets inner padding (`p-1`) so the 2 px ring is inside the scroller. The
+     `max-h-96` scroll cap stays. Report the measured column count and tile height at each size.
+  Covering tests: e2e (record.spec.ts NEW describes) — a held Enter on Start (the press, then repeat keydowns) leaves
+  the take recording (REC shown, no saving card; red on the base: the take ends), and a fresh Enter on Stop still stops
+  it (control); at 1024x640, 1920x1080 and 2560x1440 with 3 and with 12 stubbed sources, each first-row tile's name and
+  its Screen / Window caption lie inside the grid's visible box without scrolling (red on the base at 1920 and 2560),
+  the first tile, selected, has its rect grown by 2 px inside the grid's client box (red on the base at every size),
+  and 1024 still shows two columns. E2E (audio.spec.ts NEW describe): with a second track picked (the dialog stubbed and
+  counted), a held Enter on Remove leaves focus on the first role button and opens no chooser (red: the stub is called).
+  E2E (image.spec.ts NEW describe): L then V leaves Line and Pencil shown and "+ More" gone (red: hidden); with Line
+  focused, V leaves focus on Line (red: the body); a mouse click on V does the same. Docs: IC rows revised in place
+  plus a "Dispositions - round 139, Track A" section (the class sweep's list); LESSONS at the TOP; TESTING paragraph;
+  STYLE_GUIDE's swap rule names the held-Enter receivers; USER_GUIDE where the tools' reveal is described (:720).
+
+  **Track B — a finished burn shows where it went, and read-only words can be copied (items 4, 5, and 6's docs).**
+  4. **[LOW] The caption burn-in's toast names no way to the file** (video-studio/CaptionsPanel.tsx:274-279: a plain
+     `toast.success` / a warning `toast`; every other job that writes a file uses `toastSaved` with Show in folder:
+     Export, GIF, Compile, PiP, Reframe, Clip Kit, Record, both Audio exports). The burn is long, and a person who left
+     the studio while it ran (USER_GUIDE 418-433) has no route to the video but the folder they picked. Fix: the
+     captioned outcome is `toastSaved(<the same sentence, with any landed-beside note>, result.outputPath)`; the
+     no-captions-in-range outcome (a file is still written) keeps its warning icon and carries the same Show in folder —
+     give `toastWithActions` / `toastSaved` an optional `icon` passed to the toast's options, not a second hand-built
+     toast. The sentences do not change.
+  5. **[LOW] "Words selected anywhere else offer Copy" cannot happen: nothing outside a text box can be selected**
+     (docs/USER_GUIDE.md:97; styles/index.css:55 `body { user-select: none }`, re-enabled only for `input` and
+     `textarea` at :58-61, and no `select-text` anywhere, so shared/contextMenu.ts:39's Copy-alone branch is dead in the
+     product). A transcript line for a description, a path or an error message to search cannot be copied. Fix (the
+     tiebreaker: the code meets the promise where it is reasonable): `select-text` on the read-only words a person would
+     copy — the Captions transcript region (CaptionsPanel.tsx:~542), the Setup panel's engine and model paths (:398,
+     :420), and ErrorBoundary's error text; the global `select-none` stays (drags on the timeline, the canvas and the
+     waveform must not paint selections). Class grep: every other read-only text that shows a path, a transcript or an
+     error (the toasts are click-through by AppToaster's TOAST_STYLE: name why they stay out). USER_GUIDE:97 is
+     rewritten to say exactly where selected words offer Copy.
+  Covering tests: unit (savedToast.test.tsx NEW describe) — `toastSaved` with an `icon` renders it and keeps Show in
+  folder. E2E (video-pipelines.spec.ts NEW describe at the end): a whole-video burn's toast carries "Show in folder",
+  and clicking it reveals the written file (main's `shell.showItemInFolder` recorded through `app.evaluate`; the file
+  exists) — red on the base; a ranged burn with no cue in its range carries it too. E2E (NEW describe at the end of the
+  spec holding T-166 (4)'s right-click case): a word double-clicked in the Captions Setup path is selected (red on the
+  base: the selection is empty), a right-click pops a menu of Copy alone (the popped roles recorded as T-166 (4) does),
+  and its Copy puts the word on the clipboard. Docs: IC rows; a "Dispositions - round 139, Track B" section (the class
+  grep); LESSONS at the TOP (items 4, 5, and 6 — the description is the portable wrapper's FileDescription, sweep 75's
+  wrong reading of the inner exe's version block, the pin test); TESTING paragraph (including item 6's pin test).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 139)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a

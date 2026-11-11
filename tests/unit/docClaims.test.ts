@@ -829,3 +829,19 @@ describe('T-140 Track C - the guides say what the code does', () => {
     expect(chain).toContain('`afftdn` delays the sound by two hops (about 25 ms at any rate) and `alimiter` (latency off) by 5 ms')
   })
 })
+
+describe('the downloaded exe describes the product BRANDING positions (T-190 (6))', () => {
+  it('package.json description is the positioning line and names no removed feature', () => {
+    // electron-builder's portable target is an NSIS wrapper whose version block writes FileDescription from
+    // package.json's description (app-builder-lib NsisTarget computeVersionKey), so this sentence is what Windows
+    // shows under the downloaded exe's Properties -> Details and in Task Manager while it runs.
+    const pkg = JSON.parse(read('package.json')) as { description: string }
+    const line = /^> (.+)\.$/m.exec(read('docs/BRANDING_GUIDE.md'))?.[1]
+    expect(line).toBe('A free, local-first creative studio for streamers')
+    expect(pkg.description.toLowerCase()).toContain((line as string).toLowerCase())
+    expect(pkg.description).not.toMatch(/\bAI\b/i)
+    const nsis = readFileSync(path.join(ROOT, 'node_modules', 'app-builder-lib', 'out', 'targets', 'nsis', 'NsisTarget.js'), 'utf8')
+    expect(nsis).toContain('FileDescription')
+    expect(nsis).toContain('appInfo.description')
+  })
+})

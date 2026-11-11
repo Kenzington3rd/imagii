@@ -1,7 +1,7 @@
 {
   "name": "imagii",
   "version": "1.6.0",
-  "description": "imagii — local-first creative studio for video, audio, image, and AI art",
+  "description": "imagii — a free, local-first creative studio for streamers",
   "main": "./out/main/index.js",
   "author": "Makenah",
   "license": "MIT",
