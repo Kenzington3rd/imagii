@@ -3650,9 +3650,11 @@ describe('T-147 — the studios\' hotkeys stand down for ANY dialog, and Propert
     expect(panel).toMatch(/const gesture = useGestureEnd\(useCanvasStore\(\(s\) => s\.endGesture\)\)/)
     expect(panel).toMatch(/className="card [^"]*" \{\.\.\.gesture\}>/)
     // T-152 (5): Stroke (px) is a DraftField (a negative clamped to 0). T-153 (1): and its live commits carry the key again, so "12" typed is one undo step ('strokeWidth' and 'fontSize' are back in this list).
-    for (const key of ['name', 'opacity', 'fill', 'stroke', 'text', 'strokeWidth', 'fontSize']) {
+    for (const key of ['name', 'opacity', 'text', 'strokeWidth', 'fontSize']) {
       expect(panel, key).toMatch(new RegExp(`'${key}'\\)`))
     }
+    // T-186 (1): the Fill, Stroke and text Color boxes are one `ColorBox`, whose commit passes the control's own key (`field` is 'fill' or 'stroke').
+    expect(panel).toMatch(/updateLayer\(layerId, \{ \[field\]: color \} as Partial<CanvasLayer>, field\)/)
     expect(panel).toMatch(/commit=\{\(typed\) => \{\s*const n = clampTyped\(typed, 0\)\s*if \(n !== null\) updateLayer\(layer\.id, \{ strokeWidth: n \} as Partial<CanvasLayer>, 'strokeWidth'\)/)
     expect(panel).not.toMatch(/Number\(e\.target\.value\) \|\| 0/)
   })
@@ -5325,5 +5327,47 @@ describe('T-185 (1): shortcuts match shortcutKey, never e.key against a letter',
 
   it('HotkeyOverlay keeps `?` on e.key: a typed character every layout produces', () => {
     expect(read('components/HotkeyOverlay.tsx')).toContain("e.key !== '?'")
+  })
+})
+
+// T-186 (1): the wiring the colour boxes' behavior stands on (a colour is applied when typing ends, never per keystroke). Behavior: canvasColor.test.ts (the resolver) and image.spec.ts "T-186 (1)" (a typed colour stored and drawn, the refusal, the
+// template's rgba(...) kept, one Undo).
+describe('T-186 (1) - no Stream Graphics colour box commits raw text; the three are one ColorBox in the overlay Color box\'s shape', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
+  const colorBox = panel.slice(panel.indexOf('function ColorBox('), panel.indexOf('function FillStrokeFields('))
+
+  it('no image-studio source stores a colour (fill, stroke, color) straight from `e.target.value`', () => {
+    const files = sourceFilesUnder(path.join(RENDERER_ROOT, 'modules', 'image-studio'))
+    expect(files.length).toBeGreaterThan(5)
+    for (const f of files) {
+      expect(strip(readFileSync(f, 'utf8')), path.relative(RENDERER_ROOT, f)).not.toMatch(/\b(?:fill|stroke|color\w*)\s*:\s*e\.target\.value/i)
+    }
+    expect(panel, 'the old Fill / Stroke / Color commit').not.toMatch(/\{ (?:fill|stroke): e\.target\.value \}/)
+  })
+
+  it('Fill, Stroke and Color are each a ColorBox keyed by the layer, in a row that wraps (the refusal takes a row of its own)', () => {
+    expect(panel).toMatch(/<span className="text-xs text-ink-muted w-16">Fill<\/span>\s*<ColorBox key=\{layer\.id\} layerId=\{layer\.id\} field="fill" caption="Fill" value=\{layer\.fill\} \/>/)
+    expect(panel).toMatch(/<span className="text-xs text-ink-muted w-16">Stroke<\/span>\s*<ColorBox key=\{layer\.id\} layerId=\{layer\.id\} field="stroke" caption="Stroke" value=\{layer\.stroke\} \/>/)
+    expect(panel).toMatch(/<span className="text-xs text-ink-muted w-16">Color<\/span>\s*<ColorBox key=\{layer\.id\} layerId=\{layer\.id\} field="fill" caption="Color" value=\{layer\.fill\} \/>/)
+    expect(panel.match(/<ColorBox /g)).toHaveLength(3)
+    expect(panel.match(/<label className=\{COLOR_ROW\}>/g)).toHaveLength(3)
+    expect(panel).toMatch(/const COLOR_ROW = 'flex flex-wrap /)
+  })
+
+  it('a ColorBox is a text DraftField with NO `live`: `commit` (leaving the box, or Enter) stores the resolved colour or returns the refusal constant, so a refusal stores nothing and a half-typed code never leaves the layer on a prefix; the placeholder names the forms', () => {
+    expect(colorBox).toMatch(/<DraftField\s+type="text"/)
+    expect(colorBox).toMatch(/placeholder="white or #ffcc00"/)
+    expect(colorBox, 'nothing is stored mid-word: no live commit (T-186 (1), the #ffcc0 prefix)').not.toMatch(/\blive\b/)
+    expect(colorBox).toMatch(/const color = resolveCanvasColor\(typed, supportsColor\)\s*if \(color === null\) return CANVAS_COLOR_REFUSAL\s*updateLayer\(layerId, \{ \[field\]: color \} as Partial<CanvasLayer>, field\)\s*return null/)
+    expect(colorBox).not.toMatch(/<input/)
+    expect(panel).toMatch(/const supportsColor = \(css: string\): boolean => CSS\.supports\('color', css\)/)
+  })
+
+  it('the helper is pure (the platform check is injected) and asks the overlay resolver first', () => {
+    const helper = strip(read('modules/image-studio/canvasColor.ts'))
+    expect(helper).not.toMatch(/CSS\.supports/)
+    expect(helper).toMatch(/const overlay = resolveOverlayColor\(typed\)\s*if \(overlay !== null\) return overlay/)
+    expect(helper).toMatch(/return supports\(text\) \? text : null/)
   })
 })

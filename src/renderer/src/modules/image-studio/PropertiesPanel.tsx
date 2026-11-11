@@ -11,6 +11,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { useGestureEnd } from '../../lib/gestureEnd'
 import { DraftField } from '../../components/DraftField'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
+import { CANVAS_COLOR_REFUSAL, resolveCanvasColor } from './canvasColor'
 
 const ROTATION_PRESETS = [0, 15, 30, 45, 90, 180, 270]
 
@@ -155,6 +156,50 @@ function PositionBox({
   )
 }
 
+// A row that WRAPS, so a refusal takes a full-width row of its own under the box (DraftField's doc, T-126 (3)).
+const COLOR_ROW = 'flex flex-wrap items-center gap-x-2 gap-y-0.5'
+
+const supportsColor = (css: string): boolean => CSS.supports('color', css)
+
+/**
+ * T-186 (1): the Fill, Stroke and text Color boxes, in the shape of the Video overlay's Color box (T-113, T-114). They were bare `<input>`s that stored every keystroke
+ * as typed, and a canvas ignores a `fillStyle` it cannot parse: `ff3131` (a hex pasted without its `#`) or a typo drew the shape black with no word, and an emptied
+ * box drew no fill at all (a text layer went invisible), the text riding into the export, the autosave and Save project. Now a colour the canvas can draw
+ * (`resolveCanvasColor`) is stored as the colour it resolves to, when typing ends (leaving the box, or Enter: one Undo step under the control's own key); anything else is
+ * refused in a sentence and the layer is left exactly as it was. There is NO `live` commit, as in the overlay Color box: "blue" is a colour on its way to "blueviolet", and a
+ * half-typed code (`#ffcc0`) would leave the layer on its last valid prefix (`#ffcc`), a colour the person never chose, beside a sentence saying it was not understood. "No fill" is `transparent`. Each site is keyed by the layer: a refused draft is
+ * state of the box, and the next layer selected must not inherit it (the number boxes above share that gap, which a number draft rarely meets).
+ */
+function ColorBox({
+  layerId,
+  field,
+  caption,
+  value
+}: {
+  layerId: string
+  field: 'fill' | 'stroke'
+  caption: string
+  value: string
+}): JSX.Element {
+  const updateLayer = useCanvasStore((s) => s.updateLayer)
+  return (
+    <DraftField
+      type="text"
+      value={value}
+      placeholder="white or #ffcc00"
+      // The caption alone names the box: the refusal sentence sits inside the row's <label> and would otherwise be read as part of its name.
+      aria-label={caption}
+      commit={(typed) => {
+        const color = resolveCanvasColor(typed, supportsColor)
+        if (color === null) return CANVAS_COLOR_REFUSAL
+        updateLayer(layerId, { [field]: color } as Partial<CanvasLayer>, field)
+        return null
+      }}
+      className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
+    />
+  )
+}
+
 function FillStrokeFields({
   layer
 }: {
@@ -163,25 +208,13 @@ function FillStrokeFields({
   const updateLayer = useCanvasStore((s) => s.updateLayer)
   return (
     <>
-      <label className="flex items-center gap-2">
+      <label className={COLOR_ROW}>
         <span className="text-xs text-ink-muted w-16">Fill</span>
-        <input
-          type="text"
-          value={layer.fill}
-          onChange={(e) => updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>, 'fill')}
-          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
-        />
+        <ColorBox key={layer.id} layerId={layer.id} field="fill" caption="Fill" value={layer.fill} />
       </label>
-      <label className="flex items-center gap-2">
+      <label className={COLOR_ROW}>
         <span className="text-xs text-ink-muted w-16">Stroke</span>
-        <input
-          type="text"
-          value={layer.stroke}
-          onChange={(e) =>
-            updateLayer(layer.id, { stroke: e.target.value } as Partial<CanvasLayer>, 'stroke')
-          }
-          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
-        />
+        <ColorBox key={layer.id} layerId={layer.id} field="stroke" caption="Stroke" value={layer.stroke} />
       </label>
       <label className="flex items-center gap-2">
         <span className="text-xs text-ink-muted w-16">Stroke (px)</span>
@@ -234,16 +267,9 @@ function TextFields({ layer }: { layer: TextLayer }): JSX.Element {
           className="w-20 bg-bg-base rounded px-1 py-0.5 font-mono"
         />
       </label>
-      <label className="flex items-center gap-2">
+      <label className={COLOR_ROW}>
         <span className="text-xs text-ink-muted w-16">Color</span>
-        <input
-          type="text"
-          value={layer.fill}
-          onChange={(e) =>
-            updateLayer(layer.id, { fill: e.target.value } as Partial<CanvasLayer>, 'fill')
-          }
-          className="flex-1 min-w-0 bg-bg-base rounded px-2 py-1 font-mono text-xs"
-        />
+        <ColorBox key={layer.id} layerId={layer.id} field="fill" caption="Color" value={layer.fill} />
       </label>
     </>
   )

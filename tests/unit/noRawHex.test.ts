@@ -62,6 +62,16 @@ const EXEMPT_LITERALS: ReadonlyArray<{ file: string; text: string; why: string }
     file: path.join('modules', 'video-studio', 'TextOverlayEditor.tsx'),
     text: 'white or #ffcc00',
     why: 'a typing example shown to the user in a placeholder, not a color drawn'
+  },
+  {
+    file: path.join('modules', 'image-studio', 'PropertiesPanel.tsx'),
+    text: 'white or #ffcc00',
+    why: 'the same typing example in the Fill / Stroke / Color boxes (T-186 (1)), not a color drawn'
+  },
+  {
+    file: path.join('modules', 'image-studio', 'canvasColor.ts'),
+    text: "imagii doesn't know that color. Use a name like white, a code like #ffcc00, or transparent.",
+    why: 'a sentence that shows the person the code form (T-186 (1)); the overlay refusal is the same in src/shared, which is not scanned'
   }
 ]
 

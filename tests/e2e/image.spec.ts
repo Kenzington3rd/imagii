@@ -32,6 +32,7 @@ import {
 } from './layout'
 import { leave, retype } from './typing'
 import { installToastLog, readToastEntries, readToastLog } from './toastLog'
+import { CANVAS_COLOR_REFUSAL } from '../../src/renderer/src/modules/image-studio/canvasColor'
 import { ATOMIC_TMP, withoutAtomicTmp } from './atomicTmp'
 import { heldRenameCount, holdAtomicRenames, releaseAtomicRenames } from './slowWrites'
 
@@ -1309,7 +1310,7 @@ test.describe('Image Studio — selection', () => {
       await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
       await clickDoc(window, { x: 450, y: 400 })
       const start = await lastShape(window)
-      // The number fields are the store's own readout (PropertiesPanel.tsx:51).
+      // The number fields are the store's own readout (PropertiesPanel.tsx:52).
       await expect(field(window, 'X (px)')).toHaveValue(String(Math.round(start.x)))
       await expect(field(window, 'Y (px)')).toHaveValue(String(Math.round(start.y)))
 
@@ -1952,6 +1953,7 @@ test.describe('Image Studio — properties panel', () => {
       await expect.poll(async () => (await lastShape(window)).fontSize, { timeout: 10_000 }).toBe(72)
 
       await field(window, 'Color').fill('#ff3131')
+      await leave(field(window, 'Color')) // T-186 (1): a colour is applied when typing ends
       await expect.poll(async () => (await lastShape(window)).fill, { timeout: 10_000 }).toBe('#ff3131')
 
       // The text layer never offers the shape-only fields.
@@ -7300,6 +7302,357 @@ test.describe('Image Studio - the shortcuts on a non-Latin layout (T-185 (1))', 
       await expectLayerCount(window, 1)
       await press(window, 'н', 'KeyY', true)
       await expectLayerCount(window, 2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-186 (1): the Fill, Stroke and text Color boxes say when they cannot draw what was typed
+// ═══════════════════════════════════════════════════════════════════════════
+// They were bare text inputs storing every keystroke as typed. A canvas ignores a `fillStyle` it cannot parse, so `ff3131` (a hex pasted without its `#`), a typo or an emptied
+// box drew the shape black (or, emptied, not at all) with no word, and the value rode into the export and the autosave. They are DraftFields now, in the shape of the Video overlay's Color
+// box: a colour the canvas can draw is stored resolved when typing ends (leaving the box or Enter; nothing is stored mid-word, so a half-typed `#ffcc0` can never leave the layer on the prefix `#ffcc`); anything else is refused in a sentence and the layer is left exactly as it was. The end state read
+// here is the layer on the stage, the pixel the stage draws (hidden chrome, 1:1, as an export draws it), and the Undo stack.
+test.describe('Image Studio - a colour box says when it cannot draw what was typed (T-186 (1))', () => {
+  const undo = (window: Page): Locator => window.getByRole('button', { name: 'Undo' })
+  const refusal = (window: Page): Locator => propsCard(window).getByRole('alert')
+
+  /** The RGBA the stage draws at a document point, with the editor's chrome hidden and the document at 1:1. */
+  function stagePixel(window: Page, x: number, y: number): Promise<{ r: number; g: number; b: number; a: number }> {
+    return window.evaluate(
+      ([px, py]) => {
+        interface Stage {
+          getLayers(): Array<{ visible(): boolean; visible(v: boolean): void; hasName(n: string): boolean }>
+          scaleX(): number
+          width(): number
+          height(): number
+          scale(v: { x: number; y: number }): void
+          toCanvas(o: { x: number; y: number; width: number; height: number; pixelRatio: number }): HTMLCanvasElement
+        }
+        const stage = (window as unknown as { __imagiiStage?: Stage }).__imagiiStage
+        if (!stage) throw new Error('__imagiiStage is not set')
+        const zoom = stage.scaleX()
+        const doc = { width: Math.round(stage.width() / zoom), height: Math.round(stage.height() / zoom) }
+        const chrome = stage.getLayers().filter((l) => l.hasName('chrome'))
+        const was = chrome.map((l) => l.visible())
+        let canvas: HTMLCanvasElement
+        try {
+          stage.scale({ x: 1, y: 1 })
+          for (const l of chrome) l.visible(false)
+          canvas = stage.toCanvas({ x: 0, y: 0, width: doc.width, height: doc.height, pixelRatio: 1 })
+        } finally {
+          chrome.forEach((l, i) => l.visible(was[i] as boolean))
+          stage.scale({ x: zoom, y: zoom })
+        }
+        const d = canvas.getContext('2d')?.getImageData(px as number, py as number, 1, 1).data
+        if (!d) throw new Error('no pixels')
+        return { r: d[0] as number, g: d[1] as number, b: d[2] as number, a: d[3] as number }
+      },
+      [x, y] as const
+    )
+  }
+
+  /** How many pixels inside the newest Text node's box are close to #ff3131 (the glyphs; a black or missing fill has none). */
+  function redPixelsInNewestWord(window: Page): Promise<number> {
+    return window.evaluate(() => {
+      interface Node {
+        getClientRect(o: { relativeTo: unknown }): { x: number; y: number; width: number; height: number }
+      }
+      interface Stage {
+        children: Array<{ find(sel: string): Node[] }>
+        getLayers(): Array<{ visible(): boolean; visible(v: boolean): void; hasName(n: string): boolean }>
+        scaleX(): number
+        width(): number
+        height(): number
+        scale(v: { x: number; y: number }): void
+        toCanvas(o: { x: number; y: number; width: number; height: number; pixelRatio: number }): HTMLCanvasElement
+      }
+      const stage = (window as unknown as { __imagiiStage?: Stage }).__imagiiStage
+      if (!stage) throw new Error('__imagiiStage is not set')
+      const layer = stage.children[0]
+      const words = layer ? layer.find('Text') : []
+      const word = words[words.length - 1]
+      if (!layer || !word) throw new Error('no Text node on the stage')
+      const box = word.getClientRect({ relativeTo: layer })
+      const zoom = stage.scaleX()
+      const doc = { width: Math.round(stage.width() / zoom), height: Math.round(stage.height() / zoom) }
+      const chrome = stage.getLayers().filter((l) => l.hasName('chrome'))
+      const was = chrome.map((l) => l.visible())
+      let canvas: HTMLCanvasElement
+      try {
+        stage.scale({ x: 1, y: 1 })
+        for (const l of chrome) l.visible(false)
+        canvas = stage.toCanvas({ x: 0, y: 0, width: doc.width, height: doc.height, pixelRatio: 1 })
+      } finally {
+        chrome.forEach((l, i) => l.visible(was[i] as boolean))
+        stage.scale({ x: zoom, y: zoom })
+      }
+      const x0 = Math.max(0, Math.floor(box.x))
+      const y0 = Math.max(0, Math.floor(box.y))
+      const w = Math.min(canvas.width, Math.ceil(box.x + box.width)) - x0
+      const h = Math.min(canvas.height, Math.ceil(box.y + box.height)) - y0
+      const data = canvas.getContext('2d')?.getImageData(x0, y0, w, h).data
+      if (!data || w <= 0 || h <= 0) throw new Error('no pixels under the word')
+      let n = 0
+      for (let i = 0; i < data.length; i += 4) {
+        if ((data[i] as number) > 200 && (data[i + 1] as number) < 90 && (data[i + 2] as number) < 90 && (data[i + 3] as number) > 200) n++
+      }
+      return n
+    })
+  }
+
+  async function drawRect(window: Page): Promise<void> {
+    await startBlank(window)
+    await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+    await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
+    await expectLayerCount(window, 2)
+  }
+  const near = (px: { r: number; g: number; b: number }, want: [number, number, number]): boolean =>
+    Math.abs(px.r - want[0]) <= 2 && Math.abs(px.g - want[1]) <= 2 && Math.abs(px.b - want[2]) <= 2
+
+  test('a rectangle\'s Fill typed "ff3131" is stored and drawn as #ff3131 (red on the stage), "#fc0" stores nothing while typing and #ffcc00 when the box is left, and one Undo gives the old colour back', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-fill-resolves')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const fill = field(window, 'Fill')
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      expect(original, 'a drawn rectangle starts at the translucent red').toBe('rgba(255, 49, 49, 0.4)')
+
+      // Nothing is stored mid-word: a usable code is applied when the box is left, not per keystroke.
+      const pixelBefore = await stagePixel(window, 450, 350)
+      await retype(fill, '#fc0')
+      await window.waitForTimeout(300)
+      expect(await fillOf(), 'while #fc0 is typed nothing is stored').toBe(original)
+      expect(await stagePixel(window, 450, 350), 'and the stage pixel is unchanged').toEqual(pixelBefore)
+      await leave(fill)
+      await expect.poll(fillOf, { timeout: 10_000, message: 'leaving the box stores the shorthand expanded' }).toBe('#ffcc00')
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000, message: 'one Undo puts the old colour back' }).toBe(original)
+      await retype(fill, 'ff3131')
+      expect(await fillOf(), 'ff3131 is not stored before the box is left').toBe(original)
+      await leave(fill)
+      await expect(refusal(window)).toHaveCount(0)
+      await expect(fill, 'the box gives back the stored colour').toHaveValue('#ff3131')
+      await expect
+        .poll(async () => near(await stagePixel(window, 450, 350), [255, 49, 49]), { timeout: 10_000, message: 'the stage draws red, not black' })
+        .toBe(true)
+
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000, message: 'one Undo puts back the fill from before the typing, not an intermediate' }).toBe(original)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('"blu" left in Fill shows the refusal sentence, keeps the previous fill (the stage pixel unchanged), stores nothing (one Undo still undoes the earlier colour), and the next typing clears the sentence', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-fill-refused')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const fill = field(window, 'Fill')
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      await retype(fill, 'ff3131')
+      await leave(fill)
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('#ff3131')
+      const before = await stagePixel(window, 450, 350)
+      expect(near(before, [255, 49, 49]), `the premise: the rectangle is red (${JSON.stringify(before)})`).toBe(true)
+
+      await retype(fill, 'blu')
+      await leave(fill)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      await expect(refusal(window)).toContainText("imagii doesn't know that color")
+      await expect(fill).toHaveAttribute('aria-invalid', 'true')
+      expect(await fillOf(), 'the layer keeps its last good colour').toBe('#ff3131')
+      expect(await stagePixel(window, 450, 350), 'and the stage draws it unchanged').toEqual(before)
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000, message: 'the refused text pushed no undo step: this Undo reverts the ff3131 run' }).toBe(original)
+
+      // Typing again clears the sentence, and a name that is complete is stored.
+      await retype(fill, 'blue')
+      await expect(refusal(window)).toHaveCount(0)
+      await leave(fill)
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('#0000ff')
+      await expect(refusal(window)).toHaveCount(0)
+
+      // An emptied box is refused the same way (no fill is "transparent"), and the layer is not left without one.
+      await retype(fill, '')
+      await leave(fill)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect(await fillOf()).toBe('#0000ff')
+
+      // "transparent" is the documented way to have no fill.
+      await retype(fill, 'transparent')
+      await leave(fill)
+      await expect(refusal(window)).toHaveCount(0)
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('transparent')
+      await expect
+        .poll(async () => near(await stagePixel(window, 450, 350), [255, 255, 255]), { timeout: 10_000, message: 'a transparent fill draws nothing: the white page shows through' })
+        .toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Stroke takes the same colours and refuses the same way: "zzz" and "inherit" are refused and the outline stays, "00ff88" is stored as #00ff88', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-stroke')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const stroke = field(window, 'Stroke')
+      const strokeOf = async (): Promise<string | undefined> => (await lastShape(window)).stroke
+      const original = await strokeOf()
+      await retype(stroke, 'zzz')
+      await leave(stroke)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect(await strokeOf(), 'the outline keeps its colour').toBe(original)
+      // `CSS.supports('color', 'inherit')` is true, and a canvas ignores it (it draws the previous colour): the platform's yes is not enough.
+      await retype(stroke, 'inherit')
+      await leave(stroke)
+      await expect(refusal(window), 'a CSS-wide keyword is refused').toHaveText(CANVAS_COLOR_REFUSAL)
+      expect(await strokeOf()).toBe(original)
+      await retype(stroke, '00ff88')
+      await expect(refusal(window)).toHaveCount(0)
+      await leave(stroke)
+      await expect.poll(strokeOf, { timeout: 10_000 }).toBe('#00ff88')
+      await expect(stroke).toHaveValue('#00ff88')
+      await undo(window).click()
+      await expect.poll(strokeOf, { timeout: 10_000, message: 'one Undo for the typed run' }).toBe(original)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a text layer\'s Color: "ff3131" draws red glyphs, "blu" and an emptied box are refused with the sentence and the words keep their colour', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-text-color')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const color = field(window, 'Color')
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      expect(await redPixelsInNewestWord(window), 'the premise: the starting words are not #ff3131').toBe(0)
+
+      await retype(color, 'ff3131')
+      await leave(color)
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('#ff3131')
+      await expect.poll(() => redPixelsInNewestWord(window), { timeout: 10_000, message: 'the glyphs are drawn red' }).toBeGreaterThan(20)
+
+      await retype(color, 'blu')
+      await leave(color)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect(await fillOf()).toBe('#ff3131')
+      await retype(color, '')
+      await leave(color)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect(await fillOf(), 'the words are not left with no colour (invisible)').toBe('#ff3131')
+      expect(await redPixelsInNewestWord(window)).toBeGreaterThan(20)
+
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe(original)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a half-typed code "#ffcc0" left in Fill: the exact sentence, the fill is exactly the colour it had before typing (not the prefix #ffcc), the pixel is unchanged, and Undo does the previous real edit', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-prefix')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const fill = field(window, 'Fill')
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      await retype(fill, '#2288cc')
+      await leave(fill)
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('#2288cc')
+      const before = await stagePixel(window, 450, 350)
+      expect(near(before, [0x22, 0x88, 0xcc]), `the premise: the rectangle is #2288cc (${JSON.stringify(before)})`).toBe(true)
+
+      await retype(fill, '#ffcc0')
+      await window.waitForTimeout(300)
+      expect(await fillOf(), 'mid-word: the prefix #ffcc is never stored').toBe('#2288cc')
+      await leave(fill)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect(await fillOf(), 'the layer is exactly as it was before typing began').toBe('#2288cc')
+      expect(await stagePixel(window, 450, 350)).toEqual(before)
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000, message: 'the refused text left no dead step: Undo reverts the #2288cc edit' }).toBe(original)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a template\'s rgba(...) fill is shown as it is, survives an edit of another property and a visit to the box, and a typed rgba() is kept; an unfinished one (two numbers) is refused', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-template-rgba')
+    const { window } = studio
+    try {
+      const t = templateById('tw-overlay-streamer')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      await layerRow(window, 'Lower third').click()
+      const lowerThird = async (): Promise<ShapeInfo> => {
+        const found = (await stageShapes(window)).find((s) => s.width === 700 && s.height === 80)
+        if (!found) throw new Error('the Lower third rectangle is not on the stage')
+        return found
+      }
+      const fill = field(window, 'Fill')
+      await expect(fill).toHaveValue('rgba(18,12,12,0.85)')
+      expect((await lowerThird()).fill).toBe('rgba(18,12,12,0.85)')
+
+      // Another property's edit leaves the fill alone; so does clicking into the box and out again.
+      const x = field(window, 'X (px)')
+      await retype(x, '70')
+      await leave(x)
+      await expect.poll(async () => (await lowerThird()).x, { timeout: 10_000 }).toBe(70)
+      await fill.click()
+      await leave(fill)
+      expect((await lowerThird()).fill).toBe('rgba(18,12,12,0.85)')
+      await expect(refusal(window)).toHaveCount(0)
+
+      // A typed rgba() is a colour the canvas draws: kept as typed.
+      await retype(fill, 'rgba(10,20,30,0.5)')
+      await leave(fill)
+      await expect.poll(async () => (await lowerThird()).fill, { timeout: 10_000 }).toBe('rgba(10,20,30,0.5)')
+      await expect(refusal(window)).toHaveCount(0)
+      await expect(fill).toHaveValue('rgba(10,20,30,0.5)')
+
+      // An unfinished one is not.
+      await retype(fill, 'rgba(10,20')
+      await leave(fill)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect((await lowerThird()).fill).toBe('rgba(10,20,30,0.5)')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a refused draft stays with its layer: selecting another rectangle shows that rectangle\'s own colour and no sentence', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t186-draft-per-layer')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      await dragOnStage(window, { x: 700, y: 250 }, { x: 900, y: 400 })
+      await expectLayerCount(window, 3)
+      const fill = field(window, 'Fill')
+      await retype(fill, 'blu')
+      await leave(fill)
+      await expect(refusal(window)).toHaveCount(1)
+      // Both rectangles are named "Rectangle"; the panel lists the newest first, so the older one is the second row.
+      await window.locator(`${LAYERS} li`).filter({ hasText: 'Rectangle' }).nth(1).click()
+      await expect(refusal(window), 'the other rectangle has no sentence').toHaveCount(0)
+      await expect(field(window, 'Fill'), 'and its box shows its own stored colour, not the refused text').toHaveValue('rgba(255, 49, 49, 0.4)')
     } finally {
       await closeStudio(studio)
     }

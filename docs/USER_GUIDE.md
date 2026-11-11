@@ -744,7 +744,12 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    and remove them. The **Properties** panel edits the selected layer; one drag of its
    **Opacity** slider, or one run of typing in a name, text, color or number field (**X (px)**,
    **Y (px)**, **Rotation**, **Size (px)**, **Stroke (px)**), is one **Undo**; a rotation preset
-   button is one **Undo** each. A straight line drawn with **Line** is a layer named **Line**, and a
+   button is one **Undo** each. A rectangle's or ellipse's **Fill** and **Stroke**, and a word's
+   **Color**, take a color name (`white`, in any case), a code like `#ffcc00` (the `#` is optional,
+   and `#fc0` works), `transparent` for no fill, or an `rgba(...)` color like the templates use. A
+   color is applied when you leave the box (or press Enter), as one **Undo**; one imagii cannot
+   draw (a typo, a code one digit short, an empty box) is refused with a sentence under the box,
+   and the layer keeps exactly the color it had. A straight line drawn with **Line** is a layer named **Line**, and a
    freehand stroke drawn with **Pencil** is a layer named **Pencil** (rename either in **Properties**). A picture
    you import is placed at most 800 px on its long side, and always inside the canvas
    (a small canvas such as the 112×112 emote makes it smaller to fit, and it starts

@@ -220,7 +220,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['ImageStudio.tsx:69-78', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 69, 78, /key === 'v'[\s\S]*setTool\('pencil'\)/],
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
-    ['PropertiesPanel.tsx:51', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 51, 51, /<PositionBox value=\{layer\.x\}/],
+    ['PropertiesPanel.tsx:52', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 52, 52, /<PositionBox value=\{layer\.x\}/],
     ['ImportPanel.tsx:81', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 81, 81, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]

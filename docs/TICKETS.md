@@ -9703,7 +9703,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (the expediter runs test:media and the full suite on the merged tree); no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 135)
+- **Status:** done (round 135 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10281,6 +10281,39 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 135 — T-186, the one counted item of sweep 73, landed in the
+commit that carries this entry. One Sonnet worker in a fresh clone of
+c8d8856. Track A (item 1): a colour box says when it cannot draw what
+was typed. Stream Graphics' Fill and Stroke (rectangle and ellipse)
+and the text Color are one `ColorBox` DraftField, keyed by the layer,
+committing when typing ends (leaving the box or Enter) as the Video
+overlay Color box does. `resolveCanvasColor` in
+image-studio/canvasColor.ts is the rule: the overlay resolver first (a
+CSS name, a six-digit code with or without its #, the #rgb shorthand),
+then any other colour the canvas draws (`CSS.supports`: rgba, hsl, the
+four- and eight-digit codes, transparent; a template's rgba fill is
+kept as is), with the CSS-wide keywords and var() refused because a
+canvas ignores them; an empty box is refused. A refusal is one
+sentence under the box, stores nothing and pushes no Undo step; a
+resolved colour is one Undo step. Deviations, accepted: one local
+component at three sites; the CSS-wide-keyword and var() guard
+(measured in the shipped Electron: CSS.supports accepts them, the
+canvas draws black); the per-layer key, so a refused draft does not
+follow the selection; the box named by its caption alone. The first
+hand-back committed each valid prefix while typing, so a mistyped code
+left the layer on a colour nobody chose beside the refusal; it was
+sent back, and the live commit removed. Sweep 73's QA main and ffmpeg
+readers came back clean, so the ticket stayed one track. Expediter:
+the mutation (the commit storing the typed text instead of the
+resolved colour) was killed at e2e by four of the seven new cases.
+Ledger: every mutation killed at unit and at e2e where a case covers
+the site, one equivalent mutant disclosed (the empty-text guard,
+unreachable while CSS.supports refuses an empty string; pinned at
+unit), every restore identical. Gates on the merged tree: npm run
+verify twice (213 files, 6989 tests each), test:media 532 passed and
+28 skipped of 560 (509 s), and the full xvfb Playwright suite, 850
+passed in 57.8 min, no failures.
 
 Round 134 — T-185, the one counted item of sweep 72, landed in the
 commit that carries this entry. One Sonnet worker in a fresh clone of
