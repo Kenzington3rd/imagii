@@ -4948,3 +4948,105 @@ test.describe('T-188 (1): a project whose canvas cannot be drawn is refused at O
     }
   })
 })
+
+// ── T-189 (2): a project whose clip holds a malformed colour grade is refused at Open, not opened into a crash ──────────────────────────────────────────────────────────────
+//
+// `validateClipRequiredFields` never looked at `colorGrade` (T-119 called it "read with a default", true only when absent), so a `.imagii.json` whose clip held `colorGrade: {}` opened
+// ("Project loaded") and Video Studio then threw in render (`v.toFixed` on each missing field) whenever that clip was selected; the autosave re-crashed on Restore. Open now refuses it
+// with Home's open-failure sentence and Video Studio opens clean on its importer. The first test is red on the base (the open says "Project loaded"); the second and third are controls
+// (a full in-range grade still opens and draws its sliders; a null grade opens, and Close asks as it does for any edited video: red on the base, where `isPristineWholeVideoClip` threw on `null.brightness`).
+test.describe('T-189 (2): a project whose clip colour grade is malformed is refused at Open', () => {
+  const OPEN_FAILED = "Couldn't open that project. The file may be damaged, or it was saved by a newer version of imagii."
+  const CRASH = 'Something went wrong in this studio'
+
+  function videoProject(root: string, name: string, source: string, colorGrade: unknown): string {
+    const file = path.join(root, name)
+    const clip = { id: 'k1', name: 'Graded', startSec: 0, endSec: 1, cropRect: null, textOverlays: [], selectedPresets: ['youtube'], colorGrade }
+    writeFileSync(
+      file,
+      JSON.stringify({ schemaVersion: 5, savedAt: Date.now(), appVersion: '1.0.0', videoStudio: { sourcePath: source, clips: [clip], selectedClipId: 'k1', watermark: null, srtPath: null } }),
+      'utf8'
+    )
+    return file
+  }
+
+  async function setUp(label: string, colorGrade: unknown): Promise<{ app: ElectronApplication; window: Page; root: string; file: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(path.join(root, 'source'), { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const source = path.join(root, 'source', 'graded.mp4')
+    await makeFixtureMp4(source)
+    const file = videoProject(root, 'graded.imagii.json', source, colorGrade)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await recordSlowChooser(app, { files: [file] })
+    await window.getByRole('button', { name: 'Open project' }).click()
+    return { app, window, root, file }
+  }
+
+  async function intoVideoStudio(window: Page): Promise<void> {
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+  }
+
+  test('a clip whose colorGrade is {} is refused with the open-failure sentence, nothing is applied, and Video Studio opens without the crash screen', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await setUp('t189-empty-grade', {})
+    try {
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(OPEN_FAILED)
+      expect(await readToastLog(window), 'the open did not say it loaded').not.toContain('Project loaded')
+
+      await intoVideoStudio(window)
+      await expect(window.getByText('Drop a video here'), 'nothing of the refused file was applied: the importer is showing').toBeVisible({ timeout: 30_000 })
+      await expect(window.locator('video')).toHaveCount(0)
+      await expect(window.getByText(CRASH), 'no crash screen').toHaveCount(0)
+      await expect(window.getByRole('alert')).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('control: a clip with a full in-range grade opens, Video Studio draws its sliders at the saved values, and the selected clip does not crash', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await setUp('t189-full-grade', { brightness: 0.2, contrast: 1.25, saturation: 0.5, temperature: -0.3 })
+    try {
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Project loaded')
+      await intoVideoStudio(window)
+      await expect(window.getByRole('button', { name: /^Select clip Graded,/ })).toBeVisible({ timeout: 60_000 })
+      await expect(window.getByRole('slider', { name: 'Brightness' })).toHaveAttribute('aria-valuetext', '0.20')
+      await expect(window.getByRole('slider', { name: 'Contrast' })).toHaveAttribute('aria-valuetext', '1.25')
+      await expect(window.getByRole('slider', { name: 'Temperature' })).toHaveAttribute('aria-valuetext', '-0.30')
+      await expect(window.getByText(CRASH)).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a clip whose colorGrade is null opens as "no grade" (default sliders), and Close asks about the edited video instead of throwing', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root } = await setUp('t189-null-grade', null)
+    try {
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Project loaded')
+      const messages: string[] = []
+      window.on('dialog', (dialog) => {
+        messages.push(dialog.message())
+        void dialog.dismiss()
+      })
+      await intoVideoStudio(window)
+      await expect(window.getByRole('button', { name: /^Select clip Graded,/ })).toBeVisible({ timeout: 60_000 })
+      await expect(window.getByRole('slider', { name: 'Brightness' })).toHaveAttribute('aria-valuetext', '0.00')
+      await expect(window.getByRole('slider', { name: 'Contrast' })).toHaveAttribute('aria-valuetext', '1.00')
+      await window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect.poll(() => messages.length, { timeout: 10_000 }).toBe(1)
+      expect(messages[0]).toBe('Close this video? 1 clip and its edits will be discarded.')
+      await expect(window.getByText(CRASH)).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

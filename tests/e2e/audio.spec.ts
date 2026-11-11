@@ -6616,3 +6616,86 @@ test.describe('Audio Studio - undo and redo on a non-Latin layout (T-185 (1))', 
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-189 (1): "Add a second track" swaps the buttons the keyboard just pressed for other content. A removed element takes focus to <body>
+// (STYLE_GUIDE's swap rule, T-119), so the next Tab started at the top of the window. Focus goes to the new content's primary control: the
+// Gain slider once a file is picked, the first role button after Remove. Only when focus was inside the card as the swap happened.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Audio Studio - the second-track panel keeps the keyboard\'s place (T-189 (1))', () => {
+  const GAIN = 'Secondary track gain in decibels'
+
+  test('Enter on a role button leaves focus on the Gain slider, and Remove (Space) leaves it on the first role button', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t189-swap-keys')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubOpenDialog(studio.app, studio.fixture)
+      const music = panel.getByRole('button', { name: /Background music/ })
+      await music.focus()
+      await expect(music).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      await expect(panel.getByRole('slider', { name: GAIN }), 'the track\'s first control has the focus, not <body>').toBeFocused()
+      // The keyboard goes on from there: an arrow moves the slider the person landed on.
+      await window.keyboard.press('ArrowRight')
+      await expect(panel).toContainText('-9.5 dB')
+
+      // Remove from the keyboard: Tab through the controls to it would be the long way; it is pressed where it is focused.
+      const remove = panel.getByRole('button', { name: /Remove/ })
+      await remove.focus()
+      await window.keyboard.press('Space')
+      await expect(panel).toContainText('Layer in background music')
+      await expect(panel.getByRole('button', { name: /Background music/ }), 'the role buttons are back, the first one has the focus').toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a mouse click on a role button and on Remove puts the focus on the new content too', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t189-swap-mouse')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubOpenDialog(studio.app, studio.fixture)
+      await panel.getByRole('button', { name: /Second mic/ }).click()
+      await expect(panel).toContainText('Second mic: e2e-tone.wav')
+      await expect(panel.getByRole('slider', { name: GAIN })).toBeFocused()
+      await panel.getByRole('button', { name: /Remove/ }).click()
+      await expect(panel).toContainText('Layer in background music')
+      await expect(panel.getByRole('button', { name: /Background music/ })).toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a track that goes (an undo) while focus is on another panel moves nothing', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t189-swap-elsewhere')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubOpenDialog(studio.app, studio.fixture)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      // Focus is on the Cleanup panel's control, which is not in the card: Ctrl+Z takes the track away and the focus is where the person put it.
+      const medium = window.locator(CLEANUP).getByRole('button', { name: 'Medium', exact: true })
+      await medium.focus()
+      await expect(medium).toBeFocused()
+      await window.keyboard.press('Control+z')
+      await expect(panel).toContainText('Layer in background music')
+      await expect(medium, 'the swap did not take the focus from where it was').toBeFocused()
+      // And back (Ctrl+Y): the track returns with the focus still on the Cleanup control.
+      await window.keyboard.press('Control+y')
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      await expect(medium).toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

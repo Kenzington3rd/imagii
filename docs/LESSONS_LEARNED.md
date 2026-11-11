@@ -14,6 +14,30 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-11 - T-189 (round 138), Track A: a rule that says "put focus on the new content" has to be run against every swap, and a gesture has to end with the thing that started it
+
+The seventy-sixth sweep (items 1 and 3).
+
+- **Bug.** (1) Stream Graphics' "+ More" removes itself when it reveals Line and Pencil, and focus fell to the page: the next Tab started at the top of the window. The same when L or P was pressed with "+ More" focused. The second-track card did the same twice (the role buttons replaced by the track's controls after a pick; Remove swapping them back). So did Record's "Pick a screen or window" (the source grid) and "Start recording" (the live view, Stop in the header). (3) A tool key pressed mid-Pencil-stroke left the orange preview behind (unselectable, not exported) and kept the window `mouseup` listener; P again and a move with no button down made the stale stroke follow the pointer, and the next release anywhere saved it as a Pencil layer.
+- **Root cause.** (1) STYLE_GUIDE's swap rule (T-86, T-119) was applied to the sites the sweep that wrote it had found (the coachmark, the Fix wizard, Variants) and nothing looked for the rest of the class. (3) `handleMouseUp` cleared `pencilPoints` only while the current tool was Pencil, and a draw's end was tied to a release under the same tool rather than to the tool: the T-124 (10) fix made the release global without asking what else can end a draw.
+- **Fix.** (1) An effect keyed on the swap (`[showAdvanced]`, `[hasTrack]`) puts focus on the new content's primary control (Line; the Gain slider, or the first role button after Remove), only when the removed control held focus. That is read in the swap's own render, which still sees the old DOM (a ref set there, read by the effect): an effect alone cannot tell, because by then focus is already `<body>`. Record's two buttons are natively `disabled` while they work, and Chromium blurs a disabled button before the swap renders, so there the press records whether it had focus (`document.activeElement === ref` in the onClick). (3) An effect keyed on `tool` in Canvas.tsx clears `pencilPoints` and `drawing`, adding nothing.
+- **Test.** image.spec.ts and audio.spec.ts, one NEW describe each (see TESTING, round 138 Track A). Red-first on a build of the unchanged tree: `Expected: focused / Received: inactive`, a preview of 403 doc px against 0, `Layers (2)` for `Layers (1)`; the reveal with focus elsewhere and the Ctrl+Z from another panel are guards that pin "moves nothing". Record: record.spec.ts "Record - the keyboard keeps its place across Pick and Start" (Enter and Space on each button, red on the base; guards for a swap whose press did not have focus, and for focus moved to the header's Home link between the press and the swap, which is what pins each effect's `<body>` check: the expediter's mutation removing Start's check survived until those two cases existed).
+- **Lesson.** A UI rule named after a class ("a press that swaps its own control for other content") is a grep, not a list of the sites that were found first: run the class against the renderer when the rule is written, and ledger what is and is not in it. And "when does a gesture end" has more than one answer (the button, the tool, the window losing focus): list them all when a gesture's end is fixed, so the next one is not found by the next sweep.
+
+---
+
+## 2026-11-11 - T-189 (round 138), Track B: "read with a default" is true of an absent field, and the field that is there is not the same field
+
+The seventy-sixth sweep (item 2).
+
+- **Bug.** A project or autosave whose clip held `colorGrade: {}`, `"x"` or a grade with a `null` field was accepted ("Project loaded"), and Video Studio then threw in render whenever that clip was selected (each slider's `formatValue` calls `v.toFixed(2)` on the missing field); the autosave re-crashed on Restore. Found a second way on the same field: a `null` grade, which Export accepts as "no grade", made `isPristineWholeVideoClip` throw on `null.brightness`, so Close on that video raised a TypeError and asked nothing.
+- **Root cause.** T-119's docblock said the grade was "read with a default", and T-121 had already found that sentence false for `textOverlays`. It is true only of an ABSENT field: `clip.colorGrade ?? DEFAULT_COLOR_GRADE` keeps whatever object is there. Main held the grade to a rule at Export only (`assertOptionalColorGrade`), so the two gates were two separate answers to "is this a grade".
+- **Fix.** One predicate, `colorGradeProblem`, in shared/projectValidation.ts (validators.ts already imports from it, so the reverse import would be a cycle): absent or `null` is fine, otherwise a plain object with `brightness` -1..1, `contrast` 0..4, `saturation` 0..3, `temperature` -1..1, each finite. `assertOptionalColorGrade` throws its text; `validateClipRequiredFields` returns it as the reason (`videoStudio.clips[0].colorGrade...`). A `null` grade is accepted and dropped in place. The docblock now says what is true.
+- **Test.** projectValidation.test.ts "a clip colour grade is checked at Open by the rule Export uses (T-189 (2))" (27 red on the base, 10 controls; one loop runs every case through both gates), home-chrome.spec.ts "T-189 (2)" (the `{}` refusal and the `null` Close, red on the base; a full grade as the control).
+- **Lesson.** **A "read with a default" comment is a claim about an absent field only; the validator has to say what a PRESENT one may be.** When a field has a rule at one boundary (Export), the open boundary should call the same function, not restate it: two gates written separately drift, and the test that keeps them one is a loop that sends every case to both. And a value one gate accepts has to be read safely by every reader: "accepted" for `null` needed the store's `=== undefined` to agree, or the value had to be dropped on the way in.
+
+---
+
 ## 2026-11-11 - T-188 (round 137): a validator that checks an array is an array has not checked what is in it
 
 The seventy-fifth sweep (item 1).
@@ -23,6 +47,8 @@ The seventy-fifth sweep (item 1).
 - **Fix.** `validateLayerRequiredFields` (per layer, per type, reasons `imageCanvas.doc.layers[i].<field> ...`) and `validateCanvasDocFields` (finite `width` / `height` above 0, string `background`) in shared/projectValidation.ts. A missing `rotation` reads as 0, written by the validator. Colours are not judged (T-110 (g)).
 - **Test.** projectValidation.test.ts "a canvas whose layers cannot be drawn is refused" (red on the base except its four guards), autosave.test.ts "autosave read: a canvas that cannot be drawn", canvasStore.test.ts "every canvas the app makes passes validateProject" (the control: every template, asset scene, constructor), home-chrome.spec.ts "T-188 (1)" (both red on the base).
 - **Lesson.** When a validator is extended to "this field is a list", the next question is what the list's elements are read as, and whether the app's own writers pass the stricter rule: the control that runs every template and constructor through it is what makes the rule safe to tighten. And a test that asserts a file lacks a key must search for the quoted key, not the word (the layer's name contained it).
+
+---
 
 ## 2026-11-11 - T-187 (round 136), Track A: "applied when you leave the box" has to hold for every way of leaving it, including the box being removed
 

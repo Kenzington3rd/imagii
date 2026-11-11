@@ -1,4 +1,4 @@
-import { useRef } from 'react'
+import { useEffect, useRef } from 'react'
 import toast from 'react-hot-toast'
 import type { DuckingParams, SecondaryTrackRole } from '@shared/audio'
 import { DEFAULT_DUCK_PARAMS, SECOND_TRACK_PICK_NO_SOUND_MESSAGE, isNoAudioStreamError } from '@shared/audio'
@@ -49,6 +49,24 @@ export function SecondaryTrackPanel(): JSX.Element {
   const setSecondaryTrack = useAudioStore((s) => s.setSecondaryTrack)
   const gesture = useGestureEnd(useAudioStore((s) => s.endGesture))
 
+  // T-189 (1): the role buttons are replaced by the track's controls once a file is picked, and Remove swaps them back - the pressed
+  // button is unmounted either way, and a removed element takes focus to <body> (STYLE_GUIDE's swap rule, T-119). Focus goes to the new
+  // content's primary control: the Gain slider, or the first role button after a Remove. It moves only when focus was inside the card as
+  // the swap rendered (the old DOM is still there in that render), so a track that arrives or goes without the card having focus (a project
+  // opened, an undo from elsewhere) moves nothing. Declared above any early return (there is none).
+  const hasTrack = secondary !== null && secondary !== undefined
+  const cardRef = useRef<HTMLDivElement | null>(null)
+  const primaryRef = useRef<HTMLElement | null>(null)
+  const shownHasTrack = useRef(hasTrack)
+  const cardHadFocus = useRef(false)
+  if (hasTrack !== shownHasTrack.current) cardHadFocus.current = cardRef.current?.contains(document.activeElement) ?? false
+  useEffect(() => {
+    if (shownHasTrack.current === hasTrack) return
+    shownHasTrack.current = hasTrack
+    if (cardHadFocus.current) primaryRef.current?.focus()
+    cardHadFocus.current = false
+  }, [hasTrack])
+
   // T-131 (5): one chooser at a time across the three role buttons. A double-click on one opened two, and the second answer silently
   // REPLACED the track the first had just added (with the second role's gain and duck defaults, if it landed on another button).
   const pickingRef = useRef(false)
@@ -96,7 +114,7 @@ export function SecondaryTrackPanel(): JSX.Element {
 
   return (
     // The card closes the gesture on pointer up and on blur (`useGestureEnd`, ColorGradePanel's pair): one handler for the gain, the four ducking sliders and the checkboxes.
-    <div className="card p-4 flex flex-col gap-3" data-tutorial="audio-music" {...gesture}>
+    <div ref={cardRef} className="card p-4 flex flex-col gap-3" data-tutorial="audio-music" {...gesture}>
       <PanelHeader icon="audio">Add a second track</PanelHeader>
       {!secondary ? (
         <>
@@ -105,9 +123,10 @@ export function SecondaryTrackPanel(): JSX.Element {
             your voice automatically.
           </p>
           <div className="grid grid-cols-1 gap-2 text-sm">
-            {ROLE_OPTIONS.map((opt) => (
+            {ROLE_OPTIONS.map((opt, i) => (
               <button
                 key={opt.value}
+                ref={i === 0 ? (el) => { primaryRef.current = el } : undefined}
                 onClick={() => pickAndAdd(opt.value)}
                 className="text-left px-3 py-2 rounded border border-ink-dim/30 hover:border-accent hover:bg-bg-hover transition-colors"
               >
@@ -142,6 +161,7 @@ export function SecondaryTrackPanel(): JSX.Element {
               value={secondary.gainDb}
               onChange={(e) => update({ gainDb: Number(e.target.value) }, 'secondary.gain')}
               className="flex-1 min-w-0"
+              ref={(el) => { primaryRef.current = el }}
               // M11 fix (round 15)
               aria-label="Secondary track gain in decibels"
               aria-valuetext={`${secondary.gainDb >= 0 ? '+' : ''}${secondary.gainDb.toFixed(1)} decibels`}

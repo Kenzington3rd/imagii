@@ -76,7 +76,7 @@ const CLIP_A: Clip = {
   selectedPresets: ['youtube', 'tiktok'],
   customPresetIds: ['custom-1'],
   speedMultiplier: 1.5,
-  colorGrade: { brightness: 0.1, contrast: 1.2, saturation: 1.1, temperature: -5 },
+  colorGrade: { brightness: 0.1, contrast: 1.2, saturation: 1.1, temperature: -0.5 },
   autoZoom: true,
   hypeShake: false
 }

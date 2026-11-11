@@ -209,7 +209,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
   // names, the first line, the last line, what those lines hold]`. ImportPanel.tsx:70 was the one found (the cap is :71), and the
   // others were re-read with it: a cite that moves now fails here instead of waiting for the next sweep.
   const CITES: ReadonlyArray<readonly [string, string, number, number, RegExp]> = [
-    ['Canvas.tsx:431', 'src/renderer/src/modules/image-studio/Canvas.tsx', 431, 431, /__imagiiStage/],
+    ['Canvas.tsx:440', 'src/renderer/src/modules/image-studio/Canvas.tsx', 440, 440, /__imagiiStage/],
     ['Canvas.tsx:184-193', 'src/renderer/src/modules/image-studio/Canvas.tsx', 184, 193, /Fit-to-container scaling[\s\S]*MAX_STAGE_ZOOM/],
     ['Canvas.tsx:267', 'src/renderer/src/modules/image-studio/Canvas.tsx', 267, 267, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
     ['Canvas.tsx:179-182', 'src/renderer/src/modules/image-studio/Canvas.tsx', 179, 182, /function snap\([\s\S]*gridSize/],

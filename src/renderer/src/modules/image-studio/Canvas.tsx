@@ -286,6 +286,15 @@ export function Canvas(): JSX.Element {
     return () => window.removeEventListener('mouseup', onUp)
   }, [drawInProgress])
 
+  // T-189 (3): a tool change ends any draw in progress, adding nothing. `handleMouseUp` only clears `pencilPoints` while the CURRENT tool
+  // is pencil, so V pressed mid-stroke left the orange preview (unselectable, not exported) and kept the window listener; P again and the
+  // stale stroke followed the pointer with no button down, and the next release saved it as a Pencil layer. A rect / ellipse / line drag
+  // already dropped its shape on such a release; its preview now goes at the key press too.
+  useEffect(() => {
+    setPencilPoints(null)
+    setDrawing(null)
+  }, [tool])
+
   // One stable callback per layer id: a new function every render would make React call it with null and then the node on every
   // render. Registers the node for the Transformer, and when it is the SELECTED layer's node that appeared (or changed) it asks
   // the attach effect to run again (T-124 (8)).

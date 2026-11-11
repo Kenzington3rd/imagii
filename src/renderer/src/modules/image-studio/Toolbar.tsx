@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { Tool } from './state/canvasStore'
 import { useCanvasStore } from './state/canvasStore'
 import { Icon, type IconName } from '../../components/Icon'
@@ -44,12 +44,28 @@ export function Toolbar(): JSX.Element {
   const activeIsAdvanced = TOOLS.some((t) => t.id === tool && t.advanced === true)
   const showAdvanced = advancedOpen || activeIsAdvanced
 
+  // T-189 (1): revealing the tools removes the "+ More" button, and a removed element takes focus to <body> (STYLE_GUIDE's swap rule, T-119):
+  // the next Tab started at the top of the window instead of at the Line and Pencil tools the person asked for. That holds for the button
+  // pressed (Enter, Space, a click) and for L / P pressed while it has focus (`activeIsAdvanced` flips `showAdvanced` the same way). The
+  // reveal's render still sees the old DOM, so "did the button hold focus" is read there; the effect then puts focus on the first revealed
+  // tool (Line). A reveal while focus is elsewhere (L pressed with the canvas or the Grid box focused) moves nothing. Declared above any
+  // early return (there is none), keyed on the swap.
+  const moreRef = useRef<HTMLButtonElement | null>(null)
+  const lineRef = useRef<HTMLButtonElement | null>(null)
+  const moreHadFocus = useRef(false)
+  if (showAdvanced && moreRef.current !== null) moreHadFocus.current = document.activeElement === moreRef.current
+  useEffect(() => {
+    if (showAdvanced && moreHadFocus.current) lineRef.current?.focus()
+    moreHadFocus.current = false
+  }, [showAdvanced])
+
   return (
     <div className="card p-2 flex items-center gap-2 flex-wrap" data-tutorial="image-toolbar">
       <div className="flex items-center gap-1">
         {TOOLS.filter((t) => t.advanced !== true || showAdvanced).map((t) => (
           <button
             key={t.id}
+            ref={t.id === 'line' ? lineRef : undefined}
             className={`px-3 py-1.5 text-sm rounded ${
               tool === t.id ? 'bg-accent text-bg-base' : 'hover:bg-bg-hover'
             }`}
@@ -65,6 +81,7 @@ export function Toolbar(): JSX.Element {
         ))}
         {!showAdvanced ? (
           <button
+            ref={moreRef}
             className="px-2 py-1.5 text-xs text-ink-muted hover:text-ink-base hover:bg-bg-hover rounded"
             onClick={() => setAdvancedOpen(true)}
             title="Show line and pencil tools"

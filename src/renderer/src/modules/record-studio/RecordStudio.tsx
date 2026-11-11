@@ -730,6 +730,32 @@ export function RecordStudio(): JSX.Element {
   const save = saveCard(saveRun === null ? convertToMp4 : saveRun.convertToMp4, discarding)
   const micLine = micLostLine(saveRun === null ? micLostAt : saveRun.micLostAt)
 
+  // T-189 (1): two presses here remove the button that was pressed and put other content in its place, and a removed element takes focus to
+  // <body> (STYLE_GUIDE's swap rule, T-119): "Start recording" (the live view arrives, Stop is in the header) and "Pick a screen or window"
+  // (the source grid arrives). Focus goes to Stop, and to the first source tile. Both buttons are natively `disabled` while they work and
+  // Chromium blurs a disabled button, so by the time the swap renders focus is already on <body> and the render cannot say whether the
+  // button had it: the press records that (the other sites in this guide read it in the swap's own render). It moves nothing when the press
+  // did not have focus on the button (a mouse-less `click()`, Refresh sources) or when focus has gone to another control that outlives the
+  // swap (the header's Home link). Declared above any early return (there is none).
+  const startRef = useRef<HTMLButtonElement | null>(null)
+  const stopRef = useRef<HTMLButtonElement | null>(null)
+  const pickRef = useRef<HTMLButtonElement | null>(null)
+  const firstTileRef = useRef<HTMLButtonElement | null>(null)
+  const startHadFocus = useRef(false)
+  const pickHadFocus = useRef(false)
+  useEffect(() => {
+    if (phase !== 'recording') return
+    const active = document.activeElement
+    if (startHadFocus.current && (active === null || active === document.body)) stopRef.current?.focus()
+    startHadFocus.current = false
+  }, [phase])
+  useEffect(() => {
+    if (sourceSearch !== 'done') return
+    const active = document.activeElement
+    if (pickHadFocus.current && sources.length > 0 && (active === null || active === document.body)) firstTileRef.current?.focus()
+    pickHadFocus.current = false
+  }, [sourceSearch, sources])
+
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
       <header className="flex items-center justify-between">
@@ -764,7 +790,7 @@ export function RecordStudio(): JSX.Element {
               <span className="font-mono text-danger inline-flex items-center gap-1.5">
                 <Icon name="record" size={15} /> REC {formatTimer(elapsed / 1000)}
               </span>
-              <button className="btn-primary px-4 py-2" onClick={stopRecording}>
+              <button ref={stopRef} className="btn-primary px-4 py-2" onClick={stopRecording}>
                 Stop
               </button>
             </div>
@@ -808,8 +834,12 @@ export function RecordStudio(): JSX.Element {
                   </p>
                 ) : null}
                 <button
+                  ref={pickRef}
                   className="btn-primary px-4 py-2 disabled:opacity-50"
-                  onClick={chooseSource}
+                  onClick={() => {
+                    pickHadFocus.current = document.activeElement === pickRef.current
+                    void chooseSource()
+                  }}
                   disabled={sourceSearch === 'searching'}
                 >
                   Pick a screen or window
@@ -817,9 +847,10 @@ export function RecordStudio(): JSX.Element {
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-96 overflow-y-auto">
-                {sources.map((s) => (
+                {sources.map((s, i) => (
                   <button
                     key={s.id}
+                    ref={i === 0 ? firstTileRef : undefined}
                     onClick={() => setSelectedSourceId(s.id)}
                     // T-114: one of a set, and it shows which by a border and a ring - which a
                     // screen reader cannot see.
@@ -956,9 +987,13 @@ export function RecordStudio(): JSX.Element {
               </p>
             </div>
             <button
+              ref={startRef}
               className="btn-primary px-4 py-3 text-base disabled:opacity-50 inline-flex items-center justify-center gap-2"
               disabled={!selectedSourceId || starting || checkingDevices}
-              onClick={startRecording}
+              onClick={() => {
+                startHadFocus.current = document.activeElement === startRef.current
+                void startRecording()
+              }}
             >
               <Icon name="record" size={18} /> {starting ? 'Starting…' : checkingDevices ? 'Checking devices…' : 'Start recording'}
             </button>

@@ -15,6 +15,9 @@ import {
 } from './projectValidation'
 import { userFacingError } from './userFacingError'
 import { DEFAULT_CHAIN_SPEC } from './audio'
+import { DEFAULT_COLOR_GRADE } from './clip'
+import { assertOptionalClipRecipe } from './validators'
+import * as projectValidation from './projectValidation'
 import type { ImagiiProject } from './workspace'
 
 const baseProject: ImagiiProject = {
@@ -1597,5 +1600,142 @@ describe('a canvas whose layers cannot be drawn is refused, named by layer and f
     const r = validateProjectJsonString(JSON.stringify(project([null])))
     expect(r.ok).toBe(false)
     if (!r.ok) expect(r.reason).toBe('imageCanvas.doc.layers[0] not an object')
+  })
+})
+
+/**
+ * T-189 (2): a clip's `colorGrade` is checked where the project opens, by the rule Export uses. T-119 said the grade was "read with a default"; that is true only when it is
+ * ABSENT. `clip.colorGrade ?? DEFAULT_COLOR_GRADE` keeps `{}` or `{ brightness: 0 }`, and each slider's `v.toFixed(2)` threw on the missing field, in render, on every visit
+ * (and the autosave re-crashed on Restore). The open gate (`validateProject`) and the export gate (`assertOptionalClipRecipe`) are one rule (`colorGradeProblem`); the cases
+ * below run through BOTH and require them to agree.
+ */
+describe('a clip colour grade is checked at Open by the rule Export uses (T-189 (2))', () => {
+  const FULL = { brightness: 0.1, contrast: 1.2, saturation: 0.8, temperature: -0.5 }
+  const at = 'videoStudio.clips[0].colorGrade'
+  const openWith = (colorGrade: unknown, hasKey = true): ReturnType<typeof validateProject> =>
+    validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/v.mp4', clips: [hasKey ? goodClip({ colorGrade }) : goodClip()], selectedClipId: null, watermark: null }
+    })
+  const reasonOf = (colorGrade: unknown): string => {
+    const r = openWith(colorGrade)
+    if (r.ok) throw new Error('expected a refusal, got ok')
+    return r.reason
+  }
+  const exportThrows = (colorGrade: unknown): string | null => {
+    try {
+      assertOptionalClipRecipe({ colorGrade }, 'segments[0]')
+      return null
+    } catch (e) {
+      return (e as Error).message
+    }
+  }
+
+  const REFUSED: Array<[string, unknown, string]> = [
+    ['an empty object', {}, `${at}.brightness must be in [-1, 1]`],
+    ['a string', 'x', `${at} must be a plain object`],
+    ['a number', 5, `${at} must be a plain object`],
+    ['a boolean', true, `${at} must be a plain object`],
+    ['an array', [], `${at} must be a plain object`],
+    ['a grade missing its temperature', { brightness: 0, contrast: 1, saturation: 1 }, `${at}.temperature must be in [-1, 1]`],
+    ['a grade missing its brightness', { contrast: 1, saturation: 1, temperature: 0 }, `${at}.brightness must be in [-1, 1]`],
+    ['a null brightness', { ...FULL, brightness: null }, `${at}.brightness must be in [-1, 1]`],
+    ['a null contrast', { ...FULL, contrast: null }, `${at}.contrast must be in [0, 4]`],
+    ['a null saturation', { ...FULL, saturation: null }, `${at}.saturation must be in [0, 3]`],
+    ['a null temperature', { ...FULL, temperature: null }, `${at}.temperature must be in [-1, 1]`],
+    ['a numeric string', { ...FULL, saturation: '1' }, `${at}.saturation must be in [0, 3]`],
+    ['NaN brightness', { ...FULL, brightness: NaN }, `${at}.brightness must be in [-1, 1]`],
+    ['Infinity contrast', { ...FULL, contrast: Infinity }, `${at}.contrast must be in [0, 4]`],
+    ['-Infinity temperature', { ...FULL, temperature: -Infinity }, `${at}.temperature must be in [-1, 1]`],
+    ['brightness just past 1', { ...FULL, brightness: 1.01 }, `${at}.brightness must be in [-1, 1]`],
+    ['brightness just under -1', { ...FULL, brightness: -1.01 }, `${at}.brightness must be in [-1, 1]`],
+    ['a negative contrast', { ...FULL, contrast: -0.01 }, `${at}.contrast must be in [0, 4]`],
+    ['contrast past 4', { ...FULL, contrast: 4.01 }, `${at}.contrast must be in [0, 4]`],
+    ['a negative saturation', { ...FULL, saturation: -0.01 }, `${at}.saturation must be in [0, 3]`],
+    ['saturation past 3', { ...FULL, saturation: 3.01 }, `${at}.saturation must be in [0, 3]`],
+    ['temperature past 1', { ...FULL, temperature: 1.01 }, `${at}.temperature must be in [-1, 1]`],
+    ['temperature under -1', { ...FULL, temperature: -1.01 }, `${at}.temperature must be in [-1, 1]`]
+  ]
+
+  it.each(REFUSED)('refuses %s, naming the clip and the field', (_what, grade, reason) => {
+    expect(reasonOf(grade)).toBe(reason)
+  })
+
+  const ACCEPTED: Array<[string, unknown]> = [
+    ['null (no grade)', null],
+    ['the default grade', DEFAULT_COLOR_GRADE],
+    ['a full in-range grade', FULL],
+    ['every lower bound', { brightness: -1, contrast: 0, saturation: 0, temperature: -1 }],
+    ['every upper bound', { brightness: 1, contrast: 4, saturation: 3, temperature: 1 }],
+    ['a grade with an unrelated extra key', { ...FULL, note: 'x' }]
+  ]
+
+  it.each(ACCEPTED)('accepts %s', (_what, grade) => {
+    expect(openWith(grade).ok).toBe(true)
+  })
+
+  it('accepts a clip with no colorGrade key at all (an older build left it off) and keeps it absent', () => {
+    const r = openWith(undefined, false)
+    if (!r.ok) throw new Error(r.reason)
+    expect('colorGrade' in (r.project.videoStudio?.clips[0] ?? {})).toBe(false)
+  })
+
+  it('a grade that is present and in range is kept exactly as written', () => {
+    const r = openWith(FULL)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.project.videoStudio?.clips[0]?.colorGrade).toEqual(FULL)
+  })
+
+  it('a null grade is accepted and dropped (the store reads the field with === undefined, and isPristineWholeVideoClip threw on null.brightness)', () => {
+    const r = openWith(null)
+    if (!r.ok) throw new Error(r.reason)
+    expect('colorGrade' in (r.project.videoStudio?.clips[0] ?? {})).toBe(false)
+  })
+
+  it('the open gate and the export gate are one rule: every refused and accepted grade gets the same verdict from both, and the same sentence apart from the clip prefix', () => {
+    for (const [what, grade, reason] of REFUSED) {
+      const thrown = exportThrows(grade)
+      expect(thrown, `${what}: Export refuses it too`).not.toBeNull()
+      expect(thrown, `${what}: and says the same`).toContain(reason.replace('videoStudio.clips[0].colorGrade', 'segments[0].colorGrade'))
+    }
+    for (const [what, grade] of ACCEPTED) {
+      expect(exportThrows(grade), `${what}: Export accepts it too`).toBeNull()
+    }
+    expect(exportThrows(undefined)).toBeNull()
+  })
+
+  it('the shared predicate is what both gates ask: null for an absent or fine grade, the sentence for a bad one, and it never throws', () => {
+    const { colorGradeProblem } = projectValidation
+    expect(colorGradeProblem(undefined, 'g')).toBeNull()
+    expect(colorGradeProblem(null, 'g')).toBeNull()
+    expect(colorGradeProblem(FULL, 'g')).toBeNull()
+    expect(colorGradeProblem({}, 'g')).toBe('g.brightness must be in [-1, 1]')
+    expect(colorGradeProblem('x', 'g')).toBe('g must be a plain object')
+    expect(colorGradeProblem(Object.create(null), 'g')).toBe('g.brightness must be in [-1, 1]')
+  })
+
+  it('the grade is judged with the clip: the first bad clip is named by its index', () => {
+    const r = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/v.mp4', clips: [goodClip({ colorGrade: FULL }), goodClip({ id: 'c2', colorGrade: {} })], selectedClipId: null, watermark: null }
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('videoStudio.clips[1].colorGrade.brightness must be in [-1, 1]')
+  })
+
+  it('the reason reaches the autosave path as well: validateProjectJsonString refuses the same text', () => {
+    const text = JSON.stringify({ ...baseProject, videoStudio: { sourcePath: 'C:/v.mp4', clips: [goodClip({ colorGrade: {} })], selectedClipId: null, watermark: null } })
+    const r = validateProjectJsonString(text)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe(`${at}.brightness must be in [-1, 1]`)
+  })
+
+  it('the overlay problem is still named first, so an injection in an overlay is never reported as a grade problem', () => {
+    const r = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/v.mp4', clips: [goodClip({ colorGrade: {}, textOverlays: [{ text: 'x', colorHex: 'white,movie=/etc/passwd' }] })], selectedClipId: null, watermark: null }
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('videoStudio.clips[0].textOverlays[0] malformed')
   })
 })

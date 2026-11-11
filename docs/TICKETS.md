@@ -9902,7 +9902,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 138)
+- **Status:** done (round 138 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10480,6 +10480,44 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 138 — T-189, the three counted items of sweep 76, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+c16c27f, disjoint files. Track A (items 1 and 3): the keyboard keeps
+its place, and a stroke ends when its tool does. Stream Graphics' "+
+More" puts focus on the Line tool when the reveal removes it while it
+holds focus (Enter, Space, a click, or L / P pressed on it), and the
+same swap rule now holds in the second-track card (a pick focuses the
+Gain slider, Remove the first role button) and in Record ("Start
+recording" focuses Stop, "Pick a screen or window" the first source
+tile); a reveal or swap while focus is elsewhere moves nothing.
+Toolbar and the second-track card read "did the removed control hold
+focus" in the swap's own render; Record's two buttons are natively
+disabled while they work, so the press records it. A tool change ends
+any draw in progress (an effect on `tool` clears the Pencil points and
+the shape drag), so a tool key pressed mid-stroke no longer strands
+the stroke or saves it later as a layer. Track B (item 2): a clip's
+colour grade is checked where the project opens. One rule,
+`colorGradeProblem` in shared/projectValidation.ts, serves the open
+gate and the export gate (`assertOptionalColorGrade` throws its text,
+unchanged): absent or null is no grade, otherwise four finite numbers
+in the export's ranges; a malformed grade is refused with Home's
+open-failure sentence instead of crashing Video Studio. Deviations,
+accepted: a null grade is dropped at open (the store's Close check
+read `null.brightness`); Record's press-recorded flag; the expediter's
+rulings on the other class sites (Record's Stop, the importers, the
+model download, the Cancel buttons). Expediter: Track A was sent back
+twice — first for the two Record sites the class sweep left, then when
+the expediter's mutation (Start's focus-on-body check removed)
+survived; the added Home-link cases kill it and its Pick twin. Track
+B's mutation (the null drop widened to drop any grade) was killed at
+unit by two cases. LESSONS: the separators the round-137 entry skipped
+are restored. Ledger: every mutation killed at unit or at e2e where a
+case covers the site, Track A's Pick-flag survivor disclosed and
+killed by an added case; every restore identical. Gates on the merged
+tree: npm run verify twice (214 files, 7118 tests each), test:media
+538 passed and 28 skipped of 566 (514 s), and the full xvfb Playwright
+suite, 882 passed in 57.6 min, no failures.
 
 Round 137 — T-188, the one counted item of sweep 75, landed in the
 commit that carries this entry. One Sonnet worker in a fresh clone of

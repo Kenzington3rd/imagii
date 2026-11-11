@@ -1,6 +1,6 @@
 import { assertAlways } from './assert'
 import type { CropRect } from './clip'
-import { isValidTextOverlay } from './projectValidation'
+import { colorGradeProblem, isValidTextOverlay } from './projectValidation'
 
 /** Throws if `v` is not a non-empty string. */
 export function assertNonEmptyString(v: unknown, name: string): asserts v is string {
@@ -99,19 +99,12 @@ const SPEED_MIN = 0.1
 const SPEED_MAX = 10
 
 /**
- * Throws unless `v` is absent or a color grade the filter graph can apply (T-105):
- * four finite numbers, each inside what its ffmpeg filter accepts (`eq` takes
- * brightness -1..1 and saturation 0..3, `colorbalance` -1..1; contrast is held to
- * 0..4 because a negative one inverts the picture). The editor's sliders sit well
- * inside these (brightness ±0.5, contrast 0.5-1.5, saturation 0-2, temperature ±1).
+ * Throws unless `v` is absent or a color grade the filter graph can apply (T-105): four finite numbers, each inside what its ffmpeg filter accepts. The rule is
+ * `colorGradeProblem` in projectValidation.ts (T-189 (2)), the same one the open gate applies, so a grade Export would refuse never opens into the studio.
  */
 function assertOptionalColorGrade(v: unknown, name: string): void {
-  if (v === null || v === undefined) return
-  assertPlainObject(v, name)
-  assertRange(v.brightness, -1, 1, `${name}.brightness`)
-  assertRange(v.contrast, 0, 4, `${name}.contrast`)
-  assertRange(v.saturation, 0, 3, `${name}.saturation`)
-  assertRange(v.temperature, -1, 1, `${name}.temperature`)
+  const problem = colorGradeProblem(v, name)
+  assertAlways(problem === null, problem ?? `${name} is a valid color grade`)
 }
 
 /**

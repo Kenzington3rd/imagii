@@ -135,6 +135,31 @@ export function isValidTextOverlay(v: unknown): boolean {
   return true
 }
 
+/** What a clip's grade may hold: what each ffmpeg filter takes (`eq` brightness and saturation, `colorbalance`), and a contrast held off the inverting negatives. */
+const COLOR_GRADE_BOUNDS = [
+  ['brightness', -1, 1],
+  ['contrast', 0, 4],
+  ['saturation', 0, 3],
+  ['temperature', -1, 1]
+] as const
+
+/**
+ * T-189 (2): the ONE rule for a clip's `colorGrade`, shared by the two gates it must satisfy: Export / Compile / GIF / Reframe (`assertOptionalColorGrade` in
+ * validators.ts, which throws the text) and the open gate (`validateClipRequiredFields`, which returns it as the refusal reason). Absent (`undefined` / `null`) is
+ * "no grade" and fine; otherwise a plain object whose `brightness` -1..1, `contrast` 0..4, `saturation` 0..3 and `temperature` -1..1 are each a finite number (the
+ * editor's sliders sit well inside these). Returns the problem as `<name> must be a plain object` or `<name>.<field> must be in [lo, hi]`, or null when the grade is
+ * fine; never throws. It lives here because validators.ts already imports from this file, so the reverse import would be a cycle.
+ */
+export function colorGradeProblem(v: unknown, name: string): string | null {
+  if (v === undefined || v === null) return null
+  if (!isPlainObject(v)) return `${name} must be a plain object`
+  for (const [field, lo, hi] of COLOR_GRADE_BOUNDS) {
+    const n = v[field]
+    if (!isFiniteNumber(n) || n < lo || n > hi) return `${name}.${field} must be in [${lo}, ${hi}]`
+  }
+  return null
+}
+
 /**
  * Migrate what an older build stored in a clip's text overlays, in place, before the gate looks
  * (T-114, T-115). Two things the gate refuses today were things the editor wrote:
@@ -201,7 +226,9 @@ function validateClipTextOverlays(clip: unknown, idx: number): string | null {
  * the overlay editor and `buildVideoFilter` all read it bare, so a restored clip without it crashed the studio.
  * It has been in the saved shape since the first build, so no older file lacks it. The rest of the clip stays
  * optional exactly as an older build left it: `cropRect`, the speed, the grade and the flags are read with a
- * default. Reasons are `videoStudio.clips[i].<field> <what is wrong>`, like the overlay reasons beside them.
+ * default WHEN ABSENT. T-189 (2): that was false for a grade that is PRESENT and partial - `clip.colorGrade ?? DEFAULT_COLOR_GRADE` keeps
+ * `{}`, and the sliders' `toFixed` threw on every visit - so a grade that is there is checked here by the rule Export uses
+ * (`colorGradeProblem`). Reasons are `videoStudio.clips[i].<field> <what is wrong>`, like the overlay reasons beside them.
  */
 function validateClipRequiredFields(clip: unknown, idx: number): string | null {
   if (!isPlainObject(clip)) return `videoStudio.clips[${idx}] not an object`
@@ -211,6 +238,8 @@ function validateClipRequiredFields(clip: unknown, idx: number): string | null {
   if (!isFiniteNumber(clip.startSec)) return `${at}.startSec not a number`
   if (!isFiniteNumber(clip.endSec)) return `${at}.endSec not a number`
   if (!Array.isArray(clip.textOverlays)) return `${at}.textOverlays not an array`
+  const gradeProblem = colorGradeProblem(clip.colorGrade, `${at}.colorGrade`)
+  if (gradeProblem !== null) return gradeProblem
   if (!Array.isArray(clip.selectedPresets)) return `${at}.selectedPresets not an array`
   for (let i = 0; i < clip.selectedPresets.length; i++) {
     if (typeof clip.selectedPresets[i] !== 'string') return `${at}.selectedPresets[${i}] not a string`
@@ -229,6 +258,15 @@ function dropUnknownPresetIds(clip: unknown): void {
   if (!isPlainObject(clip) || !Array.isArray(clip.selectedPresets)) return
   const known: readonly string[] = PLATFORM_IDS
   clip.selectedPresets = clip.selectedPresets.filter((id: unknown) => typeof id === 'string' && known.includes(id))
+}
+
+/**
+ * T-189 (2): a clip's `colorGrade` of `null` is "no grade" to the gate (and to Export), but the store reads the field with `=== undefined`:
+ * `isPristineWholeVideoClip` threw on `null.brightness` (executed), so Close on a video holding one raised a TypeError. Dropped, not refused: it is the
+ * same meaning as the key being absent, and the hand-edited project that holds one still opens. Runs after the grade has been judged.
+ */
+function dropNullColorGrade(clip: unknown): void {
+  if (isPlainObject(clip) && clip.colorGrade === null) delete clip.colorGrade
 }
 
 /**
@@ -469,6 +507,7 @@ export function validateProject(input: unknown): ValidationResult {
       // T-135 (10): after the shape is known to be sound (every entry a string), before the studio reads the ids.
       dropUnknownPresetIds(v.clips[i])
       dropMalformedCustomPresetIds(v.clips[i])
+      dropNullColorGrade(v.clips[i])
     }
     // v5: the marker says `sourcePath` is the original of a file converted on import.
     if (v.convertedForImport !== undefined && typeof v.convertedForImport !== 'boolean')

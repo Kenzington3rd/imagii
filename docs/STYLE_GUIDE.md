@@ -742,9 +742,17 @@ Repeated UI is a component, not copy-paste:
 - **When a press swaps the focused control for other content, focus is put on the new content's primary control
   (T-86, T-119).** A removed element takes focus to `<body>`, and the trap only places focus when its dialog OPENS.
   The tutorial coachmark did this first (its Next button); the Fix wizard now puts it on each question's first option
-  (Apply on the summary) and Stream Graphics' Variants dialog on **Save all** when the previews replace Generate. It is
-  an effect keyed on the swap (`[open, step]`, `[items]`), declared above any early return, and it leaves a reopen
-  over content that was already there alone.
+  (Apply on the summary) and Stream Graphics' Variants dialog on **Save all** when the previews replace Generate. T-189
+  added Stream Graphics' "+ More" (focus goes to **Line**, the first revealed tool) and the second-track card (the role
+  buttons give way to the **Gain** slider; Remove gives the first role button back) and Record's two presses ("Pick a
+  screen or window" gives way to the first source tile, "Start recording" to **Stop**). A button that is natively
+  `disabled` while it works (Record's two) is blurred by Chromium before the swap renders, so the press itself records
+  whether it had focus. It is an effect keyed on the swap
+  (`[open, step]`, `[items]`, `[showAdvanced]`, `[hasTrack]`), declared above any early return, and it leaves a reopen
+  over content that was already there alone. Where the swap can also come from a key or an undo, the effect moves focus
+  only when it was on the removed control: the swap's own render still sees the old DOM, so it reads
+  `document.activeElement` there (a ref set in render, used by the effect), and a swap that arrives while focus is on
+  another control moves nothing.
 - **Smooth scrolling that script asks for reads the Reduce-motion setting itself (T-119).** The `prefers-reduced-motion`
   block in `index.css` sets `scroll-behavior: auto`, which governs scrolling CSS decides but not
   `scrollIntoView({ behavior: 'smooth' })`, an explicit option. The coachmark asks `matchMedia` and passes

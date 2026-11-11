@@ -1,4 +1,4 @@
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test'
+import { test, expect, _electron as electron, type ElectronApplication, type Locator, type Page } from '@playwright/test'
 import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
@@ -5256,6 +5256,203 @@ test.describe('round 124 Track A - leaving Record during the first-picture wait 
       await expect.poll(() => liveTracks(window), { timeout: 10_000, intervals: [200], message: 'a track stayed live after the failed start' }).toBe(0)
       expect(existsSync(recordingsDir(userDataDir))).toBe(false)
       expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-189 (1): two presses on Record remove the button that was pressed and put other content in its place - "Pick a screen or window"
+// (the source grid arrives) and "Start recording" (the live view arrives, Stop is in the header). A removed element takes focus to <body>
+// (STYLE_GUIDE's swap rule, T-119), so the next Tab started at the top of the window. Focus goes to the first source tile and to Stop,
+// only when the pressed button had it.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Record - the keyboard keeps its place across Pick and Start (T-189 (1))', () => {
+  async function openRecord(label: string): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string }> {
+    ensureScreenshots()
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, null)
+    await gotoRecordFromHome(window)
+    return { app, window, root, userDataDir }
+  }
+  const tile = (window: Page): Locator => window.locator('button.card').filter({ has: window.locator('img[alt]') }).first()
+
+  for (const key of ['Enter', 'Space'] as const) {
+    test(`${key} on "Pick a screen or window" leaves focus on the first source tile`, async () => {
+      test.setTimeout(120_000)
+      const { app, window, root } = await openRecord(`t189-pick-${key.toLowerCase()}`)
+      try {
+        const pick = window.getByRole('button', { name: 'Pick a screen or window' })
+        await pick.focus()
+        await expect(pick).toBeFocused()
+        await window.keyboard.press(key)
+        await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+        await expect(pick).toHaveCount(0)
+        await expect(tile(window), 'the grid\'s first tile has the focus, not <body>').toBeFocused()
+        // The keyboard goes on from there: Tab moves along the page rather than back to the top of the window.
+        expect(await window.evaluate(() => document.activeElement === document.body)).toBe(false)
+      } finally {
+        await app.close()
+        cleanup(root)
+      }
+    })
+  }
+
+  test('a swap that arrives while focus was on another control moves nothing (Refresh sources pressed over the empty card)', async () => {
+    test.setTimeout(120_000)
+    const { app, window, root } = await openRecord('t189-pick-elsewhere')
+    try {
+      const refresh = window.getByRole('button', { name: 'Refresh sources' })
+      await refresh.focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Pick a screen or window' })).toHaveCount(0)
+      await expect(refresh, 'the grid arrived and the focus is where the person had it').toBeFocused()
+      await expect(tile(window)).not.toBeFocused()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('a scan that arrives while focus is on the page, and not from Pick, moves nothing (Refresh sources clicked by a script)', async () => {
+    test.setTimeout(120_000)
+    const { app, window, root } = await openRecord('t189-pick-body')
+    try {
+      await window.locator('h1', { hasText: 'Record' }).click()
+      expect(await window.evaluate(() => document.activeElement === document.body), 'the premise: focus is on the page').toBe(true)
+      await window.getByRole('button', { name: 'Refresh sources' }).evaluate((el) => (el as HTMLButtonElement).click())
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('button', { name: 'Pick a screen or window' })).toHaveCount(0)
+      await expect(tile(window), 'the Pick button was never pressed: the grid does not take the focus').not.toBeFocused()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  // The press had focus on the button, and the person then moved on to another control that outlives the swap (the header's Home link) before
+  // the answer came back: the swap must not take the focus from where they put it. The answer is held back so the move can happen in between:
+  // `getSources` by 1.5 s (a test-only delay in main, `stubSourceListAfter`, the way `stubEmptySources` holds its answer back).
+  test('Enter on Pick, then focus moved to the Home link before the sources arrive: the grid does not take the focus back', async () => {
+    test.setTimeout(120_000)
+    const { app, window, root } = await openRecord('t189-pick-moved')
+    try {
+      await app.evaluate(async ({ desktopCapturer, nativeImage }, png) => {
+        const thumbnail = nativeImage.createFromDataURL(png)
+        const target = desktopCapturer as unknown as { getSources: unknown }
+        target.getSources = async () => {
+          await new Promise((resolve) => setTimeout(resolve, 1500))
+          return [{ id: 'window:t189-0:0', name: 'T-189 window', thumbnail }]
+        }
+      }, TINY_PNG)
+      const pick = window.getByRole('button', { name: 'Pick a screen or window' })
+      await pick.focus()
+      await window.keyboard.press('Enter')
+      await expect(window.getByText('Looking for screens and windows…')).toBeVisible()
+      const home = window.getByRole('link', { name: /Home/ })
+      await home.focus()
+      await expect(home).toBeFocused()
+      await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+      await expect(pick).toHaveCount(0)
+      await expect(home, 'the grid arrived and the focus is where the person moved it').toBeFocused()
+      await expect(tile(window)).not.toBeFocused()
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('Enter on Start, then focus moved to the Home link while the capture opens: the live view does not take the focus back', async () => {
+    test.setTimeout(150_000)
+    const { app, window, root, userDataDir } = await openRecord('t189-start-moved')
+    try {
+      const start = await readyToStart(window)
+      // Hold the DESKTOP capture (and only it) until the test lets go (the "Starting…" case's gate above).
+      await window.evaluate(() => {
+        const md = navigator.mediaDevices
+        const realGum = md.getUserMedia.bind(md)
+        const w = window as unknown as { __letGo: () => void }
+        const gate = new Promise<void>((resolve) => {
+          w.__letGo = resolve
+        })
+        md.getUserMedia = async (c?: MediaStreamConstraints) => {
+          if (JSON.stringify(c ?? {}).includes('chromeMediaSource')) await gate
+          return realGum(c)
+        }
+      })
+      await start.focus()
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: /Starting…/ })).toBeDisabled()
+      const home = window.getByRole('link', { name: /Home/ })
+      await home.focus()
+      await expect(home).toBeFocused()
+      await window.evaluate(() => (window as unknown as { __letGo: () => void }).__letGo())
+      const stop = window.getByRole('button', { name: 'Stop' })
+      await expect(stop).toBeVisible({ timeout: 30_000 })
+      await expect(home, 'the take started and the focus is where the person moved it').toBeFocused()
+      await expect(stop).not.toBeFocused()
+      await endTake(window, userDataDir)
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  async function readyToStart(window: Page): Promise<Locator> {
+    await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    const start = window.getByRole('button', { name: /Start recording/ })
+    await expect(start).toBeEnabled()
+    return start
+  }
+
+  async function endTake(window: Page, userDataDir: string): Promise<void> {
+    await window.getByRole('button', { name: 'Stop' }).click()
+    await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 30_000 })
+    await expect.poll(() => leftoverTemps(userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([])
+  }
+
+  for (const key of ['Enter', 'Space'] as const) {
+    test(`${key} on "Start recording" leaves focus on Stop`, async () => {
+      test.setTimeout(150_000)
+      const { app, window, root, userDataDir } = await openRecord(`t189-start-${key.toLowerCase()}`)
+      try {
+        const start = await readyToStart(window)
+        await start.focus()
+        await expect(start).toBeFocused()
+        await window.keyboard.press(key)
+        const stop = window.getByRole('button', { name: 'Stop' })
+        await expect(stop).toBeVisible({ timeout: 30_000 })
+        await expect(window.getByRole('button', { name: /Start recording/ })).toHaveCount(0)
+        await expect(stop, 'Stop has the focus, not <body>').toBeFocused()
+        await endTake(window, userDataDir)
+      } finally {
+        await app.close()
+        cleanup(root)
+      }
+    })
+  }
+
+  test('a take that starts without the Start button having focus moves nothing (a click() dispatched with focus on Refresh sources)', async () => {
+    test.setTimeout(150_000)
+    const { app, window, root, userDataDir } = await openRecord('t189-start-elsewhere')
+    try {
+      const start = await readyToStart(window)
+      // Focus is on "Refresh sources" (the control last pressed); a script's click() does not move it to Start.
+      await expect(window.getByRole('button', { name: 'Refresh sources' })).toBeFocused()
+      await start.evaluate((el) => (el as HTMLButtonElement).click())
+      const stop = window.getByRole('button', { name: 'Stop' })
+      await expect(stop).toBeVisible({ timeout: 30_000 })
+      await expect(stop, 'the swap did not take a focus the Start button never had').not.toBeFocused()
+      await endTake(window, userDataDir)
     } finally {
       await app.close()
       cleanup(root)

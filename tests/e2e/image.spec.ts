@@ -57,7 +57,7 @@ const __dirname = path.dirname(__filename)
  *
  * ── Three mechanisms worth explaining ──────────────────────────────────
  *
- * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:431) is the ledger's
+ * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:440) is the ledger's
  *    own hook. `stageShapes()` reads the document layer's children — class +
  *    attrs — which is the rendered end state of `doc.layers`: React re-renders
  *    every node from the store, so a value read back off a node is the value
@@ -7898,6 +7898,210 @@ test.describe('Image Studio - a colour typed and then left by a click on the can
       await undo(window).click()
       await expect.poll(async () => (await xs()).b, { timeout: 10_000, message: 'one Undo puts B\'s x back' }).toBe(original.b)
       expect((await xs()).a).toBe(original.a)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-189 (1) and (3): "+ More" keeps the keyboard's place, and a stroke ends when its tool does
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Image Studio - "+ More" keeps focus, and a tool change ends a draw (T-189)', () => {
+  // (1) Revealing Line and Pencil removes the "+ More" button, and a removed element takes focus to <body> (STYLE_GUIDE's swap rule, T-119):
+  // the next Tab started at the top of the window. The effect puts focus on Line, the first revealed tool, only when "+ More" had it.
+  for (const [name, press] of [
+    ['Enter', 'Enter'],
+    ['Space', 'Space']
+  ] as const) {
+    test(`${name} on "+ More" reveals Line and Pencil and leaves focus on Line`, async () => {
+      test.setTimeout(120_000)
+      const studio = await openStudio(`t189-more-${name.toLowerCase()}`)
+      const { window } = studio
+      try {
+        await startBlank(window)
+        const toolbar = window.locator(TOOLBAR)
+        const more = toolbar.getByRole('button', { name: '+ More' })
+        await more.focus()
+        await expect(more).toBeFocused()
+        await window.keyboard.press(press)
+        await expect(more).toHaveCount(0)
+        await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+        await expect(toolbar.getByRole('button', { name: 'Line' }), 'focus is on the first revealed tool, not <body>').toBeFocused()
+        // The next Tab goes to Pencil: the keyboard carries on from the Line and Pencil tools the person asked for.
+        await window.keyboard.press('Tab')
+        await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeFocused()
+      } finally {
+        await closeStudio(studio)
+      }
+    })
+  }
+
+  test('L pressed while "+ More" has focus selects Line, reveals both tools and leaves focus on Line', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t189-more-l')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      const more = toolbar.getByRole('button', { name: '+ More' })
+      await more.focus()
+      await window.keyboard.press('l')
+      await expect(window.getByText('Tool: Line')).toBeVisible()
+      await expect(more).toHaveCount(0)
+      await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Line' })).toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a reveal while focus is elsewhere moves nothing (L pressed with the Rectangle tool focused)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t189-more-elsewhere')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      const rect = toolbar.getByRole('button', { name: 'Rectangle' })
+      await rect.focus()
+      await expect(rect).toBeFocused()
+      await window.keyboard.press('l')
+      await expect(window.getByText('Tool: Line')).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: '+ More' })).toHaveCount(0)
+      await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+      await expect(rect, 'the reveal did not take the focus from where the person had it').toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a mouse click on "+ More" still reveals both tools', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t189-more-click')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await expect(toolbar.getByRole('button', { name: 'Line' })).toHaveCount(0)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+      await expect(toolbar.getByRole('button', { name: '+ More' })).toHaveCount(0)
+      await expect(toolbar.getByRole('button', { name: 'Line' })).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+      await toolbar.getByRole('button', { name: 'Pencil' }).click()
+      await expect(window.getByText('Tool: Pencil')).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // (3) `handleMouseUp` cleared `pencilPoints` only while the CURRENT tool was Pencil, so V pressed mid-stroke left the orange preview
+  // (unselectable, not exported), and a later P and a release saved the stale stroke as a Pencil layer.
+  test('a tool key pressed mid-Pencil-stroke ends the stroke: the preview goes at the key press and no layer is added by the release', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t189-pencil-stroke')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+      await toolbar.getByRole('button', { name: 'Pencil' }).click()
+      await expect(window.getByText('Tool: Pencil')).toBeVisible()
+      const a = await toScreen(window, { x: 300, y: 300 })
+      const b = await toScreen(window, { x: 500, y: 350 })
+      const c = await toScreen(window, { x: 700, y: 300 })
+      await dragThrough(window, a, [b, c], async (_p, i) => {
+        if (i !== 1) return
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000, message: 'the stroke is being previewed' }).toBeGreaterThan(300)
+        await window.keyboard.press('v')
+        await expect(window.getByText('Tool: Select')).toBeVisible()
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000, message: 'the tool key ended the stroke: the preview is gone' }).toBe(0)
+      })
+      // The button is up: nothing was added, and nothing is left on the chrome layer.
+      await window.waitForTimeout(300)
+      await expectLayerCount(window, 1)
+      expect(await drawPreviewWidth(window), 'no preview after the release').toBe(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a stroke stranded by a tool key does not come back: P, a move with no button and a release add no Pencil layer', async () => {
+    // The stale stroke followed the pointer with no button down and the next release anywhere saved it as a layer. Nothing is asserted
+    // mid-stroke here, so this case is red on its own for that symptom and not only for the lingering preview above.
+    test.setTimeout(150_000)
+    const studio = await openStudio('t189-pencil-stale')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+      await toolbar.getByRole('button', { name: 'Pencil' }).click()
+      await expect(window.getByText('Tool: Pencil')).toBeVisible()
+      const a = await toScreen(window, { x: 300, y: 300 })
+      const b = await toScreen(window, { x: 500, y: 350 })
+      const c = await toScreen(window, { x: 700, y: 300 })
+      await dragThrough(window, a, [b, c], async (_p, i) => {
+        if (i !== 1) return
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000 }).toBeGreaterThan(300)
+        await window.keyboard.press('v')
+        await expect(window.getByText('Tool: Select')).toBeVisible()
+      })
+      await window.waitForTimeout(300)
+      await expectLayerCount(window, 1)
+      await window.keyboard.press('p')
+      await expect(window.getByText('Tool: Pencil')).toBeVisible()
+      const d = await toScreen(window, { x: 600, y: 500 })
+      const e = await toScreen(window, { x: 800, y: 520 })
+      await window.mouse.move(d.x, d.y)
+      await window.mouse.move(e.x, e.y)
+      await window.mouse.up()
+      await window.waitForTimeout(300)
+      await expectLayerCount(window, 1)
+      expect(await drawPreviewWidth(window), 'the stale stroke did not follow the pointer').toBe(0)
+      // The tool still draws: a fresh stroke lands one Pencil layer (the effect clears a draw, it does not break the tool).
+      await dragOnStage(window, { x: 300, y: 600 }, { x: 700, y: 650 }, { via: [{ x: 500, y: 620 }] })
+      await expectLayerCount(window, 2)
+      expect((await lastShape(window)).cls).toBe('Line')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a tool key pressed mid-drag ends the shape: V and O leave no preview and no layer (the rectangle is not drawn on as an ellipse)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t189-shape-drag')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      const from = await toScreen(window, { x: 300, y: 300 })
+      const to = await toScreen(window, { x: 600, y: 500 })
+      // V mid-drag: the shape the release would have made is dropped (guard: the rect preview already hid under Select).
+      await dragThrough(window, from, [to], async () => {
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000 }).toBeGreaterThan(250)
+        await window.keyboard.press('v')
+        await expect(window.getByText('Tool: Select')).toBeVisible()
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000 }).toBe(0)
+      })
+      await window.waitForTimeout(300)
+      await expectLayerCount(window, 1)
+      // O mid-drag: the old tool's drag does not carry over into an ellipse.
+      await window.keyboard.press('r')
+      await expect(window.getByText('Tool: Rectangle')).toBeVisible()
+      await dragThrough(window, from, [to], async () => {
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000 }).toBeGreaterThan(250)
+        await window.keyboard.press('o')
+        await expect(window.getByText('Tool: Ellipse')).toBeVisible()
+        await expect.poll(() => drawPreviewWidth(window), { timeout: 10_000, message: 'the rectangle drag does not become an ellipse preview' }).toBe(0)
+      })
+      await window.waitForTimeout(300)
+      await expectLayerCount(window, 1)
+      expect(await drawPreviewWidth(window)).toBe(0)
+      // The tool still draws: a fresh Ellipse drag lands one layer (the effect clears a draw, it does not break drawing).
+      await dragOnStage(window, { x: 300, y: 300 }, { x: 600, y: 500 })
+      await expectLayerCount(window, 2)
+      expect((await lastShape(window)).cls).toBe('Ellipse')
     } finally {
       await closeStudio(studio)
     }
