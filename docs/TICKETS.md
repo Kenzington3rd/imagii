@@ -9773,6 +9773,63 @@ IMG-PREC.
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 136 — see the Done entry)
 
+## T-188 — sweep-75 fix (round 137)
+
+- **Spec:** the seventy-fifth sweep's verified finding (candidate clean pass #1 on 72f059a, the T-187 tree; the count
+  stays at 0). Item 1 found by QA renderer reader A, who executed the real `validateProject` on the four shapes below;
+  confirmed by the expediter against source (the crash reads, and main's autosave validating with the same function).
+  It is the T-119 (12) class — `validateProject` accepted structurally empty studios that then threw in render — at the
+  one level that fix did not reach: T-119 held `doc.layers` to an array and never looked at its elements. Not counted:
+  streamer reader B's burned captions on a vertical file inside the platform band (T-110 (ax), verbatim); streamer
+  main's new text overlay at 85% height on a vertical export (a layer the person positions; the (ax) / (an) class); the
+  export commands without `-sn` (refuted by execution in sweep 49); Delete removing a selected locked layer (Lock holds
+  drag, resize and rotate, and nothing promises more; undoable); a several-file drop loading the first file
+  (single-file importers; the loaded name is shown); the unmount commit leaving the coalescing key set (`selectLayer`
+  and `selectClip` reset it; a route round-trip is the T-147 window); the privacy, Electron and QA main readers'
+  hostile-renderer argv and thumbnail-scheme notes (contrived; T-110 (m)); the audio, UX 2 and streamer readers'
+  unmeasured notes. One track (shared/projectValidation.ts). The ffmpeg reader was still out when this ticket was
+  written; a finding from it becomes Track B.
+
+  **Track A — a project whose canvas cannot be drawn is refused, not opened into a crash (item 1).**
+  1. **[LOW] A project or autosave whose Stream Graphics canvas holds a malformed layer opens, then crashes Stream
+     Graphics on every visit** (shared/projectValidation.ts:459-466 checks only `Array.isArray(doc.layers)`;
+     project/ProjectIO.ts:510 `resetDocument`s it as it is; image-studio/LayerPanel.tsx:51-52 reads `layer.id` of every
+     element, PropertiesPanel.tsx:74 `layer.rotation.toFixed(2)` of the selected one, Canvas.tsx:135 `l.id` in a find).
+     `layers: [null]`, `layers: [{}]`, a rect with no `rotation` and a document with no `width` / `height` are all
+     accepted: Home says the project loaded, the crash screen appears on entering Stream Graphics, "Reload to Home" does
+     not help (the document stays in the store), and main's autosave validates with the same function (autosave.ts:186,
+     :239), so the document is written and Restore crashes again. A hand-edited or damaged `.imagii.json` reaches it.
+     Fix: a `validateLayerRequiredFields(layer, index)` in projectValidation.ts beside `validateClipRequiredFields` and
+     `validateChainRequiredFields`, called for every element of `doc.layers`, refusing in the existing reason style
+     (`imageCanvas.doc.layers[<i>] …`): not a plain object; `id` not a non-empty string; `type` not one of `LayerType`;
+     `name` not a string; `visible` / `locked` not booleans; any of `x`, `y`, `scaleX`, `scaleY`, `opacity` not a finite
+     number; and the fields its own type draws (image: `src` a string, finite `width` / `height`; rect: finite `width`,
+     `height`, `strokeWidth`, `cornerRadius`, `fill` / `stroke` strings; ellipse: finite `radiusX`, `radiusY`,
+     `strokeWidth`, `fill` / `stroke` strings; line: `points` an array of finite numbers, `stroke` a string, finite
+     `strokeWidth`, `closed` a boolean; text: `text`, `fontFamily`, `fill` strings, finite `fontSize`). A MISSING
+     `rotation` is read as 0 — written onto the layer by the validator, as `sanitizePlace` writes the place — because
+     the store already counts a layer with no rotation as 0 (canvasStore.ts:237); a `rotation` that is present and not
+     finite is refused. `doc.width` and `doc.height` must be finite numbers above 0 and `doc.background` a string. `hint`
+     stays optional. Colours are NOT checked here: a crafted colour stays the T-110 (g) / T-186 class (it draws; it does
+     not crash). Every template document and the default document must still validate, and so must every layer the
+     store's constructors make (they are the shapes a real project holds); if one does not, the rule is wrong, not the
+     template — report it.
+  Covering tests: unit (NEW describe in the projectValidation test file) — each refused shape with its reason (`[null]`,
+  `[{}]`, an unknown type, an empty id, `x: NaN`, `opacity: Infinity`, a rect with no `width`, a line whose `points`
+  hold a string, a text with no `fontSize`, a document with no `width`, a `height` of 0); a rect with no `rotation`
+  accepted and read as rotation 0; every template in image-studio/templates.ts and the default document accepted; main's
+  autosave read refusing a damaged canvas. E2E (NEW describe at the end of the spec that owns Home's Open project): a
+  project file whose canvas holds `layers: [null]` is refused with Home's open-failure sentence and Stream Graphics still
+  opens without the crash screen; a project with a rect that has no `rotation` opens, Stream Graphics draws the rect,
+  and selecting it shows Rotation 0 — both red on the base. No ffmpeg change, so no Layer 5. Docs: IC rows (Open
+  project and the autosave restore) revised in place plus a "Dispositions - round 137" section; LESSONS at the TOP;
+  TESTING paragraph; USER_GUIDE only if words change.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 137)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
