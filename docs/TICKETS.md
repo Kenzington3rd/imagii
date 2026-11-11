@@ -9588,6 +9588,69 @@ IMG-PREC.
   not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 133 — see the Done entry)
 
+## T-185 — sweep-72 fixes (round 134)
+
+- **Spec:** the seventy-second sweep's verified findings (candidate clean pass #1 on ee2c557, the T-184 tree; the count
+  stays at 0). Item 1 found and executed by QA renderer reader A (`undoRedoIntent` with a Cyrillic or Greek `key`
+  returns null): siblings of the class T-155 (2) fixed at the paste guard only, at sites no disposition names.
+  Not counted: Stream Graphics' "Unsupported file type" toast on a non-image drop (names the cause; polish); a
+  re-export after a FAILED batch re-encoding the finished files as " (2)" (the T-110 (k) class: the same re-press,
+  nothing overwritten, the same "Export remaining" upgrade); the template's `__` collapse leaving a cut name a few units
+  over when the cut tail holds many `__` runs, and a template repeating `{handle}` ~25 times (contrived; the gate refuses
+  in its sentence); a 33+ character unbroken source host clipped in a Reference Search tile (polish); the asset drop on a
+  layerless canvas not asking (undoable); the Clip Kit's no-captions toast at 6 s; the guide's "beside it" wording; the
+  Audio Studio page's 14 px scroll at 2560x1440 (overflow-auto by design); the audio and streamer readers' unmeasured
+  notes (5.1 at 192 kb/s, a 4K kit thumbnail over a platform's size cap, a 60 fps capture default — the owner
+  hand-check); SecondaryTrackPanel's claim across a probe with no deadline (unreproduced); bare awaited settings reads
+  (unreproduced). One track so far (renderer: lib/keyOwnership.ts and its four callers); the
+  ffmpeg reader measured clean on both binaries and was sent back to complete its file reads; a finding from that
+  becomes Track B. Also not counted (ffmpeg): an AAC 5.1(side) layout written as a PCE (, every
+  AAC writer, no player measured: the T-184 5.1 class); PiP's last two frames on an odd-sized base with a short overlay
+  (80 ms); a 60 fps GIF's clamped delays (the panel caps at 30).
+
+  **Track A — a shortcut is the key, on any keyboard layout (item 1).**
+  1. **[LOW] Ctrl+Z / Ctrl+Y and the bare-letter shortcuts are dead on a non-Latin keyboard layout**
+     (hooks/useUndoRedoHotkeys.ts:40-42 `undoRedoIntent`: `const key = e.key.toLowerCase(); key === 'z'` / `'y'`, the
+     window-level Undo / Redo of Video Studio, Audio Studio and Stream Graphics; modules/image-studio/ImageStudio.tsx:67-76,
+     the tool keys V R O L P; modules/video-studio/Player.tsx:362-380 and Timeline.tsx:140-160, `,` `.` I O). On a Cyrillic,
+     Greek (or any non-Latin) layout `KeyboardEvent.key` is that layout's letter — "я" for the Z key, "н" for Y, "к" for R,
+     "ш" for I (LESSONS_LEARNED, T-155 (2)) — so every one of these returns nothing: Ctrl+Z does not undo, Ctrl+Y does not
+     redo, R does not pick the rectangle, I does not set the In point (executed: `undoRedoIntent({ key: 'я', ctrlKey: true
+     … })` is `null`). The header and toolbar buttons still work; every other Windows app undoes on Ctrl+Z whatever layout is
+     active. T-155 (2) read the paste chord by position (`e.code === 'KeyV'`) at ImportPanel.tsx:95-99 only. Fix:
+     - ONE helper in lib/keyOwnership.ts, beside `hasChordModifier`: `shortcutKey(e: { key: string; code: string }):
+       string`. The letter a LATIN layout prints wins, so AZERTY's Z (code `KeyW`) is still Z and its W (code `KeyZ`) is
+       not Z: when `e.key` is one ASCII letter, it is that letter in lower case; otherwise, when `e.code` is `Key<A-Z>`,
+       that letter in lower case (a non-Latin layout's letter falls back to the key's position); otherwise, when `e.code`
+       is `Comma` or `Period` and `e.key` is not printable ASCII, `,` or `.`; otherwise `e.key` unchanged (named keys:
+       Space, the arrows, Home, End, Delete, Backspace, Escape, Enter, Insert).
+     - `undoRedoIntent` reads `shortcutKey` (its `UndoRedoKey` input gains `code`; the hook passes `e.code`). ImageStudio's
+       tool keys, the Player's and the Timeline's switches match `shortcutKey(e)` (the upper-case `case` labels go: the
+       helper lowers a letter). ImportPanel's paste guard becomes `shortcutKey(e) === 'v'` (plus Insert, unchanged), so one
+       rule holds everywhere; its T-155 cases stay green.
+     - Unchanged on purpose, each listed with its reason in the hand-back: HotkeyOverlay's `?` (a typed character every
+       layout produces, and on a Russian layout the Slash key types `.`); `hasChordModifier` and its AltGr simplification;
+       the named-key cases.
+  Covering tests: unit (NEW describes at the ends of the files) — keyOwnership.test.ts: `shortcutKey` table — US `z`/KeyZ
+  → z; Russian `я`/KeyZ → z; Greek `ζ`/KeyZ → z; Shift `Z`/KeyZ → z; AZERTY `z`/KeyW → z AND `w`/KeyZ → w (the
+  discrimination: the position is only a fallback); Russian `б`/Comma → `,` and `ю`/Period → `.`; Russian `.`/Slash → `.`;
+  `ArrowLeft`, ` `, `Delete`, `Insert` unchanged. useUndoRedoHotkeys.test.ts: Ctrl+`я`/KeyZ → undo, Ctrl+`н`/KeyY → redo,
+  Ctrl+Shift+`я`/KeyZ → redo, AZERTY Ctrl+`w`/KeyZ → null, the text-field and dialog guards unchanged for the non-Latin
+  key. e2e (NEW describes, events dispatched with a non-Latin `key` and the real `code`, the T-155 (2) shape) —
+  image.spec.ts: `к`/KeyR picks the rectangle tool (its button pressed) and Ctrl+`я`/KeyZ removes the layer just added
+  (and Ctrl+`н`/KeyY brings it back); video-core.spec.ts: `ш`/KeyI and `щ`/KeyO set the selected clip's In and Out points
+  (the clip's times move) with focus on the Player and on the Timeline, and Ctrl+`я`/KeyZ puts the In point back;
+  audio.spec.ts: Ctrl+`я`/KeyZ undoes a Cleanup preset. Red on the base each. Wiring: interactionWiring.test.ts pins
+  that no renderer keydown handler compares `e.key` to a letter except through `shortcutKey`.
+  Docs: IC rows for each shortcut revised in place ([REVISED by T-185 (1)]), a "Dispositions - round 134" section; STYLE_GUIDE
+  (the keyboard rule: a shortcut is matched through `shortcutKey`); LESSONS at the TOP; TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (the expediter runs test:media and the full suite on the merged tree); no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 134)
+
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
