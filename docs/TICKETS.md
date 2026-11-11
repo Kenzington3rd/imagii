@@ -9830,6 +9830,80 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 137 — see the Done entry)
 
+## T-189 — sweep-76 fixes (round 138)
+
+- **Spec:** the seventy-sixth sweep's verified findings (candidate clean pass #1 on 208bac4, the T-188 tree; the count
+  stays at 0). Item 1 found by the a11y reader (STYLE_GUIDE's swap rule, "When a press swaps the focused control for
+  other content, focus is put on the new content's primary control", at a site no disposition names); item 2 found and
+  executed by QA renderer reader B (the T-121 precedent: the T-119 docblock's "read with a default" was false for
+  `textOverlays`, and it is false for a partial grade); item 3 found by QA renderer reader A and traced by the expediter
+  further (the stale stroke is later saved as a layer). All three confirmed against source. Not counted: design reader
+  1's hand-drawn Record convert bar (a decided exception, STYLE_GUIDE "two decided exceptions", pinned by
+  runningJobControls.test.ts); QA main's "colorGrade oddities: no crash" (refuted by item 2); a clip's `cropRect` of `{}`
+  and a hand-edited `denoiseParams` (NaN readouts, no throw; hand-edited only); `isSafeToAutosave` not judging canvas
+  shape (no first-party layer fails the rule; the hostile-renderer class); the Electron reader's `autosave:write(null)`
+  TypeError (main stays up; hostile renderer); a several-file drop, Delete on a locked layer and the other sweep-75
+  rulings (s76 brief); the ledgered T-110 letters each reader named. Two tracks, disjoint files: Track A = items 1 and 3
+  (renderer: image-studio/Toolbar.tsx, image-studio/Canvas.tsx, and the item-1 class sites such as
+  audio-studio/SecondaryTrackPanel.tsx); Track B = item 2 (shared/validators.ts, shared/projectValidation.ts). The
+  ffmpeg reader was still out when this ticket was written; a finding from it becomes Track C.
+
+  **Track A — the keyboard keeps its place, and a stroke ends when its tool does (items 1 and 3).**
+  1. **[LOW] Stream Graphics' "+ More" removes the button the keyboard just pressed, and focus falls to the page**
+     (image-studio/Toolbar.tsx:66-74: `setAdvancedOpen(true)` makes `showAdvanced` true and `{!showAdvanced ? <button>+
+     More</button> : null}` unmounts the focused button; nothing in Toolbar calls `.focus()`). The next Tab starts at
+     the top of the window instead of at the Line and Pencil tools the person asked for. The same happens when L or P is
+     pressed while "+ More" has focus (`activeIsAdvanced` flips `showAdvanced`). Fix: STYLE_GUIDE's rule — an effect
+     keyed on the swap, declared above any early return, that puts focus on the first revealed tool (Line) when "+ More"
+     is removed while it holds focus; a reveal while focus is elsewhere moves nothing. Class sweep: every renderer press
+     that removes the control it was pressed on and puts other content in its place (audio-studio/SecondaryTrackPanel.tsx
+     :101-120, the role buttons replaced by the track's controls once a file is picked, and :128-133, Remove swapping
+     back, were flagged unverified) — fix each that is this class in the same way (focus the new content's primary
+     control), and name each one that is not (T-140's busy-disable drops stay ruled). List every site with its
+     disposition.
+  3. **[LOW] A tool key pressed mid-Pencil-stroke strands the stroke, and a later release saves it as a layer**
+     (image-studio/Canvas.tsx:246-253: `handleMouseUp` clears `pencilPoints` only when the CURRENT tool is pencil;
+     ImageStudio.tsx:69-79 switches tools on V / R / O / L / P during a held button). Hold the button with Pencil, press
+     V, release: the orange preview stays (unselectable, not exported) and `drawInProgress` keeps the window `mouseup`
+     listener; press P and move with no button down and the stale stroke follows the pointer (T-124 (10)'s symptom),
+     and the next release anywhere adds it as a Pencil layer. Fix: a tool change ends any draw in progress — an effect
+     keyed on `tool` clears `pencilPoints` and `drawing`, adding nothing (the rect / ellipse / line drag already drops
+     its shape on such a release; its preview now goes at the key press too).
+  Covering tests: e2e (image.spec.ts NEW describe) — a keyboard Enter and a Space on "+ More" leave focus on the Line
+  tool, and L pressed with "+ More" focused leaves it on Line (red on the base: `document.activeElement` is the body);
+  a mouse click on "+ More" still reveals both tools; Pencil held, V pressed, released → no new layer and no preview on
+  the chrome layer; then P and a move with no button and a release → still no new layer (red on the base: a Pencil layer
+  appears); a rect drag with V pressed mid-drag leaves no preview and no layer. E2E (audio.spec.ts NEW describe) for each
+  class site fixed. Docs: IC rows revised in place plus a "Dispositions - round 138, Track A" section; LESSONS at the
+  TOP; TESTING paragraph; STYLE_GUIDE's swap rule names the new sites; USER_GUIDE only if words change.
+
+  **Track B — a clip's colour grade is checked where the project opens (item 2).**
+  2. **[LOW] A project or autosave whose clip holds a malformed `colorGrade` opens, then crashes Video Studio on every
+     visit** (shared/projectValidation.ts:206-219 `validateClipRequiredFields` never looks at `colorGrade`; its docblock
+     says the grade is "read with a default", true only when it is absent; video-studio/ColorGradePanel.tsx:15 `clip.
+     colorGrade ?? DEFAULT_COLOR_GRADE` keeps a partial object and each slider's `formatValue` calls `v.toFixed(2)` on
+     the missing field, :45-72, :138, :140). `colorGrade: {}`, `"x"` or a grade with a `null` field is accepted (executed):
+     the route throws in render whenever a clip is selected, and the autosave re-crashes on Restore. Main checks the grade
+     only at export (shared/validators.ts:108-115 `assertOptionalColorGrade`, :133). Fix: ONE rule for both gates — the
+     export gate's (absent or `null` is fine; otherwise a plain object with `brightness` -1..1, `contrast` 0..4,
+     `saturation` 0..3, `temperature` -1..1, each a finite number), written ONCE as a predicate exported from
+     projectValidation.ts (validators.ts already imports `isValidTextOverlay` from it, so the reverse import would be a
+     cycle) that `assertOptionalColorGrade` calls, and `validateClipRequiredFields` refusing in the existing reason style
+     (`videoStudio.clips[<i>].colorGrade …`). Correct the docblock (a grade is read with a default when it
+     is absent). Class grep: every other optional clip field the validator leaves to "a default" (`cropRect`, the speed,
+     the effect flags) — what a malformed one does in render; fix any that throws, and list the rest with what they do.
+  Covering tests: unit (NEW describe in the projectValidation test file) — `{}`, `"x"`, a `null` field, `NaN`, an
+  out-of-range value refused with the reason; an absent grade, `null`, the default grade and a full in-range grade
+  accepted; the export gate and the open gate agree on every case (one rule). E2E (NEW describe at the end of the spec
+  that owns Home's Open project): a project whose clip has `colorGrade: {}` is refused with Home's open-failure sentence
+  and Video Studio opens without the crash screen — red on the base. Docs: IC rows; a "Dispositions - round 138, Track
+  B" section; LESSONS at the TOP; TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 138)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
