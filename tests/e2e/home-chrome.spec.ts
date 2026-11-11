@@ -4859,3 +4859,92 @@ test.describe('T-184 (4), (5): the autosave banner is announced and sits with it
     }
   })
 })
+
+// ── T-188 (1): a project whose canvas cannot be drawn is refused at Open, not opened into a crash ────────────────────────────────────────────
+//
+// `validateProject` held `doc.layers` to an array and never looked at its elements (T-119), so a hand-edited or damaged `.imagii.json` with `layers: [null]` opened ("Project
+// loaded"), and Stream Graphics then threw on every visit (`layer.id` in the Layers panel), "Reload to Home" did not help (the document stays in the store) and autosave wrote it for
+// Restore to crash again. Now Open refuses it with Home's open-failure sentence and the studio opens clean; and a rect that only lacks `rotation` (which the store counts as 0)
+// opens, draws, and shows Rotation 0. Both are red on the base: the first opens ("Project loaded", then the crash screen), the second crashes the Properties panel
+// (`layer.rotation.toFixed`) when the rect is selected.
+test.describe('T-188 (1): a project whose canvas cannot be drawn is refused at Open', () => {
+  const OPEN_FAILED = "Couldn't open that project. The file may be damaged, or it was saved by a newer version of imagii."
+  const CRASH = 'Something went wrong in this studio'
+
+  function canvasFile(root: string, name: string, layers: unknown[]): string {
+    const file = path.join(root, name)
+    writeFileSync(
+      file,
+      JSON.stringify({ schemaVersion: 5, savedAt: Date.now(), appVersion: '1.0.0', imageCanvas: { doc: { width: 1200, height: 800, background: '#ffffff', layers } } }),
+      'utf8'
+    )
+    return file
+  }
+
+  async function openFromHome(app: ElectronApplication, window: Page, file: string): Promise<void> {
+    await recordSlowChooser(app, { files: [file] })
+    await window.getByRole('button', { name: 'Open project' }).click()
+  }
+
+  async function intoStreamGraphics(window: Page): Promise<void> {
+    await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+    await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+  }
+
+  test('a canvas holding a null layer is refused with the open-failure sentence, nothing is applied, and Stream Graphics opens without the crash screen', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t188-null-layer')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const damaged = canvasFile(root, 'damaged.imagii.json', [null])
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await openFromHome(app, window, damaged)
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(OPEN_FAILED)
+      expect(await readToastLog(window), 'the open did not say it loaded').not.toContain('Project loaded')
+
+      await intoStreamGraphics(window)
+      await expect(window.getByRole('heading', { name: /^Layers \(/ }), 'nothing of the refused file was applied: the empty studio has no Layers panel').toHaveCount(0)
+      await expect(window.getByText(CRASH), 'no crash screen').toHaveCount(0)
+      await expect(window.getByRole('alert')).toHaveCount(0)
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+
+  test('a rect with no rotation opens, Stream Graphics draws it, and selecting it shows Rotation 0', async () => {
+    test.setTimeout(180_000)
+    const root = makeRoot('t188-no-rotation')
+    const userDataDir = path.join(root, 'userData')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const bare = rectLayer('Rect without rotation')
+    delete bare.rotation
+    const file = canvasFile(root, 'norotation.imagii.json', [bare])
+    expect(readFileSync(file, 'utf8').includes('"rotation"'), 'the file really has no rotation key').toBe(false)
+    const app = await launchApp(userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await waitForHome(window)
+      await installToastLog(window)
+      await openFromHome(app, window, file)
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Project loaded')
+
+      await intoStreamGraphics(window)
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      const layers = window.locator('[data-tutorial="image-layers"]')
+      await expect(layers.getByText('Rect without rotation', { exact: true })).toBeVisible()
+      await layers.getByRole('button', { name: 'Rect without rotation' }).click()
+      await expect(window.getByText(CRASH), 'selecting it does not crash the Properties panel').toHaveCount(0)
+      await expect(window.getByRole('spinbutton', { name: 'Rotation' }), 'Rotation reads 0').toHaveValue('0')
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

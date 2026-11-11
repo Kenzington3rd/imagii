@@ -1210,7 +1210,7 @@ describe('structurally empty studios are refused, named by field (T-119)', () =>
 
     it('accepts a document with layers, and one with none (an empty canvas is a canvas)', () => {
       expect(validateProject(withDoc({ width: 1280, height: 720, background: '#000000', layers: [] })).ok).toBe(true)
-      expect(validateProject(withDoc({ width: 10, height: 10, background: '#fff', layers: [{ id: 'l1', type: 'rect' }] })).ok).toBe(true)
+      expect(validateProject(withDoc({ width: 10, height: 10, background: '#fff', layers: [{ id: 'l1', type: 'rect', name: 'Rectangle', visible: true, locked: false, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, width: 5, height: 5, fill: '#ff5c00', stroke: '#ffffff', strokeWidth: 1, cornerRadius: 0 }] })).ok).toBe(true)
     })
   })
 
@@ -1449,5 +1449,153 @@ describe('a clip\'s customPresetIds is required to be a list of strings, or abse
     const clips = result.project.videoStudio?.clips ?? []
     expect(clips.map((c) => c.customPresetIds)).toEqual([undefined, ['p1'], ['p2']])
     expect(clips[1]).toMatchObject({ id: 'c2', name: 'Second', startSec: 0, endSec: 5, selectedPresets: ['youtube'] })
+  })
+})
+
+/**
+ * T-188 (1): a Stream Graphics canvas whose layers cannot be drawn is refused, named by layer and field. T-119 held `doc.layers` to an array and never looked at its
+ * elements: `[null]`, `[{}]`, a rect with no `width` and a document with no size all validated, then threw in render on every visit (and an autosave of one re-crashed on
+ * Restore). The shapes below are the ticket's; each refusal asserts its whole reason, so a guard that fires on the wrong field does not pass.
+ */
+describe('a canvas whose layers cannot be drawn is refused, named by layer and field (T-188 (1))', () => {
+  const rect = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'r1', type: 'rect', name: 'Rectangle', visible: true, locked: false, x: 1, y: 2, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1,
+    width: 200, height: 120, fill: '#ff5c00', stroke: '#ffffff', strokeWidth: 2, cornerRadius: 8, ...over
+  })
+  const base = (type: string, over: Record<string, unknown>): Record<string, unknown> => ({
+    id: `${type}1`, type, name: type, visible: true, locked: false, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, ...over
+  })
+  const image = (over: Record<string, unknown> = {}): Record<string, unknown> => base('image', { src: 'data:image/png;base64,AAAA', width: 10, height: 10, ...over })
+  const ellipse = (over: Record<string, unknown> = {}): Record<string, unknown> => base('ellipse', { radiusX: 80, radiusY: 60, fill: '#fff', stroke: '#000', strokeWidth: 2, ...over })
+  const line = (over: Record<string, unknown> = {}): Record<string, unknown> => base('line', { points: [0, 0, 10, 10], stroke: '#fff', strokeWidth: 3, closed: false, ...over })
+  const text = (over: Record<string, unknown> = {}): Record<string, unknown> => base('text', { text: 'Hi', fontSize: 32, fontFamily: 'Inter, sans-serif', fill: '#000', ...over })
+
+  const project = (layers: unknown[], doc: Record<string, unknown> = {}): unknown => ({
+    ...baseProject,
+    imageCanvas: { doc: { width: 1200, height: 800, background: '#ffffff', layers, ...doc } }
+  })
+  const reasonOf = (input: unknown): string => {
+    const r = validateProject(input)
+    if (r.ok) throw new Error('expected a refusal, got ok')
+    return r.reason
+  }
+
+  it.each([
+    ['null', [null], 'imageCanvas.doc.layers[0] not an object'],
+    ['an empty object', [{}], 'imageCanvas.doc.layers[0].id missing'],
+    ['a number', [5], 'imageCanvas.doc.layers[0] not an object'],
+    ['an array', [[]], 'imageCanvas.doc.layers[0] not an object'],
+    ['the second layer, not the first', [rect(), null], 'imageCanvas.doc.layers[1] not an object'],
+    ['an empty id', [rect({ id: '' })], 'imageCanvas.doc.layers[0].id missing'],
+    ['an id that is a number', [rect({ id: 7 })], 'imageCanvas.doc.layers[0].id missing'],
+    ['an unknown type', [rect({ type: 'star' })], 'imageCanvas.doc.layers[0].type unknown'],
+    ['a type that is an Object.prototype name', [rect({ type: 'toString' })], 'imageCanvas.doc.layers[0].type unknown'],
+    ['a name that is not a string', [rect({ name: 3 })], 'imageCanvas.doc.layers[0].name not a string'],
+    ['visible that is not a boolean', [rect({ visible: 'yes' })], 'imageCanvas.doc.layers[0].visible not a boolean'],
+    ['locked that is not a boolean', [rect({ locked: 0 })], 'imageCanvas.doc.layers[0].locked not a boolean'],
+    ['x of NaN (null in JSON)', [rect({ x: null })], 'imageCanvas.doc.layers[0].x not a number'],
+    ['y that is a string', [rect({ y: '5' })], 'imageCanvas.doc.layers[0].y not a number'],
+    ['scaleX missing', [rect({ scaleX: undefined })], 'imageCanvas.doc.layers[0].scaleX not a number'],
+    ['scaleY of Infinity', [rect({ scaleY: Infinity })], 'imageCanvas.doc.layers[0].scaleY not a number'],
+    ['opacity of Infinity', [rect({ opacity: Infinity })], 'imageCanvas.doc.layers[0].opacity not a number'],
+    ['a rotation that is present and not a number', [rect({ rotation: 'left' })], 'imageCanvas.doc.layers[0].rotation not a number'],
+    ['a rotation of null', [rect({ rotation: null })], 'imageCanvas.doc.layers[0].rotation not a number'],
+    ['a rect with no width', [rect({ width: undefined })], 'imageCanvas.doc.layers[0].width not a number'],
+    ['a rect with no height', [rect({ height: undefined })], 'imageCanvas.doc.layers[0].height not a number'],
+    ['a rect with no strokeWidth', [rect({ strokeWidth: undefined })], 'imageCanvas.doc.layers[0].strokeWidth not a number'],
+    ['a rect with no cornerRadius', [rect({ cornerRadius: undefined })], 'imageCanvas.doc.layers[0].cornerRadius not a number'],
+    ['a rect with no fill', [rect({ fill: undefined })], 'imageCanvas.doc.layers[0].fill not a string'],
+    ['a rect with a stroke that is a number', [rect({ stroke: 5 })], 'imageCanvas.doc.layers[0].stroke not a string'],
+    ['an image with no src', [image({ src: undefined })], 'imageCanvas.doc.layers[0].src not a string'],
+    ['an image with no width', [image({ width: undefined })], 'imageCanvas.doc.layers[0].width not a number'],
+    ['an image with a height of NaN', [image({ height: NaN })], 'imageCanvas.doc.layers[0].height not a number'],
+    ['an ellipse with no radiusX', [ellipse({ radiusX: undefined })], 'imageCanvas.doc.layers[0].radiusX not a number'],
+    ['an ellipse with no radiusY', [ellipse({ radiusY: undefined })], 'imageCanvas.doc.layers[0].radiusY not a number'],
+    ['an ellipse with no fill', [ellipse({ fill: undefined })], 'imageCanvas.doc.layers[0].fill not a string'],
+    ['a line whose points are not a list', [line({ points: 'abc' })], 'imageCanvas.doc.layers[0].points not a list of numbers'],
+    ['a line whose points hold a string', [line({ points: [0, 0, '10', 10] })], 'imageCanvas.doc.layers[0].points not a list of numbers'],
+    ['a line whose points hold null', [line({ points: [0, null] })], 'imageCanvas.doc.layers[0].points not a list of numbers'],
+    ['a line with no stroke', [line({ stroke: undefined })], 'imageCanvas.doc.layers[0].stroke not a string'],
+    ['a line with no strokeWidth', [line({ strokeWidth: undefined })], 'imageCanvas.doc.layers[0].strokeWidth not a number'],
+    ['a line with closed not a boolean', [line({ closed: 'no' })], 'imageCanvas.doc.layers[0].closed not a boolean'],
+    ['a text with no fontSize', [text({ fontSize: undefined })], 'imageCanvas.doc.layers[0].fontSize not a number'],
+    ['a text with no text', [text({ text: undefined })], 'imageCanvas.doc.layers[0].text not a string'],
+    ['a text with no fontFamily', [text({ fontFamily: undefined })], 'imageCanvas.doc.layers[0].fontFamily not a string'],
+    ['a text with no fill', [text({ fill: undefined })], 'imageCanvas.doc.layers[0].fill not a string']
+  ])('refuses %s', (_what, layers, reason) => {
+    expect(reasonOf(project(layers))).toBe(reason)
+  })
+
+  it.each([
+    ['no width', { width: undefined }, 'imageCanvas.doc.width not a number above 0'],
+    ['a width of 0', { width: 0 }, 'imageCanvas.doc.width not a number above 0'],
+    ['a negative width', { width: -5 }, 'imageCanvas.doc.width not a number above 0'],
+    ['a width that is a string', { width: '1200' }, 'imageCanvas.doc.width not a number above 0'],
+    ['a width of Infinity', { width: Infinity }, 'imageCanvas.doc.width not a number above 0'],
+    ['no height', { height: undefined }, 'imageCanvas.doc.height not a number above 0'],
+    ['a height of 0', { height: 0 }, 'imageCanvas.doc.height not a number above 0'],
+    ['a height of NaN', { height: NaN }, 'imageCanvas.doc.height not a number above 0'],
+    ['no background', { background: undefined }, 'imageCanvas.doc.background not a string'],
+    ['a background that is a number', { background: 0 }, 'imageCanvas.doc.background not a string']
+  ])('refuses a document with %s', (_what, doc, reason) => {
+    expect(reasonOf(project([], doc))).toBe(reason)
+  })
+
+  it('a rect with no rotation is accepted and read as rotation 0, written onto the layer (the store counts a layer with no rotation as 0)', () => {
+    const bare = (): Record<string, unknown> => {
+      const l = rect()
+      delete l.rotation
+      return l
+    }
+    const r = validateProject(project([bare()]))
+    if (!r.ok) throw new Error(r.reason)
+    const layers = r.project.imageCanvas?.doc.layers ?? []
+    expect(layers).toHaveLength(1)
+    expect(layers[0]?.rotation).toBe(0)
+    expect('rotation' in (layers[0] ?? {})).toBe(true)
+    // Through the real string path too: JSON has no undefined, so "missing" is a key that is not there.
+    const text0 = JSON.stringify(project([bare()]))
+    expect(text0.includes('rotation')).toBe(false)
+    const viaString = validateProjectJsonString(text0)
+    if (!viaString.ok) throw new Error(viaString.reason)
+    expect(viaString.project.imageCanvas?.doc.layers[0]?.rotation).toBe(0)
+  })
+
+  it('a rotation that is present is kept as written, a negative and a fractional one included', () => {
+    for (const rotation of [0, 45, -90, 12.5]) {
+      const r = validateProject(project([rect({ rotation })]))
+      if (!r.ok) throw new Error(r.reason)
+      expect(r.project.imageCanvas?.doc.layers[0]?.rotation).toBe(rotation)
+    }
+  })
+
+  it('control: one layer of every type, hint and kind left off or on, validates and loads exactly as written', () => {
+    const layers = [image({ hint: true }), rect(), ellipse(), line({ closed: true }), text({ hint: false })]
+    const input = project(layers, { kind: 'channel-art' })
+    const before = JSON.stringify(input)
+    const r = validateProject(input)
+    if (!r.ok) throw new Error(r.reason)
+    expect(JSON.stringify(r.project)).toBe(before)
+  })
+
+  it('controls: colours are NOT judged (a crafted colour draws, it does not crash: the T-110 (g) class), and neither is hint or an empty line', () => {
+    expect(validateProject(project([rect({ fill: 'not a colour', stroke: '' })])).ok).toBe(true)
+    expect(validateProject(project([text({ fill: 'javascript:alert(1)' })])).ok).toBe(true)
+    expect(validateProject(project([line({ points: [] })])).ok).toBe(true)
+    expect(validateProject(project([rect({ hint: 'sure' })])).ok).toBe(true)
+  })
+
+  it('every layer is checked, not just the first, and the first bad one is the one named', () => {
+    expect(reasonOf(project([rect(), rect({ id: 'r2' }), rect({ id: 'r3', width: 'x' }), null]))).toBe('imageCanvas.doc.layers[2].width not a number')
+  })
+
+  it('the layers array check still comes first, and the same text as before', () => {
+    expect(reasonOf({ ...baseProject, imageCanvas: { doc: {} } })).toBe('imageCanvas.doc.layers not an array')
+  })
+
+  it('the reasons reach the person as the damaged-file sentence path does: a plain string, no stack, no JSON', () => {
+    const r = validateProjectJsonString(JSON.stringify(project([null])))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('imageCanvas.doc.layers[0] not an object')
   })
 })

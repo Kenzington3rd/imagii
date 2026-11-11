@@ -14,6 +14,16 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-11 - T-188 (round 137): a validator that checks an array is an array has not checked what is in it
+
+The seventy-fifth sweep (item 1).
+
+- **Bug.** A project or autosave whose Stream Graphics canvas held `layers: [null]`, `[{}]`, a rect with no `width` or a document with no size was accepted ("Project loaded"), and Stream Graphics then threw on every visit (`layer.id` in the Layers panel, `rotation.toFixed` in Properties). "Reload to Home" did not help (the document stays in the store), and autosave wrote the document so Restore crashed again.
+- **Root cause.** T-119 (12) fixed the empty studio (`doc: {}`) by requiring `doc.layers` to be an array and stopped one level short: nothing looked at the elements, which are what the renderer reads.
+- **Fix.** `validateLayerRequiredFields` (per layer, per type, reasons `imageCanvas.doc.layers[i].<field> ...`) and `validateCanvasDocFields` (finite `width` / `height` above 0, string `background`) in shared/projectValidation.ts. A missing `rotation` reads as 0, written by the validator. Colours are not judged (T-110 (g)).
+- **Test.** projectValidation.test.ts "a canvas whose layers cannot be drawn is refused" (red on the base except its four guards), autosave.test.ts "autosave read: a canvas that cannot be drawn", canvasStore.test.ts "every canvas the app makes passes validateProject" (the control: every template, asset scene, constructor), home-chrome.spec.ts "T-188 (1)" (both red on the base).
+- **Lesson.** When a validator is extended to "this field is a list", the next question is what the list's elements are read as, and whether the app's own writers pass the stricter rule: the control that runs every template and constructor through it is what makes the rule safe to tighten. And a test that asserts a file lacks a key must search for the quoted key, not the word (the layer's name contained it).
+
 ## 2026-11-11 - T-187 (round 136), Track A: "applied when you leave the box" has to hold for every way of leaving it, including the box being removed
 
 The seventy-fourth sweep, Track A (items 1 and 2).

@@ -590,3 +590,65 @@ describe('autosave writes are serialized (T-139 (3))', () => {
     expect(await readdir(dir())).toEqual([])
   })
 })
+
+/**
+ * T-188 (1): main validates an autosave with the same `validateProject` a project open uses, so a damaged Stream Graphics canvas in the file is refused by the real read
+ * (the Home banner then offers Clear, not a Restore that crashes the studio), the good backup behind it still recovers, and a layer with no `rotation` restores as 0.
+ * The real module on real files; only electron's `userData` is pointed at a temp folder.
+ */
+describe('autosave read: a canvas that cannot be drawn (T-188 (1))', () => {
+  const dir = (): string => path.join(tempDir, 'autosave')
+  const rect = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'r1', type: 'rect', name: 'Rectangle', visible: true, locked: false, x: 1, y: 2, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1,
+    width: 200, height: 120, fill: '#ff5c00', stroke: '#ffffff', strokeWidth: 2, cornerRadius: 8, ...over
+  })
+  const withCanvas = (layers: unknown[], doc: Record<string, unknown> = {}): string =>
+    JSON.stringify({ schemaVersion: MAX_SCHEMA_VERSION, savedAt: Date.now(), appVersion: '1.0.0', imageCanvas: { doc: { width: 1200, height: 800, background: '#ffffff', layers, ...doc } } })
+
+  it.each([
+    ['a null layer', withCanvas([null]), 'imageCanvas.doc.layers[0] not an object'],
+    ['an empty layer', withCanvas([{}]), 'imageCanvas.doc.layers[0].id missing'],
+    ['a rect with no width', withCanvas([rect({ width: undefined })]), 'imageCanvas.doc.layers[0].width not a number'],
+    ['a document with no width', withCanvas([], { width: undefined }), 'imageCanvas.doc.width not a number above 0']
+  ])('refuses %s with its reason and an age, and leaves the file untouched', async (_what, bytes, reason) => {
+    const m = await buildAutosaveModule()
+    await mkdir(dir(), { recursive: true })
+    await writeFile(path.join(dir(), 'autosave.json'), bytes, 'utf8')
+    const r = await m.readAutosave()
+    expect(r.ok).toBe(false)
+    expect(r.reason).toBe(reason)
+    expect(r.project).toBeUndefined()
+    expect(r.info?.exists).toBe(true)
+    expect(r.info?.savedAt, 'a refused file has no savedAt, the banner reads its age from the mtime').toBeUndefined()
+    expect(typeof r.info?.ageMs).toBe('number')
+    expect((await m.getAutosaveInfo()).savedAt).toBeUndefined()
+    expect(await readFile(path.join(dir(), 'autosave.json'), 'utf8')).toBe(bytes)
+  })
+
+  it('the good backup behind a damaged canvas still recovers, and says why', async () => {
+    const m = await buildAutosaveModule()
+    await mkdir(dir(), { recursive: true })
+    await writeFile(path.join(dir(), 'autosave.json'), withCanvas([null]), 'utf8')
+    await writeFile(path.join(dir(), 'autosave.prev.json'), withCanvas([rect()]), 'utf8')
+    const r = await m.readAutosave()
+    expect(r.ok).toBe(true)
+    expect(r.reason).toBe('recovered from backup (imageCanvas.doc.layers[0] not an object)')
+    expect(r.project?.imageCanvas?.doc.layers).toHaveLength(1)
+  })
+
+  it('a layer with no rotation restores as rotation 0, and a whole canvas of every field restores as written', async () => {
+    const m = await buildAutosaveModule()
+    await mkdir(dir(), { recursive: true })
+    const bare = rect()
+    delete bare.rotation
+    await writeFile(path.join(dir(), 'autosave.json'), withCanvas([bare]), 'utf8')
+    const r = await m.readAutosave()
+    expect(r.ok).toBe(true)
+    expect(r.project?.imageCanvas?.doc.layers[0]?.rotation).toBe(0)
+    const whole = withCanvas([rect()])
+    await writeFile(path.join(dir(), 'autosave.json'), whole, 'utf8')
+    const again = await m.readAutosave()
+    expect(again.ok).toBe(true)
+    expect(JSON.stringify(again.project)).toBe(whole)
+  })
+})

@@ -18,6 +18,7 @@ import { CANVAS_TEMPLATES } from '../templates'
 import { ASSET_CATALOG } from '../../references/assetCatalog'
 import { READABLE_CONTRAST, contrastRatio, estimatedTextBox, newTextLook, surfacesUnder, worstContrast } from '@shared/newText'
 import { BG_BASE, INK_BASE } from '../../../styles/tokens'
+import { MAX_SCHEMA_VERSION, validateProject } from '@shared/projectValidation'
 
 /**
  * T-91 — a hint layer is guidance that never exports, and the one thing that
@@ -984,5 +985,57 @@ describe('makeLineLayer names the layer for the tool that drew it (T-174 (3))', 
     useCanvasStore.getState().addLayer(makeLineLayer([0, 0, 30, 30, 60, 10], 'Pencil'))
     const layers = useCanvasStore.getState().doc.layers
     expect(layers[layers.length - 1]?.name).toBe('Pencil')
+  })
+})
+
+/**
+ * T-188 (1), the control for the per-layer rule in `validateProject`: every canvas the app itself makes is a project the app opens. The rule is "what a canvas needs to
+ * be drawn"; if a template, the default document, an asset-catalog scene or a layer one of the constructors makes failed it, the rule would be wrong for that field, not the
+ * document. Lives here (and not beside the validator) because `src/shared` is typechecked without the renderer. Green on the base by construction (nothing there refuses a
+ * layer); it goes red if the rule is tightened past a shape the app writes.
+ */
+describe('every canvas the app makes passes validateProject (T-188 (1) control)', () => {
+  const asProject = (doc: CanvasDocument): unknown => JSON.parse(JSON.stringify({ schemaVersion: MAX_SCHEMA_VERSION, savedAt: Date.now(), appVersion: '1.0.0', imageCanvas: { doc } }))
+  const reasonOf = (doc: CanvasDocument): string => {
+    const r = validateProject(asProject(doc))
+    return r.ok ? 'ok' : r.reason
+  }
+
+  it('every template document', () => {
+    expect(CANVAS_TEMPLATES.length).toBeGreaterThan(0)
+    for (const t of CANVAS_TEMPLATES) expect(reasonOf(t.doc), t.id).toBe('ok')
+  })
+
+  it('every asset-catalog scene document', () => {
+    for (const a of ASSET_CATALOG) {
+      if (a.doc !== undefined) expect(reasonOf(a.doc), a.id).toBe('ok')
+    }
+  })
+
+  it('the default document, and a document holding one layer of every kind the constructors make', () => {
+    useCanvasStore.getState().resetDocument()
+    const fresh = useCanvasStore.getState().doc
+    expect(reasonOf(fresh)).toBe('ok')
+    const layers: CanvasLayer[] = [
+      makeImageLayer('data:image/png;base64,AAAA', 40, 30),
+      makeReferenceLayer('https://example.test/p.png', 40, 30, 'A reference'),
+      makeRectLayer(10, 10),
+      makeEllipseLayer(10, 10),
+      makeLineLayer([0, 0, 20, 20]),
+      makeLineLayer([0, 0, 20, 20, 40, 10], 'Pencil'),
+      makeTextLayer(10, 10),
+      textLayerFor(fresh, 'A pasted sentence'),
+      asHint(makeTextLayer(5, 5, '@yourhandle'))
+    ]
+    expect(reasonOf({ ...fresh, layers })).toBe('ok')
+  })
+
+  it('a layer the store itself changed (rotated, flipped, scaled) still passes', () => {
+    useCanvasStore.getState().resetDocument()
+    const rect = makeRectLayer(10, 10)
+    useCanvasStore.getState().addLayer(rect)
+    useCanvasStore.getState().setRotation(rect.id, 33.5)
+    useCanvasStore.getState().updateLayer(rect.id, { scaleX: -1, scaleY: 2, opacity: 0.5 })
+    expect(reasonOf(useCanvasStore.getState().doc)).toBe('ok')
   })
 })

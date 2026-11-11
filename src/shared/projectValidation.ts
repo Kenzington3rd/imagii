@@ -3,6 +3,7 @@ import { isSafeAbsolutePath } from './pathSafety'
 import { resolveOverlayColor } from './overlayColors'
 import { secondaryTrackProblem } from './audio'
 import { PLATFORM_IDS } from './clip'
+import type { LayerType } from './canvas'
 
 /**
  * Tech-debt fix: schema version is now ranged. Validator accepts any
@@ -268,6 +269,64 @@ function validateChainRequiredFields(chain: Record<string, unknown>): string | n
 }
 
 /**
+ * T-188 (1): what each layer type draws, beyond the fields every layer has. `Record<LayerType, ...>` so a new layer type cannot be added to
+ * `canvas.ts` without the compiler asking what it holds. A `line`'s `points` and `closed` are checked by hand in `validateLayerRequiredFields`.
+ */
+const LAYER_TYPE_FIELDS: Record<LayerType, { numbers: readonly string[]; strings: readonly string[] }> = {
+  image: { numbers: ['width', 'height'], strings: ['src'] },
+  rect: { numbers: ['width', 'height', 'strokeWidth', 'cornerRadius'], strings: ['fill', 'stroke'] },
+  ellipse: { numbers: ['radiusX', 'radiusY', 'strokeWidth'], strings: ['fill', 'stroke'] },
+  line: { numbers: ['strokeWidth'], strings: ['stroke'] },
+  text: { numbers: ['fontSize'], strings: ['text', 'fontFamily', 'fill'] }
+}
+
+/**
+ * T-188 (1): the fields of a Stream Graphics layer the canvas reads without a guard. T-119 held `doc.layers` to an array and never looked at its
+ * elements, so `layers: [null]`, `[{}]` and a rect with no `width` were a valid canvas that threw in render (`layer.id` in the Layers panel, `rotation.toFixed`
+ * in Properties) on every visit, and an autosave of one re-crashed on Restore. The rule is the layer shape in `shared/canvas.ts`, per type. Colours are
+ * NOT judged (a crafted colour draws; it does not crash - the T-110 (g) class), and `hint` stays optional.
+ *
+ * A MISSING `rotation` is read as 0 and written onto the layer (the way `sanitizePlace` writes the place): the store already counts a layer with no rotation
+ * as 0 (`setRotation`'s `?? 0`), so refusing it would refuse a file nothing says is wrong. A `rotation` that is there and not a finite number is refused.
+ * Reasons are `imageCanvas.doc.layers[i].<field> <what is wrong>`, like the clip reasons.
+ */
+function validateLayerRequiredFields(layer: unknown, idx: number): string | null {
+  const at = `imageCanvas.doc.layers[${idx}]`
+  if (!isPlainObject(layer)) return `${at} not an object`
+  if (typeof layer.id !== 'string' || layer.id.length === 0) return `${at}.id missing`
+  const type = layer.type
+  if (typeof type !== 'string' || !Object.keys(LAYER_TYPE_FIELDS).includes(type)) return `${at}.type unknown`
+  if (typeof layer.name !== 'string') return `${at}.name not a string`
+  if (typeof layer.visible !== 'boolean') return `${at}.visible not a boolean`
+  if (typeof layer.locked !== 'boolean') return `${at}.locked not a boolean`
+  for (const field of ['x', 'y', 'scaleX', 'scaleY', 'opacity']) {
+    if (!isFiniteNumber(layer[field])) return `${at}.${field} not a number`
+  }
+  if (layer.rotation !== undefined && !isFiniteNumber(layer.rotation)) return `${at}.rotation not a number`
+  const fields = LAYER_TYPE_FIELDS[type as LayerType]
+  for (const field of fields.numbers) {
+    if (!isFiniteNumber(layer[field])) return `${at}.${field} not a number`
+  }
+  for (const field of fields.strings) {
+    if (typeof layer[field] !== 'string') return `${at}.${field} not a string`
+  }
+  if (type === 'line') {
+    if (!Array.isArray(layer.points) || !layer.points.every(isFiniteNumber)) return `${at}.points not a list of numbers`
+    if (typeof layer.closed !== 'boolean') return `${at}.closed not a boolean`
+  }
+  if (layer.rotation === undefined) layer.rotation = 0
+  return null
+}
+
+/** T-188 (1): the document's own size and background, which the canvas sizes its stage and its export from. */
+function validateCanvasDocFields(doc: Record<string, unknown>): string | null {
+  if (!isFiniteNumber(doc.width) || doc.width <= 0) return 'imageCanvas.doc.width not a number above 0'
+  if (!isFiniteNumber(doc.height) || doc.height <= 0) return 'imageCanvas.doc.height not a number above 0'
+  if (typeof doc.background !== 'string') return 'imageCanvas.doc.background not a string'
+  return null
+}
+
+/**
  * Migrate a v1 project to v2 in-place on the input object. v2 added an
  * optional videoStudio.srtPath field; the migration just bumps
  * schemaVersion. No data is dropped.
@@ -463,6 +522,13 @@ export function validateProject(input: unknown): ValidationResult {
     // T-119: `doc: {}` opened an empty-looking canvas whose autosave capture then threw on
     // `doc.layers.length` for the rest of the session. The layers are what the capture and the canvas read.
     if (!Array.isArray(c.doc.layers)) return { ok: false, reason: 'imageCanvas.doc.layers not an array' }
+    // T-188 (1): and what is in it. The size first (it is one field, the layers are many), then every element, so the first bad layer is the one named.
+    const docProblem = validateCanvasDocFields(c.doc)
+    if (docProblem !== null) return { ok: false, reason: docProblem }
+    for (let i = 0; i < c.doc.layers.length; i++) {
+      const reason = validateLayerRequiredFields(c.doc.layers[i], i)
+      if (reason !== null) return { ok: false, reason }
+    }
   }
   // T-47: the place record is sanitized, never fatal — see sanitizePlace.
   if (input.place !== undefined) input.place = sanitizePlace(input.place)

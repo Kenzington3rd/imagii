@@ -9828,7 +9828,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 137)
+- **Status:** done (round 137 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10406,6 +10406,37 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 137 — T-188, the one counted item of sweep 75, landed in the
+commit that carries this entry. One Sonnet worker in a fresh clone of
+ae023c9; a container restart stopped it mid-way, and it resumed from
+its clone, whose edits had survived, after rebuilding its base copy.
+Track A (item 1): a project whose canvas cannot be drawn is refused,
+not opened into a crash. `validateProject` now checks every element of
+`imageCanvas.doc.layers` (`validateLayerRequiredFields`: a plain
+object with a non-empty string id; a known type, through a
+`Record<LayerType, …>` table of the fields each type draws; a string
+name; boolean visible and locked; finite x, y, scaleX, scaleY and
+opacity; its type's finite numbers and strings; a line's points a list
+of numbers and closed a boolean) and the document's own size and
+background (`validateCanvasDocFields`), refusing in the existing
+reason style. A missing `rotation` is written as 0, as the store
+already reads it; colours and `hint` are not judged. So `layers:
+[null]`, `[{}]` or a document with no size is refused with Home's
+open-failure sentence instead of crashing Stream Graphics, an autosave
+of one is refused at Restore, and a layer with no rotation opens.
+Every template, asset-catalog scene, the default document and a layer
+from every constructor still validate (a control in
+canvasStore.test.ts). One pin moved: a T-119 accept case that used a
+partial layer is now a full rect. Expediter: the mutation (the type's
+string fields — src, fill, stroke, text, fontFamily — no longer
+checked) was killed at unit by five cases; the layer shapes at the
+oldest commit in this clone (v1.3.0) already hold every field the rule
+requires. Ledger: twelve mutations, every one killed at unit and the
+three an e2e case covers killed at e2e; every restore identical. Gates
+on the merged tree: npm run verify twice (214 files, 7081 tests each),
+test:media 538 passed and 28 skipped of 566 (518 s), and the full xvfb
+Playwright suite, 859 passed in 58.8 min, no failures.
 
 Round 136 — T-187, the three counted items of sweep 74, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of
