@@ -9421,6 +9421,170 @@ IMG-PREC.
   explicit PID only.
 - **Status:** done (round 132 — see the Done entry)
 
+## T-184 — sweep-71 fixes (round 133)
+
+- **Spec:** the seventy-first sweep's verified findings (candidate clean pass #1 on f3e594e, the T-183 tree; the count
+  stays at 0). Item 1 found by the a11y reader (the Canvas readout); its class takes the Reference Search source line
+  that T-110 (l) ledgered in sweep 12 (design reader 2 measured it again: 1.84:1 over white) — fixed with it. Item 2 is
+  a consequence of T-183, found by three readers independently: QA main (executed), streamer renderer B and UX reader 2.
+  Item 3 found and executed by QA renderer reader B. Item 4 found by the a11y reader (siblings of T-147 (7) and T-153 at
+  sites no disposition names). Item 5 found and measured by design reader 1. Item 6 found and executed by the ffmpeg
+  reader (a consequence T-110 (ab) does not name; its upgrade retires (ab)). Not counted: privacy's CSP `ws:` and the
+  thumbnail fetch's scheme (T-110 (m)), the Hugging Face CDN redirect, Electron's default User-Agent, cookie persistence
+  (unmeasurable here; the guide discloses Chromium's cache); PiP's `-t` with a late subtitle cue (exotic); 5.1 AC-3 kept
+  as 6-channel AAC on the vertical presets (no rejection measured; an initiative); whisper's non-ASCII Windows paths and
+  MAX_PATH (unmeasurable here; the owner hand-check); a crafted `.imagii.json` layer without `rotation` (the T-110 (g)
+  crafted-project class); VolumeMeter under dev StrictMode; a `<div>` inside the Duck slider's `<label>`; the
+  recent-files and output-folder races (unreproduced); `audio:export`'s bitrate unvalidated (argv only); a `{clip}`-only
+  template named like a device (T-110 (bx)); the burn-in's renderer-side concurrency guard; hostile-renderer gaps;
+  Windows reporting a too-long name as ENOENT (unverifiable here); tooltip-only disabled reasons (T-155 (4), T-110 (l));
+  dropped focus after a busy disable (T-140); the mono-in-mix −3 dB pan law (T-173 (2)); polish — the Custom presets
+  Delete names, References' Undo / Redo with no title, Title starters, a modal's sr-only h2, toast wordings, the emote
+  toast's missing "px", "webcam hole" against "Facecam hole", the wizard's unit, Variants cards, the 10x16 delete and
+  14x14 speed-reset targets. One track.
+
+  **Track A — text over a picture clears AA (1); a long name is fitted where it is built and measured in the drive's own
+  unit (2); a project open never pairs its transcript with another's preview (3); a notice that appears on its own is
+  announced (4); the autosave banner sits with what it acts on (5); the caption burn-in writes any sound an MP4 can
+  carry (6).**
+  1. **[LOW] Text drawn over a picture fails contrast over bright content** (modules/image-studio/Canvas.tsx:567, the
+     size/zoom readout `text-xs text-ink-dim … bg-bg-elevated/80`, absolutely placed at the container's bottom-right and
+     over the document's corner whenever the stage fills the container along its limiting axis — the 1024 px window, a
+     banner in a wide column; over a white corner the composite is rgb(73,66,66) and ink-dim is 3.13:1; any content
+     lighter than about #8a8a8a fails). The class (every text node drawn over a picture or a document, through a
+     translucent backing): the Reference Search tile's source line (modules/references/ReferencePanel.tsx:199,
+     `text-ink-dim` on `bg-black/60`, 1.84:1 over a white thumbnail; T-110 (l) since sweep 12, "ink-base or a /85 scrim
+     is the choice") and the mood board's scrim text (MoodBoardPanel.tsx:346, ink-base, 4.58:1 on white — clears). Fix:
+     the Canvas readout sits on an opaque `bg-bg-elevated` (ink-dim on it is 5.83:1); the Reference source line is
+     `text-ink-base`; grep for any other text over a picture (OutputPreview, SafeZoneOverlay, CropOverlay, the Player,
+     the compositor's preview, ThumbnailVariants, the AssetLibrary tiles) and list each with its worst-case ratio in the
+     hand-back (the safe-zone label halo is T-110 (l) and stays there unless it now fails outright). T-110 (l)'s
+     Reference-scrim member is marked FIXED in T-184 (1) by the expediter.
+  2. **[LOW] A long name is refused or over-cut instead of shortened as the guide promises** (a consequence of T-183).
+     (a) The Export panel always sends `outputFilename` built from the template (ExportPanel.tsx:350-369,
+     `expandFilenameTemplate`), and the Clip Kit sends `${safeName}_<slot>.mp4` / `_captions.srt` / `_thumb_N.jpg`
+     (clipKit.ts:89-141), with no cap on a clip's name (NameDialog) or a source's file name; a name over 255 is refused
+     at `assertPlainMp4Name` (ipc/video.ts:135-139) before any encode, and because the assertion text is not a finished
+     sentence the person reads only "Export failed." / "Clip Kit failed." (executed: a 245-character source with the
+     default template makes 264). USER_GUIDE:916-918 (T-183's sentence) says such a name "is shortened to fit", and
+     T-183's Done entry says renderer-built names are "cut at their end" — neither holds. (b) `fitFileName` counts UTF-8
+     bytes, but the shipped build is Windows-only, where a name holds 255 UTF-16 units: a Hangul / kana / kanji
+     character costs 1 unit on NTFS and is charged 3, so a 78-character Japanese VOD title with `_Highlight
+     1_youtube.mp4` (258 bytes, ~102 units) loses its platform tag in `nextFreePath` and the five platform files collide
+     into " (2)".." (5)"; `nameWithTail` keeps 73 characters of a 90-Hangul Reframe title (executed); v1.6.0 wrote these
+     names whole on Windows. The Clip Kit's Show in folder (ClipKitButton.tsx:344) reveals the name it built, not the
+     one that landed. Fix:
+     - `fitFileName` and `nameWithTail` (shared/filename.ts) take the unit as a parameter: `'utf16'` counts UTF-16 code
+       units (JS length; a pair is 2), `'utf8'` counts bytes as today; still whole code points, still the trailing
+       space/dot trim. Main passes the drive's unit from ONE place (a small exported constant, e.g. in
+       main/ffmpeg/outputPath.ts: `process.platform === 'win32' ? 'utf16' : 'utf8'`) at every call site T-183 added; the
+       renderer's builders pass `'utf16'` (the gate's own unit, `name.length <= 255`).
+     - The renderer fits at its builders, keeping what tells the files apart. `expandFilenameTemplate` cuts the
+       `{source}` value first and then the `{clip}` value — never `{preset}`, `{date}`, `{time}`, `{handle}`, the
+       literal template text or the extension — so the name is at most 255 units with room for `nextFreePath`'s "
+       (9999)". The Clip Kit fits its one `safeName` once, against the LONGEST kit tail (`_youtube_short.mp4`,
+       `_captions.srt`, `_thumb_N.jpg` — and the kit folder's, which main already fits) plus " (9999)", so every kit
+       file shares the same cut prefix and keeps its tail.
+     - The Clip Kit's Show in folder reveals the first file the batch REPORTS as written (its landed path), not the name
+       it built.
+     - `assertPlainMp4Name` stays the trust boundary; its length refusal becomes a finished sentence (the T-183 one:
+       "That file name is too long for the drive. Shorten the clip's or the video's name and try again.") so a name that
+       still reaches it says why.
+     - USER_GUIDE's sentence says the real rule (Windows' 255 characters; the video's or clip's name is cut and the
+       platform, size or kind at its end is kept), and `nextFreePath`'s `// simplification:` comment is updated for
+       what is now fitted at the builder.
+
+  3. **[LOW] A project open can pair its saved transcript with a different transcript's preview**
+     (modules/video-studio/store/videoStore.ts:74-81 `holdTranscript`, :621-624 `setSrtPath`; ProjectIO.ts:424-428
+     `applyVideoPart`). T-173 (4) keeps each video's transcript for the session and `loadSource` gives it back; a
+     project open then calls `setSrtPath(part.srtPath)`, which merges ONLY the path into what is held. Transcribe a
+     video (P2), Close it, open a project of the same video saved earlier with P1: the store holds `srtPath` P1 with
+     `derived.transcript` P2's segments (executed with the real store: `{ srtPath: P1, preview: 'from P2' }`). The
+     Captions panel previews P2's text while Save .srt, Burn into video and the Clip Kit use P1's file — and if "Clear
+     saved transcripts" removed P1, the preview sits over a missing file. Fix: `setSrtPath(p)` with a path that differs
+     from the held / current one clears `derived.transcript` and the held transcript (the held entry becomes `{ srtPath:
+     p, transcript: null }`), so the panel is in the state a project open with an `srtPath` and no preview always had
+     (T-174's "no first-run hint" case); the same path keeps the held segments (a project of the transcript that was
+     just made opens with its preview). Nothing else in the store changes.
+
+  4. **[LOW] A notice that appears on its own says nothing to a screen reader** (components/AutosaveRestore.tsx:209-235
+     the damaged-autosave notice and :237-266 the Restore offer, both mounted after `autosave.read()` resolves (:64-83)
+     as plain `<div>`s with no role, no live region and no toast — the recovery path after a crash;
+     video-studio/CompilationPanel.tsx:94-96 "Add a second clip to compile." and HighlightPanel.tsx:219
+     `CHAT_LOG_FORMAT_MESSAGE`, bare `<p>`s that appear on an action — removing the second clip, a chat log that parses
+     to nothing — and are the only report of it, where Export's equivalent sits in the T-153 always-mounted status
+     region and ChatHighlightPanel raises the same sentence as a toast). A region that arrives with its content is not
+     reliably read (ExportPanel.tsx:455). Fix: each sits in an ALWAYS-mounted `role="status"` wrapper, empty and
+     gap-taking (`-mb-*`, the GifPanel / ExportPanel shape) until it has text; the damaged notice may be `role="alert"`
+     (it reports a fault) — the worker's call, disclosed. Grep for every other inline sentence that appears on an action
+     or an async result with no live region and no toast, and list each with its disposition (the T-110 (l) Record
+     members stay there).
+  5. **[LOW] The autosave banner spans the whole window, its buttons far from its sentence** (AutosaveRestore.tsx:238
+     the offer, :211 the damaged notice, :112 the "Last autosave" line). Each is a full-width `card … flex` with a
+     `flex-1` sentence: measured at 2560x1440 the offer runs x=40..2520 while Home's grid below is `max-w-4xl`
+     (routes/Home.tsx:116, ends x=936), so Restore / Clear / Later sit about 1,900 px from the question they answer
+     (DESIGN_GUIDE "Resolution & DPI"). Fix: all three take the grid's `max-w-4xl`, so they line up with the cards.
+  6. **[LOW] Burn into video fails for a source whose sound an MP4 cannot hold, and blames the wrong thing**
+     (main/sidecars/whisperManager.ts `runBurnIn`, its argv's `-c:a copy` into the `.mp4` partial, ~:547). A native-
+     container video (MP4 / MKV / AVI / MOV / WebM — not converted on import) with WMA, ADPCM or TrueHD sound: ffmpeg
+     cannot put that codec in an MP4 and exits (executed by the ffmpeg reader with the product's `runBurnIn`, whole and
+     ranged, both binaries: wmav2 and adpcm_ima_wav "codec not currently supported in container", exit 234; truehd
+     "Experimental feature", exit 88 on 7.0.2), and the person reads "Burn-in failed. … Check that the source file still
+     plays and the folder has room" — it plays and there is room. The same file exports through Export, Reframe,
+     Compile and the re-attach, which all encode AAC. T-110 (ab) ledgered the copy for codecs that WRITE (Opus / FLAC /
+     PCM carried into the MP4); this hard failure is its unnamed consequence, and (ab)'s own upgrade is the fix. Fix:
+     the burn-in encodes its sound as AAC at 192 kb/s (`-c:a aac -b:a 192k`, the Export presets' encoder) for every
+     source, whole and ranged; a soundless source stays soundless (the existing mapping). T-110 (ab) is marked FIXED in
+     T-184 (6) by the expediter.
+
+  Covering tests: unit (NEW describes at the ends of the files) — item 1: the designTokens contrast test (NEW describe)
+  computes ink-dim on opaque bg-elevated (5.83) and ink-base over bg-black/60 over white (≥ 4.5), and that the old
+  pairings fail (the discrimination); wiring pins for the readout's opaque backing and the source line's ink-base; e2e
+  (image.spec.ts NEW describe): a white image imported so the stage fills the container at 1024x640, the readout's
+  computed background is opaque and its contrast against it ≥ 4.5 (red on the base). Item 4: e2e (home-chrome.spec.ts
+  NEW describe): at launch with an autosave on disk, a `role="status"` (or alert) region exists BEFORE the read resolves
+  and then holds the offer's sentence — and the damaged one's (red on the base); video-pipelines.spec.ts: removing the
+  second clip puts "Add a second clip to compile." into a status region that was already mounted; the chat-log sentence
+  likewise. Item 5: e2e (home-chrome.spec.ts): at 2560x1440 the banner's right edge is within the grid's (≤ 936 + 1) and
+  Restore is within 900 px of the sentence's start (red on the base: 2520). Item 6: Layer 5 (media.spec.ts NEW describe,
+  bundled 7.0.2, the product's `runBurnIn`): an MKV with wmav2 sound and an AVI with adpcm_ima_wav sound (fixtures made
+  with the bundled ffmpeg's own encoders in the test), whole and ranged, are written; ffprobe: the audio stream is aac
+  and its duration matches the picture within a frame; an Opus-in-WebM source now carries aac too (the (ab) case); a
+  soundless source stays soundless (control); red on the base (exit 234). A unit pin on the argv (`-c:a aac`, no
+  `copy`). Items 2-3 — filename.test.ts: `fitFileName` / `nameWithTail` in `'utf16'` keep a 200-CJK-character stem whole
+  and cut a 300-character one to 255 units with the tail kept, an astral glyph counts 2 and is never split, `'utf8'`
+  unchanged (the T-183 cases still green); `expandFilenameTemplate` with a 300-character source and a 300-character
+  clip: at most 248 units, `_<preset>.mp4` kept, the source cut before the clip, the date / time / handle and literal
+  text kept; the main unit constant is `'utf16'` under a mocked `win32` and `'utf8'` otherwise; clipKit tests: every kit
+  name for a 300-character (and a 200-CJK-character) clip is at most 255 units, keeps its tail, and all share one
+  prefix; ipc/video tests: the over-255 refusal reads the finished sentence. Layer 5 (media.spec.ts NEW describe,
+  bundled 7.0.2): a name the RENDERER's `expandFilenameTemplate` built from a 300-character source goes through
+  `validateExportJob` and `runExportJob` and is written, ffprobe-checked, ending `_<preset>.mp4` (red on the base:
+  refused at the gate). The win32 unit cannot be exercised on this host's ext4 (a 200-CJK name is 600 bytes) — an IC
+  disposition names the OS boundary and the unit layer that covers it. e2e (video-pipelines.spec.ts NEW describe): the
+  built app with a source copied to a 240-character file name exports two presets — both files written, each with its
+  preset tag; a clip renamed to 300 characters runs the Clip Kit — five videos, the `.srt` and the thumbnails written
+  with their tails, and Show in folder reveals a path that exists (red on the base: "Export failed." / "Clip Kit
+  failed."). Item 1: a unit pin that the source line is ink-base, and the contrast test (designTokens) that ink-base
+  over `bg-black/60` over white clears 4.5:1 (ink-dim does not: the discrimination); an e2e on the Reference Search tile
+  if references.spec.ts already stubs results (it does for the T-28 / T-76 cases — reuse them), asserting the source
+  line's computed color is ink-base. Item 3: videoStore tests (NEW describe) — the reader's sequence (`loadSource` →
+  `setSrtPathFor` / `setDerivedFor` P2 → `clearSource` → `loadSource` → `setSrtPath(P1)`): preview empty and the held
+  entry `{ P1, null }`, red on the base; the same path keeps the preview (control); e2e (video-pipelines.spec.ts, the
+  T-174 project-open fixtures): transcribe, Close, open a project saved with an older `.srt` — the Captions panel shows
+  no preview of the newer text, and Save .srt writes the project's file.
+
+  **Docs:** IC rows in place (Reference Search tile; the Stream Graphics readout; the Export / Clip Kit name rows and
+  the T-183 (2) disposition; the transcript preview on project open; the autosave offer and notice; Compile's and the
+  chat log's sentences; the burn-in's sound) plus a NEW section ("round 133, Track A"); TESTING paragraph; LESSONS entry
+  at the TOP; USER_GUIDE's file-name sentence.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice, `npm run test:media` (items 2 and 6
+  change what ffmpeg is handed and the burn-in command — IMG-PREC), a build and every touched e2e spec file run whole
+  before handback; the expediter runs the FULL Playwright suite on the landed tree; a hand-back with an unrun gate is
+  not finished; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** open (round 133)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
