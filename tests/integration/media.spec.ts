@@ -13497,3 +13497,124 @@ describe('the caption burn-in writes any sound an MP4 can carry (real ffmpeg, T-
     }
   }, 120_000)
 })
+
+/**
+ * T-187 (3): a control character in a clip's, a custom preset's or a video's name is an underscore, and the file is written. A text input keeps a pasted tab, and the
+ * name a person copies from a spreadsheet or a chat log carries one; `safeNamePart` and `safeFileBase` left it in, `assertPlainMp4Name` refused it, and `validateExportJob`
+ * runs over every job before any starts, so the WHOLE batch failed with "Export failed.". Here the name comes from the renderer's own builder (`expandFilenameTemplate`) or
+ * from main's default (`safeFileBase`), goes through the real `video:exportBatch` / `video:reframe` handlers and the bundled ffmpeg, and what comes back is a file ffprobe reads whose
+ * name has no control character. The gate itself is unchanged and still refuses a raw tab (the last case).
+ */
+describe('a control character in a name is an underscore and the file is written (real ffmpeg, T-187 (3))', () => {
+  const handlers = new Map<string, (e: unknown, ...args: unknown[]) => Promise<unknown>>()
+  let dir = ''
+  let names: typeof import('../../src/shared/filename')
+  const sender = { isDestroyed: () => false, send: () => undefined }
+  const call = (channel: string, ...args: unknown[]): Promise<unknown> => {
+    const handler = handlers.get(channel)
+    if (!handler) throw new Error(`${channel} is not registered`)
+    return handler({ sender }, ...args)
+  }
+  const exportBatch = (jobs: unknown[]): Promise<Array<{ jobId: string; outputPath: string }>> => call('video:exportBatch', jobs) as Promise<Array<{ jobId: string; outputPath: string }>>
+  // eslint-disable-next-line no-control-regex
+  const hasControl = (s: string): boolean => /[\u0000-\u001f\u007f]/.test(s)
+  const playable = async (file: string): Promise<void> => {
+    const probe = await ffprobeJson(file)
+    expect(probe.streams.some((s) => s.codec_type === 'video'), 'a picture').toBe(true)
+    expect(Number(probe.format.duration ?? 0), 'and a length').toBeGreaterThan(0.5)
+  }
+
+  beforeAll(async () => {
+    dir = await mkdtemp(path.join(workDir, 't187-names-'))
+    vi.resetModules()
+    vi.doMock('electron', () => ({
+      ipcMain: { handle: (channel: string, fn: (e: unknown, ...args: unknown[]) => Promise<unknown>) => void handlers.set(channel, fn) },
+      dialog: {},
+      BrowserWindow: {},
+      shell: {},
+      app: { getPath: () => os.tmpdir() }
+    }))
+    const { registerVideoIpc } = await import('../../src/main/ipc/video')
+    registerVideoIpc()
+    names = await import('../../src/shared/filename')
+  }, 120_000)
+
+  afterAll(() => {
+    vi.doUnmock('electron')
+  })
+
+  it('Export: a clip named `Clutch<TAB>play` and the name the renderer builds - written at `ramp_Clutch_play_twitter.mp4`, and ffprobe reads it', async () => {
+    const out = await mkdtemp(path.join(dir, 'export-'))
+    const clipName = 'Clutch\tplay'
+    const outputFilename = names.expandFilenameTemplate(null, { source: 'ramp', clip: clipName, preset: 'twitter', ext: 'mp4' })
+    expect(outputFilename).toBe('ramp_Clutch_play_twitter.mp4')
+    const results = await exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ name: clipName, startSec: 2, endSec: 3 }), 't187-export'), outDir: out, outputFilename }])
+    expect(results).toHaveLength(1)
+    expect(path.basename(results[0]!.outputPath)).toBe('ramp_Clutch_play_twitter.mp4')
+    await playable(results[0]!.outputPath)
+    expect(await readdir(out), 'one file, no partial').toEqual(['ramp_Clutch_play_twitter.mp4'])
+  }, 120_000)
+
+  it('Export: a batch of a tabbed clip and an ordinary one - BOTH are written (the tab no longer refuses the whole batch)', async () => {
+    const out = await mkdtemp(path.join(dir, 'batch-'))
+    const build = (clip: string, preset: 'twitter' | 'youtube'): string => names.expandFilenameTemplate(null, { source: 'ramp', clip, preset, ext: 'mp4' })
+    const results = await exportBatch([
+      { ...makeJob(rampSrc, 'twitter', makeClip({ name: 'Clutch\tplay', startSec: 2, endSec: 3 }), 't187-b1'), outDir: out, outputFilename: build('Clutch\tplay', 'twitter') },
+      { ...makeJob(rampSrc, 'youtube', makeClip({ name: 'Fine', startSec: 2, endSec: 3 }), 't187-b2'), outDir: out, outputFilename: build('Fine', 'youtube') }
+    ])
+    expect(results.map((r) => path.basename(r.outputPath)).sort()).toEqual(['ramp_Clutch_play_twitter.mp4', 'ramp_Fine_youtube.mp4'])
+    for (const r of results) await playable(r.outputPath)
+  }, 180_000)
+
+  it("Export: a custom preset named `My<TAB>preset` through the template's {preset} is written at `..._My_preset.mp4`", async () => {
+    const out = await mkdtemp(path.join(dir, 'preset-'))
+    const outputFilename = names.expandFilenameTemplate(null, { source: 'ramp', clip: 'c', preset: 'My\tpreset', ext: 'mp4' })
+    expect(outputFilename).toBe('ramp_c_My_preset.mp4')
+    const customPreset = { id: 'cp1', name: 'My\tpreset', width: 360, height: 640, fps: 30, videoBitrate: '1M', audioBitrate: '96k', basePlatformId: 'twitter' as const }
+    const results = await exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ name: 'c', startSec: 2, endSec: 3 }), 't187-preset'), customPreset, outDir: out, outputFilename }])
+    expect(path.basename(results[0]!.outputPath)).toBe('ramp_c_My_preset.mp4')
+    await playable(results[0]!.outputPath)
+  }, 120_000)
+
+  it("Export with NO name from the renderer: main's default name (`safeFileBase`) has no tab either - the clip's and the custom preset's", async () => {
+    const out = await mkdtemp(path.join(dir, 'default-'))
+    const customPreset = { id: 'cp2', name: 'My\tpreset', width: 360, height: 640, fps: 30, videoBitrate: '1M', audioBitrate: '96k', basePlatformId: 'twitter' as const }
+    const results = await exportBatch([
+      { ...makeJob(rampSrc, 'twitter', makeClip({ name: 'Clutch\tplay', startSec: 2, endSec: 3 }), 't187-default-1'), outDir: out },
+      { ...makeJob(rampSrc, 'twitter', makeClip({ name: 'c', startSec: 2, endSec: 3 }), 't187-default-2'), customPreset, outDir: out }
+    ])
+    expect(results.map((r) => path.basename(r.outputPath))).toEqual(['ramp_Clutch_play_twitter.mp4', 'ramp_c_My_preset.mp4'])
+    for (const r of results) {
+      expect(hasControl(path.basename(r.outputPath))).toBe(false)
+      await playable(r.outputPath)
+    }
+  }, 180_000)
+
+  it('Reframe: a clip named with a tab and DEL and a video named with a tab are written with no control character in the name', async () => {
+    const out = await mkdtemp(path.join(dir, 'reframe-'))
+    const res = (await call('video:reframe', {
+      jobId: 't187-reframe',
+      sourcePath: rampSrc,
+      sourceName: 'My\tStream',
+      clipName: 'Clutch\tplay\u007f',
+      outDir: out,
+      position: 'center',
+      startSec: 2,
+      endSec: 3,
+      targetWidth: 360,
+      targetHeight: 640
+    })) as { outputPath: string }
+    expect(path.basename(res.outputPath)).toBe('My_Stream_Clutch_play__reframe-360x640-center.mp4')
+    expect(hasControl(path.basename(res.outputPath))).toBe(false)
+    await playable(res.outputPath)
+    expect(await readdir(out)).toEqual(['My_Stream_Clutch_play__reframe-360x640-center.mp4'])
+  }, 120_000)
+
+  it('the gate is unchanged: a name handed over RAW with a tab in it is still refused, and nothing is encoded', async () => {
+    const out = await mkdtemp(path.join(dir, 'refused-'))
+    await expect(exportBatch([{ ...makeJob(rampSrc, 'twitter', makeClip({ startSec: 2, endSec: 3 }), 't187-raw'), outDir: out, outputFilename: 'Clutch\tplay.mp4' }])).rejects.toThrow(
+      /plain file name/
+    )
+    expect(await readdir(out), 'nothing was encoded').toEqual([])
+  }, 60_000)
+})

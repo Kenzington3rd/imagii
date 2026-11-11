@@ -91,3 +91,35 @@ describe('Export\'s default name keeps `_<preset>.mp4` when the source and clip 
     expect(path.basename(res.outputPath)).toBe('stream_Cold open_youtube.mp4')
   })
 })
+
+/**
+ * T-187 (3): the default name (`<source>_<clip>_<preset>.mp4`, which main builds when a job carries no `outputFilename`) turns a control character in the clip's or the
+ * custom preset's name into `_`, as `safeNamePart` does. `safeFileBase` was a second copy of the reserved-only class, so a tab stayed in the file's name.
+ */
+describe('Export\'s default name has no control character in it (T-187 (3))', () => {
+  const job = (jobId: string, clipName: string, custom?: { name: string }): Parameters<typeof runExportJob>[0] => ({
+    jobId,
+    sourcePath: '/tmp/stream.mp4',
+    outDir: out,
+    clip: { id: 'c', name: clipName, startSec: 1, endSec: 4, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] },
+    preset: 'youtube',
+    ...(custom ? { customPreset: { id: 'cp', basePlatformId: 'youtube' as const, width: 1280, height: 720, fps: 30, videoBitrate: '4M', audioBitrate: '128k', ...custom } } : {})
+  })
+
+  it('a tab, U+0001 and DEL in the clip name are underscores in the written name', async () => {
+    const res = await runExportJob(job('tc-1', 'Clutch\tplay\u0001x\u007fy'), () => undefined)
+    expect(path.basename(res.outputPath)).toBe('stream_Clutch_play_x_y_youtube.mp4')
+    expect(readdirSync(out)).toEqual(['stream_Clutch_play_x_y_youtube.mp4'])
+  })
+
+  it('a tab in a custom preset\'s name is an underscore in its tag', async () => {
+    const res = await runExportJob(job('tc-2', 'Cold open', { name: 'My\tpreset' }), () => undefined)
+    expect(path.basename(res.outputPath)).toBe('stream_Cold open_My_preset.mp4')
+  })
+
+  it('a clip named only with control characters is underscores, and the whole name has none', async () => {
+    const res = await runExportJob(job('tc-3', '\t\t'), () => undefined)
+    expect(path.basename(res.outputPath)).toBe('stream____youtube.mp4')
+    expect(/[\u0000-\u001f\u007f]/.test(path.basename(res.outputPath))).toBe(false)
+  })
+})

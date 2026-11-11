@@ -1316,7 +1316,7 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
   it('DraftField keeps what is typed while the box has focus, even after a live commit, and gives the box back to the store only on leaving (T-125 (8))', () => {
     const field = read('components/DraftField.tsx').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
     const onChange = field.slice(field.indexOf('onChange={(e) => {'), field.indexOf('onBlur={finish}'))
-    expect(onChange, 'the draft is set to what was typed on EVERY keystroke').toMatch(/setDraft\(typed\)\s*if \(live\?\.\(typed\)\)/)
+    expect(onChange, 'the draft is set to what was typed on EVERY keystroke').toMatch(/setDraft\(typed\)\s*pending\.current = typed\s*if \(live\?\.\(typed\)\)/) // T-187 (1): the pending draft the unmount commit reads is written beside the state
     expect(onChange, 'a usable keystroke no longer hands the box back to the stored text').not.toMatch(/setDraft\(null\)/)
     expect(onChange).toMatch(/commit\(typed\)\s*liveCommitted\.current = typed/)
     // ...and leaving does not commit a number the store already has a second time, but does give the box back.
@@ -2133,7 +2133,7 @@ describe('T-126 (3) — a refused Source time is a full-width sentence under its
 
   it('the sentence is basis-full and drawn last, and the label and the end unit that hold the boxes wrap', () => {
     const field = strip(read('components/DraftField.tsx'))
-    expect(field).toMatch(/<p id=\{alertId\} role="alert" className="text-xs text-danger basis-full order-last">/)
+    expect(field).toMatch(/<p ref=\{refusalRef\} id=\{alertId\} role="alert" className="text-xs text-danger basis-full order-last">/)
     // Without a label the box and the sentence are still siblings, not wrapped: the boxes' own flex classes act in the caller's row.
     expect(field).toMatch(/if \(label === undefined\) \{\s*return \(\s*<>\s*\{box\}\s*\{refusal\}\s*<\/>\s*\)\s*\}/)
     const editor = strip(read('modules/video-studio/TextOverlayEditor.tsx'))

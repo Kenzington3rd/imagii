@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
-import { expandFilenameTemplate, fitFileName, nameWithTail, sanitizeFilename, localDate, localTime, localStamp } from './filename'
+import { FORBIDDEN_NAME_CHARS, expandFilenameTemplate, fitFileName, nameWithTail, safeNamePart, sanitizeFilename, localDate, localTime, localStamp } from './filename'
 
 describe('sanitizeFilename', () => {
   it('passes through alphanumeric, dash, underscore unchanged', () => {
@@ -521,5 +521,82 @@ describe('expandFilenameTemplate - a name is fitted where it is built (T-184 (2)
     expect(expandFilenameTemplate(null, { source: exact, clip: 'c', preset: 'p', ext: 'mp4' })).toBe(`${exact}_c_p.mp4`)
     const over = expandFilenameTemplate(null, { source: `${exact}a`, clip: 'c', preset: 'p', ext: 'mp4' })
     expect(over.length).toBe(ROOM)
+  })
+})
+
+/**
+ * T-187 (3): a control character in a name is an underscore, as the characters Windows reserves are. A text input keeps a pasted tab (only line breaks are stripped), so a clip
+ * or preset name copied from a spreadsheet carried one, and `assertPlainMp4Name` (which refuses `[\u0000-\u001f]`) refused the whole Export batch with "Export failed.".
+ * `gateAccepts` is that gate's own rule (`video.ts`): no control character, and `safeNamePart` leaves the name alone.
+ */
+describe('a control character in a name is an underscore (T-187 (3))', () => {
+  const gateAccepts = (name: string): boolean => !/[\u0000-\u001f]/.test(name) && safeNamePart(name) === name
+
+  it('safeNamePart turns a tab, U+0001, a NUL, a line break and DEL into `_`, in the middle and at the ends', () => {
+    expect(safeNamePart('Clutch\tplay')).toBe('Clutch_play')
+    expect(safeNamePart('a\u0001b')).toBe('a_b')
+    expect(safeNamePart('a\u0000b')).toBe('a_b')
+    expect(safeNamePart('a\nb\rc')).toBe('a_b_c')
+    expect(safeNamePart('a\u007fb')).toBe('a_b')
+    expect(safeNamePart('\tlead')).toBe('_lead')
+    expect(safeNamePart('trail\t')).toBe('trail_')
+    expect(safeNamePart('\t')).toBe('_')
+  })
+
+  it('DEL alone is enough to be replaced, and the first printable character (space) and the last control (U+001F) sit on either side of the class', () => {
+    expect(safeNamePart('x\u007f')).toBe('x_')
+    expect(safeNamePart('x\u001f')).toBe('x_')
+    expect(safeNamePart('x y')).toBe('x y')
+    expect(safeNamePart('x~y')).toBe('x~y')
+  })
+
+  it('every C0 control and DEL is replaced, and no printable ASCII is', () => {
+    for (let c = 0; c < 0x80; c++) {
+      const ch = String.fromCharCode(c)
+      const out = safeNamePart(`a${ch}b`)
+      const forbidden = c < 0x20 || c === 0x7f || '\\/:*?"<>|'.includes(ch)
+      expect(out, `U+${c.toString(16).padStart(4, '0')}`).toBe(forbidden ? 'a_b' : `a${ch}b`)
+    }
+  })
+
+  it('stays idempotent, and keeps the names it always kept (spaces, dots, brackets, scripts)', () => {
+    for (const raw of ['Clutch\tplay', '\u0001\u0002', ' \t x \t ', 'a\u007f\u007fb', 'CON\t', 'My Stream.flv', 'clip [2] (final)', 'Épico 漢字']) {
+      const once = safeNamePart(raw)
+      expect(safeNamePart(once), JSON.stringify(raw)).toBe(once)
+    }
+    expect(safeNamePart('My Stream.flv')).toBe('My Stream.flv')
+    expect(safeNamePart('  padded  ')).toBe('padded')
+    expect(safeNamePart('   ')).toBe('untitled')
+    expect(safeNamePart('')).toBe('untitled')
+    expect(safeNamePart('a/b\\c:d*e?f"g<h>i|j')).toBe('a_b_c_d_e_f_g_h_i_j')
+  })
+
+  it('expandFilenameTemplate with a tab in the clip, source or preset name gives a name the gate accepts', () => {
+    const out = expandFilenameTemplate(null, { source: 'My\tStream', clip: 'Clutch\tplay', preset: 'My\tpreset', ext: 'mp4' })
+    expect(out).toBe('My_Stream_Clutch_play_My_preset.mp4')
+    expect(gateAccepts(out)).toBe(true)
+    for (const bad of ['\t', '\u0001', '\u007f', '\u0000']) {
+      const name = expandFilenameTemplate(null, { source: `s${bad}`, clip: `${bad}c${bad}`, preset: `p${bad}`, ext: 'mp4' })
+      expect(gateAccepts(name), JSON.stringify(name)).toBe(true)
+    }
+  })
+
+  it("the template's own text goes through the same class: a tab typed into it is an underscore too", () => {
+    const out = expandFilenameTemplate('{clip}\t{preset}\u007fx', { source: 's', clip: 'c', preset: 'p', ext: 'mp4' })
+    expect(out).toBe('c_p_x.mp4')
+    expect(gateAccepts(out)).toBe(true)
+  })
+
+  it('the T-183 / T-184 fitting still holds with a control character in a long name (cut at the fit, never over)', () => {
+    const out = expandFilenameTemplate(null, { source: `${'S'.repeat(150)}\t${'S'.repeat(150)}`, clip: 'Highlight 1', preset: 'twitter', ext: 'mp4' })
+    expect(out.length).toBeLessThanOrEqual(255 - ' (9999)'.length)
+    expect(out.endsWith('_Highlight 1_twitter.mp4')).toBe(true)
+    expect(gateAccepts(out)).toBe(true)
+  })
+
+  it('the class itself: nine reserved characters, U+0000-U+001F and DEL, and nothing else in ASCII', () => {
+    const hit = [...Array(0x80).keys()].filter((c) => new RegExp(FORBIDDEN_NAME_CHARS.source).test(String.fromCharCode(c)))
+    const want = [...Array(0x20).keys(), 0x7f, ...[...'\\/:*?"<>|'].map((ch) => ch.charCodeAt(0))].sort((a, b) => a - b)
+    expect(hit).toEqual(want)
   })
 })

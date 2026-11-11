@@ -9757,7 +9757,7 @@ IMG-PREC.
      no finished sentence, so the person reads "Export failed."; Reframe, GIF and picture-in-picture hand ffmpeg the
      control character in the output path). A text input keeps a pasted tab (only line breaks are stripped), so a name
      copied from a spreadsheet or a chat log carries one. Fix: ONE forbidden-character class in shared/filename.ts (the
-     ten reserved characters plus the C0 controls and DEL, `[\\/:*?"<>|\u0000-\u001f\u007f]`), used by `safeNamePart` and
+     nine reserved characters plus the C0 controls and DEL, `[\\/:*?"<>|\u0000-\u001f\u007f]`), used by `safeNamePart` and
      by export.ts's `safeFileBase` (which keeps its own `clip` fallback), so every name builder turns them into `_` and
      the gate's rule holds by construction (`safeNamePart` stays idempotent). The gate is unchanged.
   Covering tests: unit — filename.test.ts: `safeNamePart` turns a tab, `\u0001` and DEL into `_`, stays idempotent, and
@@ -9771,7 +9771,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (Track B also `npm run test:media`); the expediter runs the full suite on the merged
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 136)
+- **Status:** done (round 136 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10349,6 +10349,51 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 136 — T-187, the three counted items of sweep 74, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+2f98c0a, disjoint files. Track A (items 1 and 2): a box that is left
+commits however it is left, and its refusal is seen. `DraftField`
+keeps its pending draft, the latest `commit` and the live-committed
+text in refs, and a cleanup at unmount commits a pending draft that
+blur, Enter or a live commit has not stored (no state is set there; a
+refusal at unmount stores nothing), so a colour typed into Stream
+Graphics' Fill, Stroke or Color and left by a press on the empty
+canvas (which deselects the layer and unmounts the focused box before
+the browser's blur) is applied as one Undo step; a refusal that
+appears is scrolled into view (`scrollIntoView({ block: 'nearest'
+})`), so one drawn below the visible part of a scrolled column is seen
+and a column that already shows it does not move. Track B (item 3): a
+control character in a name is `_`. One class, `FORBIDDEN_NAME_CHARS`
+in shared/filename.ts (the nine characters Windows reserves,
+U+0000-U+001F and DEL), is read by `safeNamePart`, by the template's
+own text (`templateStem`) and by export.ts `safeFileBase` (which keeps
+its `clip` fallback); the gate is unchanged, so a clip or custom
+preset named with a pasted tab no longer refuses the whole Export
+batch with only "Export failed.", and Reframe no longer writes a tab
+into a file name. Deviations, accepted: Track A's sentence in
+STYLE_GUIDE's DraftField entry; its unit harness standing in for
+React's hooks (the unit environment is node, with no DOM); Track B's
+template text through the class (a tab typed into the Filename
+template box was the same bug by another route). Expediter: Track A's
+first hand-back was sent back when the expediter's mutation (the
+unmount cleanup reading the first render's `commit`) was killed at
+unit but survived e2e — Properties' number boxes are not keyed by the
+layer, so one box outlives a selection change and an out-of-range X
+typed for one rectangle went to another; the added case (rectangle B's
+X clamped to the edge, rectangle A unchanged) kills it at e2e. Track
+B's mutation (the clip name bypassing `safeFileBase` at its call site)
+was killed at unit and at Layer 5. The ticket's "ten reserved
+characters", copied into six sites, was corrected to nine by the
+expediter. Ledger: every mutation killed at unit and at the layer that
+covers its site, except Track A's two double-commit mutants, which
+reach `updateLayer`'s same-value guard and are pinned at unit
+(disclosed); Track B's DEL mutant first survived Layer 5 and was
+killed once a DEL was added to the Reframe case; every restore
+identical. Gates on the merged tree: npm run verify twice (214 files,
+7013 tests each), test:media 538 passed and 28 skipped of 566 (519 s),
+and the full xvfb Playwright suite, 857 passed in 58.4 min, no
+failures.
 
 Round 135 — T-186, the one counted item of sweep 73, landed in the
 commit that carries this entry. One Sonnet worker in a fresh clone of

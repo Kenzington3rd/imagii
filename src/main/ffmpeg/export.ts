@@ -9,7 +9,7 @@ import { CancelLatch, type LatchRun } from './cancelLatch'
 import { finishPartial, partialPathFor } from './partialOutput'
 import { FFMPEG_EMPTY_OUTPUT, PictureFrames, exportNoPictureMessage, wroteNoPicture } from './noPicture'
 import { NAME_UNIT, ensureOutputDir, nextFreePath } from './outputPath'
-import { nameWithTail } from '../../shared/filename'
+import { FORBIDDEN_NAME_CHARS, nameWithTail } from '../../shared/filename'
 import { clipSpeed } from '../../shared/clip'
 import type { ExportJobSpec, ExportProgress, ExportResult } from '../../shared/clip'
 
@@ -29,8 +29,9 @@ export function beginExportBatch(): LatchRun {
   return latch.begin()
 }
 
+// T-187 (3): the same forbidden characters as `safeNamePart` (one class, shared/filename.ts), with this function's own `clip` fallback.
 function safeFileBase(name: string): string {
-  return name.replace(/[\\/:*?"<>|]/g, '_').trim() || 'clip'
+  return name.replace(FORBIDDEN_NAME_CHARS, '_').trim() || 'clip'
 }
 
 function durationFromTimemark(timemark: string): number {

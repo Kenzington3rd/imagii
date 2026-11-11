@@ -393,7 +393,7 @@ const WIRED: ReadonlyArray<readonly [string, string, RegExp]> = [
   // T-123 (4): `DraftField` moved out of TextOverlayEditor into components/ (nine boxes use it now), so the T-114 claim
   // "the color box points at its sentence" is two facts: the shared box wires its description to the sentence it draws,
   // and the Color box is that box.
-  ['components/DraftField.tsx', 'a refused box points at its sentence', /aria-describedby=\{problem \? alertId : undefined\}[\s\S]{0,1200}id=\{alertId\}/],
+  ['components/DraftField.tsx', 'a refused box points at its sentence', /aria-describedby=\{problem \? alertId : undefined\}[\s\S]{0,1400}id=\{alertId\}/],
   ['modules/video-studio/TextOverlayEditor.tsx', 'the color box is a DraftField', /<DraftField\s+label="Color"\s+type="text"/],
   ['modules/video-studio/GifPanel.tsx', 'live region keeps no gap', /role="status"[\s\S]{0,40}-mb-3/]
 ]

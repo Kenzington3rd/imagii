@@ -886,6 +886,12 @@ Repeated UI is a component, not copy-paste:
   goes straight to the store while the person types); it commits on blur or Enter, shows the refusal under the box
   (`aria-describedby`), and shows the store's value again when a commit stores nothing (an emptied box, text that is not a
   number). `@shared/draftNumber` (`typedNumber`, `isTypedInRange`, `clampTyped`) holds the pure judgments.
+  T-187: a box that is UNMOUNTED with a draft pending commits it as a blur would (a click on the empty canvas deselects a layer and
+  the Properties card unmounts the focused box before the browser's blur, which React drops): the draft, the latest `commit` and
+  the live-committed text are held in refs and a cleanup at unmount commits, once, what blur / Enter / a live commit have not
+  (no state is set there; a refusal at unmount stores nothing and says nothing). A refusal that appears is scrolled into view
+  (`scrollIntoView({ block: 'nearest' })`), so one drawn below the visible part of a scrolling column is seen and a column that
+  already shows it does not move.
   T-125 (8): while the box has focus it shows what was TYPED, even after a live commit, and shows the stored number only when
   it is left. It used to hand the box back to the store on every usable keystroke, and for a number input that was a trap: the
   browser reports "" for "0." and for "-", so the store's text and the DOM's disagreed mid-word and React rewrote the box

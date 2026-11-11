@@ -41,10 +41,17 @@ export function localStamp(d: Date = new Date()): string {
  */
 const TEMPLATE_NAME_MAX = 255 - ' (9999)'.length
 
-/** What a template makes once its parts are in: the reserved characters out, runs of `_` one, the ends trimmed. */
+/**
+ * T-187 (3): the ONE class of characters a name Export or main builds never keeps: the nine Windows reserves (`\ / : * ? " < > |`), the C0 controls (U+0000-U+001F: a tab
+ * pasted from a spreadsheet, a stray NUL) and DEL. Each becomes `_`. `safeNamePart`, the template's own text and main's default Export name (`safeFileBase`) all read it, so
+ * what they build is a name the gate (`assertPlainMp4Name`, which refuses a control character) accepts by construction. Used with `replace`, so the global flag's state never shows.
+ */
+export const FORBIDDEN_NAME_CHARS = /[\\/:*?"<>|\u0000-\u001f\u007f]/g
+
+/** What a template makes once its parts are in: the forbidden characters out, runs of `_` one, the ends trimmed. */
 function templateStem(template: string, values: Record<string, string>): string {
   const replaced = template.replace(/\{(source|clip|preset|date|time|handle)\}/g, (_m, key: string) => values[key] ?? '')
-  return replaced.replace(/[\\/:*?"<>|]/g, '_').replace(/__+/g, '_').trim() || 'export'
+  return replaced.replace(FORBIDDEN_NAME_CHARS, '_').replace(/__+/g, '_').trim() || 'export'
 }
 
 /** `value` with at least `over` UTF-16 units taken off its end, at a whole code point. */
@@ -93,12 +100,12 @@ export function nameWithTail(base: string, tail: string, unit: NameUnit): string
 }
 
 /**
- * The part of a name a person supplied, made safe to put in a file name: the characters Windows reserves become `_`, the ends are
+ * The part of a name a person supplied, made safe to put in a file name: the characters Windows reserves and the control characters (T-187 (3)) become `_`, the ends are
  * trimmed, and an empty result is "untitled". It is what Export's `{source}`, `{clip}` and `{preset}` tokens go through, and (T-124
  * (17)) what Reframe and the GIF name their output from, so a source called "My Stream.flv" is "My Stream_reframe-..." in all three.
  */
 export function safeNamePart(s: string): string {
-  return s.replace(/[\\/:*?"<>|]/g, '_').trim() || 'untitled'
+  return s.replace(FORBIDDEN_NAME_CHARS, '_').trim() || 'untitled'
 }
 
 function safe(s: string): string {

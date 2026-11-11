@@ -7658,3 +7658,248 @@ test.describe('Image Studio - a colour box says when it cannot draw what was typ
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-187 (1), (2): a box that is left commits however it is left, and its refusal is seen
+// ═══════════════════════════════════════════════════════════════════════════
+// (1) T-186 made the Fill, Stroke and Color boxes apply what is typed when the box is left, but a click on the EMPTY CANVAS deselects on the stage's mousedown and the Properties card unmounts the
+// focused box before the browser's blur, which React drops during the commit: the typed colour was thrown away with no sentence and no Undo step. DraftField commits a pending draft when it unmounts.
+// (2) A refusal drawn below the visible part of the scrolled right column (a text layer's Color box at 1024x640) said nothing a sighted person could see: DraftField scrolls its sentence into view
+// (`block: 'nearest'`, so a column that already shows it does not move). The end states read here are the layer on the stage, the pixel it draws, the Undo stack and the column's own rect.
+test.describe('Image Studio - a colour typed and then left by a click on the canvas is kept, a refusal is seen (T-187 (1), (2))', () => {
+  const undo = (window: Page): Locator => window.getByRole('button', { name: 'Undo' })
+  const refusal = (window: Page): Locator => propsCard(window).getByRole('alert')
+  const near = (px: { r: number; g: number; b: number }, want: [number, number, number]): boolean =>
+    Math.abs(px.r - want[0]) <= 2 && Math.abs(px.g - want[1]) <= 2 && Math.abs(px.b - want[2]) <= 2
+
+  /** The RGB the stage draws at a document point (chrome hidden, 1:1, as an export draws it). */
+  function pixel(window: Page, x: number, y: number): Promise<{ r: number; g: number; b: number }> {
+    return window.evaluate(
+      ([px, py]) => {
+        interface Stage {
+          getLayers(): Array<{ visible(): boolean; visible(v: boolean): void; hasName(n: string): boolean }>
+          scaleX(): number
+          width(): number
+          height(): number
+          scale(v: { x: number; y: number }): void
+          toCanvas(o: { x: number; y: number; width: number; height: number; pixelRatio: number }): HTMLCanvasElement
+        }
+        const stage = (window as unknown as { __imagiiStage?: Stage }).__imagiiStage
+        if (!stage) throw new Error('__imagiiStage is not set')
+        const zoom = stage.scaleX()
+        const doc = { width: Math.round(stage.width() / zoom), height: Math.round(stage.height() / zoom) }
+        const chrome = stage.getLayers().filter((l) => l.hasName('chrome'))
+        const was = chrome.map((l) => l.visible())
+        let canvas: HTMLCanvasElement
+        try {
+          stage.scale({ x: 1, y: 1 })
+          for (const l of chrome) l.visible(false)
+          canvas = stage.toCanvas({ x: 0, y: 0, width: doc.width, height: doc.height, pixelRatio: 1 })
+        } finally {
+          chrome.forEach((l, i) => l.visible(was[i] as boolean))
+          stage.scale({ x: zoom, y: zoom })
+        }
+        const d = canvas.getContext('2d')?.getImageData(px as number, py as number, 1, 1).data
+        if (!d) throw new Error('no pixels')
+        return { r: d[0] as number, g: d[1] as number, b: d[2] as number }
+      },
+      [x, y] as const
+    )
+  }
+
+  async function drawRect(window: Page): Promise<void> {
+    await startBlank(window)
+    await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+    await dragOnStage(window, { x: 300, y: 250 }, { x: 600, y: 450 })
+    await expectLayerCount(window, 2)
+    // The Rectangle tool is still armed: a press on the empty canvas would start another drawing. The Select tool's press on it is what deselects.
+    await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+  }
+  const column = (window: Page): Locator => propsCard(window).locator('xpath=..')
+
+  test('a rectangle\'s Fill typed "#ffcc00" and left by a click on the empty canvas is stored (the stage draws it yellow) and one Undo puts the old colour back', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-fill-click-away')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      await retype(field(window, 'Fill'), '#ffcc00')
+      expect(await fillOf(), 'nothing is stored while typing').toBe(original)
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(propsCard(window), 'the click on the empty canvas deselected the layer, so the box unmounted focused').toHaveCount(0)
+      await expect.poll(fillOf, { timeout: 10_000, message: 'the colour typed is applied, not thrown away' }).toBe('#ffcc00')
+      await expect
+        .poll(async () => near(await pixel(window, 450, 350), [255, 204, 0]), { timeout: 10_000, message: 'the stage draws it yellow' })
+        .toBe(true)
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000, message: 'one Undo gives the colour from before the typing back' }).toBe(original)
+      await expectLayerCount(window, 2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a text layer\'s Color typed "#ffcc00" and left by a click on the empty canvas is stored, and one Undo puts the old colour back', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-text-click-away')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      await retype(field(window, 'Color'), '#ffcc00')
+      expect(await fillOf()).toBe(original)
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(propsCard(window)).toHaveCount(0)
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('#ffcc00')
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe(original)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a refused "zzz" left by a click on the canvas stores nothing: the colour and the pixel are as they were and no Undo step was added (the next Undo removes the rectangle)', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-refused-click-away')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      const before = await pixel(window, 450, 350)
+      await retype(field(window, 'Fill'), 'zzz')
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(propsCard(window)).toHaveCount(0)
+      await window.waitForTimeout(500)
+      expect(await fillOf(), 'the refused text is not stored').toBe(original)
+      expect(await pixel(window, 450, 350)).toEqual(before)
+      await undo(window).click()
+      await expectLayerCount(window, 1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a typed colour committed by Tab is not committed again when the box later unmounts: the click on the canvas adds no second Undo step', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-no-double')
+    const { window } = studio
+    try {
+      await drawRect(window)
+      const fillOf = async (): Promise<string | undefined> => (await lastShape(window)).fill
+      const original = await fillOf()
+      await retype(field(window, 'Fill'), '#2288cc')
+      await leave(field(window, 'Fill'))
+      await expect.poll(fillOf, { timeout: 10_000 }).toBe('#2288cc')
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(propsCard(window)).toHaveCount(0)
+      await undo(window).click()
+      await expect.poll(fillOf, { timeout: 10_000, message: 'one Undo reverts the one edit' }).toBe(original)
+      await expectLayerCount(window, 2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('at 1024x640 a text layer\'s Color refusal ("zzz", Enter) is scrolled into the visible part of the column and the window', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-refusal-seen')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      await startBlank(window)
+      const color = field(window, 'Color')
+      await retype(color, 'zzz')
+      const col = column(window)
+      const scrollable = await col.evaluate((el) => el.scrollHeight - el.clientHeight)
+      expect(scrollable, 'the premise: the right column scrolls at this size').toBeGreaterThan(0)
+      await color.press('Enter')
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      await expect
+        .poll(
+          async () => {
+            const a = await refusal(window).boundingBox()
+            const c = await col.boundingBox()
+            if (!a || !c) return 'unmeasured'
+            return a.y >= c.y - 1 && a.y + a.height <= c.y + c.height + 1 ? 'inside' : `sentence ${Math.round(a.y)}-${Math.round(a.y + a.height)} outside the column ${Math.round(c.y)}-${Math.round(c.y + c.height)}`
+          },
+          { timeout: 10_000, message: 'the sentence is inside the column\'s visible rect' }
+        )
+        .toBe('inside')
+      await expectInViewport(refusal(window), 'the refusal sentence')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('at 1024x640 a refusal the column already shows does not move the column (block nearest, not start)', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-refusal-nearest')
+    const { app, window } = studio
+    try {
+      await resizeAndSettle(app, window, MIN_WINDOW)
+      await drawRect(window)
+      const fill = field(window, 'Fill')
+      const col = column(window)
+      // The column's foot, so the Fill box sits mid-column with the Stroke rows under it and the sentence, drawn between them, lands inside the visible part.
+      await col.evaluate((el) => {
+        el.scrollTop = el.scrollHeight
+      })
+      await retype(fill, 'zzz')
+      const before = await col.evaluate((el) => ({ top: el.scrollTop, room: el.scrollHeight - el.clientHeight }))
+      expect(before.room, 'the premise: the column can scroll (so a "start" alignment would move it)').toBeGreaterThan(20)
+      await fill.press('Enter')
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      await window.waitForTimeout(400)
+      const a = await refusal(window).boundingBox()
+      const c = await col.boundingBox()
+      expect(a && c, 'measured').toBeTruthy()
+      if (a && c) {
+        expect(a.y, 'the premise: the sentence is already inside the visible column').toBeGreaterThanOrEqual(c.y)
+        expect(a.y + a.height, 'the premise: and wholly above the column\'s foot').toBeLessThanOrEqual(c.y + c.height)
+      }
+      expect(await col.evaluate((el) => el.scrollTop), 'the column did not move').toBe(before.top)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('X (px) is not keyed by the layer: an out-of-range draft typed for rectangle B (selected by a click on its shape, the box never unmounted since A) and left by a click on the empty canvas is committed to B, clamped, and not to A', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t187-unkeyed-number')
+    const { window } = studio
+    try {
+      await drawRect(window) // A at 300,250 - 600,450; the Select tool is armed
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 700, y: 250 }, { x: 900, y: 400 })
+      await expectLayerCount(window, 3)
+      await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
+      const xs = async (): Promise<{ a: number | undefined; b: number | undefined }> => {
+        const shapes = await stageShapes(window)
+        return { a: shapes[1]?.x, b: shapes[2]?.x }
+      }
+      const original = await xs()
+      // Select A so the Properties card mounts, then B's shape directly: a press on a shape does not deselect, so the X box lives on from A to B.
+      await clickDoc(window, { x: 450, y: 350 })
+      await expect(field(window, 'X (px)')).toHaveValue(String(Math.round(original.a as number)))
+      await clickDoc(window, { x: 800, y: 320 })
+      await expect(field(window, 'X (px)'), 'B is selected: the box shows its x').toHaveValue(String(Math.round(original.b as number)))
+      // One input event (a paste): 99999 is beyond the range (1200 px document: -1200 to 2400), so no live commit stores it, and it is clamped when typing ends.
+      await field(window, 'X (px)').fill('99999')
+      await window.waitForTimeout(300)
+      expect(await xs(), 'nothing is stored while typing').toEqual(original)
+      await clickDoc(window, { x: 1100, y: 750 })
+      await expect(propsCard(window), 'the click on the empty canvas deselected B').toHaveCount(0)
+      await expect.poll(async () => (await xs()).b, { timeout: 10_000, message: 'B takes the clamped edge' }).toBe(2400)
+      expect((await xs()).a, 'A is untouched').toBe(original.a)
+      await undo(window).click()
+      await expect.poll(async () => (await xs()).b, { timeout: 10_000, message: 'one Undo puts B\'s x back' }).toBe(original.b)
+      expect((await xs()).a).toBe(original.a)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
