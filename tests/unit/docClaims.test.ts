@@ -217,7 +217,7 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['canvasStore.ts:391', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 391, 391, /makeLineLayer\(points: number\[\], name: 'Line' \| 'Pencil' = 'Line'\)/],
     ['canvasStore.ts:197', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 197, 197, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
     ['canvasStore.ts:130', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 130, 130, /future: \[\]/],
-    ['ImageStudio.tsx:67-76', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 67, 76, /e\.key === 'v'[\s\S]*setTool\('pencil'\)/],
+    ['ImageStudio.tsx:69-78', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 69, 78, /key === 'v'[\s\S]*setTool\('pencil'\)/],
     ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
     ['PropertiesPanel.tsx:51', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 51, 51, /<PositionBox value=\{layer\.x\}/],

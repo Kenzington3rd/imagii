@@ -1147,8 +1147,8 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
       /return \(\s*isTextEntryTarget\(tagName, inputType\) \|\|\s*tagName\.toUpperCase\(\) === 'SELECT' \|\|\s*controlOwnsKey\(tagName, inputType, key\)\s*\)/
     )
     // T-134 (2): on the press only (`if (!e.repeat)`); the T-134 pin at the end of this file holds that half.
-    expect(handler).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)/)
-    expect(handler).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)/)
+    expect(handler).toMatch(/case 'i':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)/)
+    expect(handler).toMatch(/case 'o':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)/)
     // T-121: from the frame on screen (`now`, `playheadNow`), where this pin used to read the store's `currentTime`
     // (the bug: it trails playback). The T-121 pin below holds all four relative keys.
     expect(handler).toMatch(/case ',':\s*next = now - 1 \/ fps/)
@@ -2603,12 +2603,12 @@ describe('T-134 — a Restore that outlasts the person does not move them, a hel
   it('(2) I and O mark on the press only, in the Player and on the Timeline - a held key is one undo step and one point, not the keyboard\'s repeat rate', () => {
     const player = strip(read('modules/video-studio/Player.tsx'))
     const playerKeys = player.slice(player.indexOf("case 'i':"), player.indexOf('default:', player.indexOf("case 'i':")))
-    expect(playerKeys).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)\s*break/)
-    expect(playerKeys).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)\s*break/)
+    expect(playerKeys).toMatch(/case 'i':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)\s*break/)
+    expect(playerKeys).toMatch(/case 'o':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)\s*break/)
     const timeline = strip(read('modules/video-studio/Timeline.tsx'))
     const timelineKeys = timeline.slice(timeline.indexOf("case 'i':"), timeline.indexOf('default:', timeline.indexOf("case 'i':")))
-    expect(timelineKeys).toMatch(/case 'i':\s*case 'I':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)\s*return/)
-    expect(timelineKeys).toMatch(/case 'o':\s*case 'O':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)\s*return/)
+    expect(timelineKeys).toMatch(/case 'i':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('in'\)\s*return/)
+    expect(timelineKeys).toMatch(/case 'o':\s*e\.preventDefault\(\)\s*if \(!e\.repeat\) setMarker\('out'\)\s*return/)
   })
 
   it('(5) a custom preset\'s name is capped in its box, cut with an ellipsis (and carried whole as the tooltip) in its row, and the safe-zone warning cuts a clip name the same way', () => {
@@ -3958,7 +3958,7 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
 
   it('(5) a held Ctrl+V is one paste (the chord\'s keydown repeat marks the paste), and the chooser is claimed until it answers or is cancelled', () => {
     const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
-    expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && isV\) \|\| \(e\.shiftKey && e\.key === 'Insert'\)\) pasteHeld = e\.repeat/)
+    expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && k === 'v'\) \|\| \(e\.shiftKey && k === 'Insert'\)\) pasteHeld = e\.repeat/)
     expect(panel).toMatch(/if \(pasteHeld\) \{\s*e\.preventDefault\(\)\s*return\s*\}/)
     expect(panel).toMatch(/await claimFirst\(\s*pickingRef,/)
     expect(panel).toMatch(/input\.onchange = \(\) => \{[\s\S]*?resolve\(\)\s*\}\s*input\.oncancel = \(\) => resolve\(\)/)
@@ -3973,7 +3973,7 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
     const player = strip(read('modules/video-studio/Player.tsx'))
     expect(player).toMatch(/tabIndex=\{0\}\s*role="group"\s*aria-label="Video player"\s*aria-keyshortcuts="Space ArrowLeft ArrowRight , \. I O"/)
     // Every key it lists is one its handler has a case for (Home / End are the timeline's, so they are not listed).
-    for (const k of [`' '`, `'ArrowLeft'`, `'ArrowRight'`, `','`, `'\\.'`, `'I'`, `'O'`]) expect(player).toMatch(new RegExp(`case ${k.replace('\\\\.', '\\.')}:`))
+    for (const k of [`' '`, `'ArrowLeft'`, `'ArrowRight'`, `','`, `'\\.'`, `'i'`, `'o'`]) expect(player).toMatch(new RegExp(`case ${k.replace('\\\\.', '\\.')}:`))
   })
 
   it('(fold) the shortcuts list is a two-column grid whose rows contribute both cells', () => {
@@ -4007,9 +4007,10 @@ describe('T-155 Track A - a press that waits says so, every paste chord, every a
 
   it('(2) the paste chord is Ctrl or Cmd with the V key by letter OR position, or Shift+Insert; the release clears on the same keys', () => {
     const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
-    expect(panel).toMatch(/const isV = e\.code === 'KeyV' \|\| e\.key\.toLowerCase\(\) === 'v'/)
-    expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && isV\) \|\| \(e\.shiftKey && e\.key === 'Insert'\)\) pasteHeld = e\.repeat/)
-    expect(panel).toMatch(/if \(e\.code === 'KeyV' \|\| e\.key\.toLowerCase\(\) === 'v' \|\| e\.key === 'Insert'\) pasteHeld = false/)
+    // T-185 (1): the letter-or-position rule is `shortcutKey` now (lib/keyOwnership.test.ts drives it; the e2e below dispatches `code: 'KeyV', key: 'м'`).
+    expect(panel).toMatch(/const k = shortcutKey\(e\)/)
+    expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && k === 'v'\) \|\| \(e\.shiftKey && k === 'Insert'\)\) pasteHeld = e\.repeat/)
+    expect(panel).toMatch(/const k = shortcutKey\(e\)\s*if \(k === 'v' \|\| k === 'Insert'\) pasteHeld = false/)
   })
 
   it('(3) each of the five add / duplicate buttons drops a repeat press and ignores a held Enter', () => {
@@ -4495,7 +4496,7 @@ describe('T-164 (7), (9), (10) - the paste listener stands down for a text field
 
   it('onPaste asks isTextEntryTarget (with the input type) right after the dialog guard, and only when the clipboard has text (T-165 (1)), before anything is read or prevented', () => {
     const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
-    expect(panel).toMatch(/import \{ inputTypeOf, isTextEntryTarget \} from '\.\.\/\.\.\/lib\/keyOwnership'/)
+    expect(panel).toMatch(/import \{ inputTypeOf, isTextEntryTarget, shortcutKey \} from '\.\.\/\.\.\/lib\/keyOwnership'/)
     const body = panel.slice(panel.indexOf('function onPaste'), panel.indexOf('const releaseHeld'))
     const guard = body.indexOf('isTextEntryTarget(e.target.tagName, inputTypeOf(e.target))) return')
     expect(guard, 'the text-field guard is in onPaste').toBeGreaterThan(-1)
@@ -5254,5 +5255,75 @@ describe('round 132 Track A - the Export queue percent is silent, the Duck slide
     expect(field).toBeLessThan(close)
     expect(bar.slice(field, close), 'no aria-label of its own: it would outrank the label, and "in pixels" does not contain the visible "(px)"').not.toContain('aria-label')
     expect(bar.slice(open, label), 'one line: the label is a flex row').toContain('flex items-center')
+  })
+})
+
+/**
+ * T-185 (1): a shortcut is the key, on any keyboard layout. `KeyboardEvent.key` is the character the layout prints ("я" on
+ * a Russian Z key), so a handler comparing it to a letter is dead on every non-Latin layout. Every shortcut matches
+ * `shortcutKey(e)` (lib/keyOwnership.ts); no renderer file compares a `.key` to a letter, or reads a letter by `.code`,
+ * anywhere else. `?` (HotkeyOverlay) is a typed character, not a letter, and the named keys are not letters.
+ */
+describe('T-185 (1): shortcuts match shortcutKey, never e.key against a letter', () => {
+  const isLetterLiteral = (n: ts.Node): boolean => ts.isStringLiteralLike(n) && /^[A-Za-z]$/.test(n.text)
+  const isKeyAccess = (n: ts.Node): boolean => ts.isPropertyAccessExpression(n) && n.name.text === 'key'
+
+  /** Every place a `.key` is read as a letter: `.key === 'r'`, `.key.toLowerCase()`, `switch (x.key) { case 'i': }`, a `KeyV`-style `.code` compare. */
+  const lettersByKey = (code: string, where: string): string[] => {
+    const sf = parseSource(where, code)
+    const found: string[] = []
+    const at = (n: ts.Node): string => `${where}:${sf.getLineAndCharacterOfPosition(n.getStart()).line + 1}`
+    const visit = (n: ts.Node): void => {
+      if (ts.isBinaryExpression(n) && /^[!=]==?$/.test(n.operatorToken.getText())) {
+        const [a, b] = [n.left, n.right]
+        if ((isKeyAccess(a) && isLetterLiteral(b)) || (isKeyAccess(b) && isLetterLiteral(a))) found.push(at(n))
+        const codeSide = ts.isPropertyAccessExpression(a) && a.name.text === 'code' ? b : ts.isPropertyAccessExpression(b) && b.name.text === 'code' ? a : null
+        if (codeSide && ts.isStringLiteralLike(codeSide) && /^Key[A-Z]$/.test(codeSide.text)) found.push(at(n))
+      }
+      if (ts.isPropertyAccessExpression(n) && /^to(Lower|Upper)Case$/.test(n.name.text) && isKeyAccess(n.expression)) found.push(at(n))
+      if (ts.isSwitchStatement(n) && isKeyAccess(n.expression)) {
+        for (const c of n.caseBlock.clauses) if (ts.isCaseClause(c) && isLetterLiteral(c.expression)) found.push(at(c))
+      }
+      ts.forEachChild(n, visit)
+    }
+    visit(sf)
+    return found
+  }
+
+  const files = sourceFilesUnder(RENDERER_ROOT).filter((f) => !f.endsWith(path.join('lib', 'keyOwnership.ts')))
+  const rel = (f: string): string => path.relative(RENDERER_ROOT, f).split(path.sep).join('/')
+
+  it('the scan reads the renderer (a scan of nothing would look like a clean tree)', () => {
+    expect(files.length).toBeGreaterThan(100)
+  })
+
+  it('no renderer file compares a key to a letter, lower-cases one, or reads a letter by position, outside shortcutKey', () => {
+    expect(files.flatMap((f) => lettersByKey(readFileSync(f, 'utf8'), rel(f)))).toEqual([])
+  })
+
+  it('discriminates: each old shape is found, and the new one and the named keys are not', () => {
+    expect(lettersByKey("if (e.key === 'r' || e.key === 'R') x()", 'x.ts')).toHaveLength(2)
+    expect(lettersByKey("const k = e.key.toLowerCase()", 'x.ts')).toHaveLength(1)
+    expect(lettersByKey("switch (e.key) { case 'i': break; case ',': break }", 'x.ts')).toHaveLength(1)
+    expect(lettersByKey("const v = e.code === 'KeyV'", 'x.ts')).toHaveLength(1)
+    expect(lettersByKey("if (shortcutKey(e) === 'r') x(); if (e.key === 'Enter' || e.key === '?' || e.key === ' ') y()", 'x.ts')).toEqual([])
+  })
+
+  it.each([
+    ['hooks/useUndoRedoHotkeys.ts', 'undoRedoIntent', 'shortcutKey(e)'],
+    ['modules/image-studio/ImageStudio.tsx', 'tool keys', 'shortcutKey(e)'],
+    ['modules/image-studio/ImportPanel.tsx', 'paste guard', 'shortcutKey(e)'],
+    ['modules/video-studio/Player.tsx', 'Player switch', 'switch (shortcutKey(e))'],
+    ['modules/video-studio/Timeline.tsx', 'Timeline switch', 'switch (shortcutKey(e))']
+  ])('%s (%s) matches %s', (file, _what, shape) => {
+    expect(read(file)).toContain(shape)
+  })
+
+  it('the hook passes the key position to undoRedoIntent', () => {
+    expect(read('hooks/useUndoRedoHotkeys.ts')).toContain('code: e.code,')
+  })
+
+  it('HotkeyOverlay keeps `?` on e.key: a typed character every layout produces', () => {
+    expect(read('components/HotkeyOverlay.tsx')).toContain("e.key !== '?'")
   })
 })

@@ -6578,3 +6578,41 @@ test.describe('round 132 Track A (T-183 (3)): the ducking sliders fit their colu
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-185 (1): Ctrl+Z / Ctrl+Y on a non-Latin layout (events dispatched with the layout's letter as `key` and the real `code`, the T-155 (2) shape)
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Audio Studio - undo and redo on a non-Latin layout (T-185 (1))', () => {
+  test('Ctrl+"я" (the Z key) undoes a Cleanup preset and Ctrl+"н" (the Y key) redoes it', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t185-undo')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const cleanup = window.locator(CLEANUP)
+      const medium = cleanup.getByRole('button', { name: 'Medium', exact: true })
+      const off = cleanup.getByRole('button', { name: 'Off', exact: true })
+      await medium.click()
+      await expectSelected(medium)
+      const press = (key: string, code: string, shiftKey = false): Promise<void> =>
+        window.evaluate(
+          ([k, c, s]) => {
+            ;(document.activeElement ?? document.body).dispatchEvent(
+              new KeyboardEvent('keydown', { key: k as string, code: c as string, ctrlKey: true, shiftKey: s as boolean, bubbles: true, cancelable: true })
+            )
+          },
+          [key, code, shiftKey] as const
+        )
+      await press('я', 'KeyZ')
+      await expectSelected(off)
+      await press('н', 'KeyY')
+      await expectSelected(medium)
+      await press('я', 'KeyZ')
+      await expectSelected(off)
+      await press('Я', 'KeyZ', true)
+      await expectSelected(medium)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

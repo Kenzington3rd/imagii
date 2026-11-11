@@ -1025,7 +1025,7 @@ test.describe('Image Studio — tools and drawing', () => {
         ).toHaveClass(/bg-accent/)
       }
 
-      // The uppercase bindings are the same rows in ImageStudio.tsx:67-76.
+      // The uppercase bindings are the same rows in ImageStudio.tsx:69-78.
       await window.keyboard.press('Shift+R')
       await expect(window.getByText('Tool: Rectangle')).toBeVisible()
 
@@ -7254,6 +7254,52 @@ test.describe('Image Studio - the size readout stays readable over a white docum
       const seen = [br, bg, bb].map((v) => v * ba + 255 * (1 - ba))
       const [hi, lo] = [lum(channels(style.color).slice(0, 3)), lum(seen)].sort((a, b) => b - a) as [number, number]
       expect((hi + 0.05) / (lo + 0.05), 'the words clear WCAG AA over a white document').toBeGreaterThanOrEqual(4.5)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-185 (1): a shortcut is the key on any keyboard layout (events dispatched with a non-Latin `key` and the real `code`, the T-155 (2) shape)
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Image Studio - the shortcuts on a non-Latin layout (T-185 (1))', () => {
+  // A keydown on the document body, as the OS sends it: `key` is the layout's letter, `code` the key's position.
+  const press = (window: Page, key: string, code: string, ctrl = false): Promise<void> =>
+    window.evaluate(
+      ([k, c, ctrlKey]) => {
+        document.body.dispatchEvent(new KeyboardEvent('keydown', { key: k as string, code: c as string, ctrlKey: ctrlKey as boolean, bubbles: true, cancelable: true }))
+      },
+      [key, code, ctrl] as const
+    )
+
+  test('"к" on the R key picks the rectangle tool; Ctrl+"я" (the Z key) removes the layer just added and Ctrl+"н" (the Y key) brings it back', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t185-cyrillic-keys')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: 'Rectangle' }).click()
+      await dragOnStage(window, { x: 200, y: 200 }, { x: 400, y: 350 })
+      await toolbar.getByRole('button', { name: 'Select' }).click()
+      await expectLayerCount(window, 2)
+      await expect(toolbar.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true')
+
+      await press(window, 'к', 'KeyR')
+      await expect(toolbar.getByRole('button', { name: 'Rectangle' }), 'the key is R by position').toHaveAttribute('aria-pressed', 'true')
+      await expect(toolbar.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'false')
+      await press(window, 'м', 'KeyV')
+      await expect(toolbar.getByRole('button', { name: 'Select' }), 'and V').toHaveAttribute('aria-pressed', 'true')
+      // AZERTY discriminates: its W key (code KeyZ) is not Z, so Ctrl+W changes nothing.
+      await press(window, 'w', 'KeyZ', true)
+      await window.waitForTimeout(300)
+      await expectLayerCount(window, 2)
+
+      await press(window, 'я', 'KeyZ', true)
+      await expectLayerCount(window, 1)
+      await press(window, 'н', 'KeyY', true)
+      await expectLayerCount(window, 2)
     } finally {
       await closeStudio(studio)
     }

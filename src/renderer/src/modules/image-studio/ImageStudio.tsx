@@ -22,7 +22,7 @@ import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
-import { focusOwnsKey, hasChordModifier, inputTypeOf } from '../../lib/keyOwnership'
+import { focusOwnsKey, hasChordModifier, inputTypeOf, shortcutKey } from '../../lib/keyOwnership'
 import { imageTutorial } from '../../tutorials/imageTutorial'
 
 export function ImageStudio(): JSX.Element {
@@ -59,20 +59,22 @@ export function ImageStudio(): JSX.Element {
       // T-124 (29): a bare-letter shortcut is for the bare letter. Only `v` honored Ctrl (so Ctrl+V could paste); Ctrl+R, Ctrl+O,
       // Ctrl+L and Ctrl+P, and the same with Alt or Cmd, switched tools. A chord belongs to the window or the browser.
       if (hasChordModifier(e)) return
+      // T-185 (1): the tool keys by `shortcutKey`, so R picks the rectangle on a Russian layout (`key` "к", `code` KeyR) as well.
+      const key = shortcutKey(e)
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedLayerId) {
           e.preventDefault()
           removeLayer(selectedLayerId)
         }
-      } else if (e.key === 'v' || e.key === 'V') {
+      } else if (key === 'v') {
         setTool('select')
-      } else if (e.key === 'r' || e.key === 'R') {
+      } else if (key === 'r') {
         setTool('rect')
-      } else if (e.key === 'o' || e.key === 'O') {
+      } else if (key === 'o') {
         setTool('ellipse')
-      } else if (e.key === 'l' || e.key === 'L') {
+      } else if (key === 'l') {
         setTool('line')
-      } else if (e.key === 'p' || e.key === 'P') {
+      } else if (key === 'p') {
         setTool('pencil')
       }
     }

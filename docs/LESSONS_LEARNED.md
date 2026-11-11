@@ -14,6 +14,20 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-11 - T-185 (round 134): a shortcut is the key, not the character, and a fix at one site is a fix of one site
+
+The seventy-second sweep, Track A (item 1).
+
+### (1) [LOW] - Ctrl+Z, Ctrl+Y and the bare-letter shortcuts were dead on a non-Latin keyboard layout
+
+- **Bug.** On a Russian or Greek layout `KeyboardEvent.key` is that layout's letter ("я" on the Z key), so `undoRedoIntent` returned null for it: Ctrl+Z did not undo and Ctrl+Y did not redo in Video Studio, Audio Studio and Stream Graphics; R did not pick the rectangle; I and O did not set the In and Out points; comma and period did not step a frame. The header and toolbar buttons worked.
+- **Root cause.** T-155 (2) found the class at ONE site (the held-paste guard in ImportPanel, which now also read `e.code`) and fixed that site. Nothing named the others, and each handler still compared `e.key` to a letter. The paste fix was a patch, not a rule.
+- **Fix.** One helper, `shortcutKey(e)` in `lib/keyOwnership.ts`: the Latin letter the layout prints wins (so AZERTY's Z key is Z and its W key, whose `code` is KeyZ, is not), the key's position (`Key<A-Z>`) is only the fallback for a key that prints no Latin letter, `Comma` / `Period` stand in for a non-ASCII key there, a named key is itself. Any other printable ASCII character is itself too: the first reading of the rule (position for anything that is not a Latin letter) turned AZERTY's comma, which sits on the M key, into "m". `undoRedoIntent` takes the event's `code`; the tool keys, the Player's and the Timeline's switches and the paste guard match `shortcutKey(e)`; the upper-case case labels went, because the helper lowers a letter.
+- **Test.** keyOwnership.test.ts "shortcutKey" (the table; the AZERTY W key is NOT Z; a comma on KeyM stays a comma); useUndoRedoHotkeys.test.ts "undoRedoIntent on a non-Latin layout"; interactionWiring.test.ts "T-185 (1)" (a scan of every renderer source for a `.key` compared to a letter, a lower-cased `.key`, a letter `case` on a `.key` switch and a `Key<A-Z>` `.code` compare, with a discrimination case that shows each old shape is found); image.spec.ts, video-core.spec.ts (the Timeline and the Player) and audio.spec.ts "T-185 (1)", each dispatching a non-Latin `key` with the real `code` and each red on the unchanged build. Nine mutations killed at unit and, where an e2e case covers the site, at e2e.
+- **Lesson.** **When a bug is "this code reads the character where it means the key", fix the rule and pin the class, not the site.** A helper that every shortcut must go through, and a scan that fails on the old shape anywhere in the renderer, turn the next handler's mistake into a failing test instead of a sweep finding. And order matters inside such a helper: the position is the fallback, never the first answer, or a Latin layout whose letters sit elsewhere is broken in the same breath.
+
+---
+
 ## 2026-11-11 - T-184 (round 133), Track A: text over a picture is judged over white, a setter that takes a new identity drops what belonged to the old one, and an "always mounted" test is only as good as the mutant that proves it
 
 The seventy-first sweep, Track A (items 1, 3, 4 and 5).

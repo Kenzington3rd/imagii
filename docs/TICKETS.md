@@ -9648,7 +9648,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (the expediter runs test:media and the full suite on the merged tree); no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** open (round 134)
+- **Status:** done (round 134 — see the Done entry)
 
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
@@ -10227,6 +10227,39 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 134 — T-185, the one counted item of sweep 72, landed in the
+commit that carries this entry. One Sonnet worker in a fresh clone of
+6f40222. Track A (item 1): a shortcut is the key, on any keyboard
+layout. One helper, `shortcutKey` in lib/keyOwnership.ts, is the rule
+every shortcut reads: the Latin letter the layout prints wins (so
+AZERTY's W key, at the position QWERTY calls Z, is still W), any other
+printable ASCII character is itself, the key's position is the
+fallback for a key that prints no Latin letter (a Russian, Greek or
+Hebrew layout), Comma and Period stand in for a non-ASCII character
+there, and a named key is unchanged. Ctrl+Z, Ctrl+Y and Ctrl+Shift+Z
+in Video Studio, Audio Studio and Stream Graphics, the Stream Graphics
+tool keys, the Player's and the Timeline's I, O, comma and period, and
+the T-155 paste guard all read it, and a wiring scan fails on any
+renderer file that compares a key to a letter anywhere else; the
+question-mark overlay key stays a typed character. Deviation,
+accepted: the ticket's order sent a printable ASCII character on a
+letter's position to that letter (AZERTY's comma, on the M key, became
+"m" and stopped the frame step), so the worker added the
+printable-ASCII step after the Latin-letter rule, pinned by a unit
+row. Disclosed and not counted: an IME's "Process" key now maps to its
+position's letter (no shortcut fires differently); the Audio and Video
+e2e cases do not tell position-first from the right order (the Stream
+Graphics case's AZERTY Ctrl+W and the unit table do). Sweep 72's
+ffmpeg reader, sent back to complete its file reads, handed back
+clean. Expediter: the mutation (the printable-ASCII step removed) was
+killed at unit by the AZERTY comma and semicolon rows. Ledger: 9
+mutants, all killed at unit and at e2e where a case covers the site,
+every restore identical; the paste guard's T-155 form kept as a green
+control. Gates on the merged tree: npm run verify twice (212 files,
+6976 tests each), test:media 532 passed and 28 skipped of 560 (677 s),
+and the full xvfb Playwright suite, 843 passed in 58.6 min, no
+failures.
 
 Round 133 — T-184, the six counted items of sweep 71, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

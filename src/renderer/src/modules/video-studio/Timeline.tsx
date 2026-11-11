@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { KeyboardEvent as ReactKeyboardEvent, MouseEvent as ReactMouseEvent } from 'react'
 import { playableDuration, playheadNow, useVideoStore } from './store/videoStore'
-import { focusOwnsKey, hasChordModifier, inputTypeOf } from '../../lib/keyOwnership'
+import { focusOwnsKey, hasChordModifier, inputTypeOf, shortcutKey } from '../../lib/keyOwnership'
 import { formatClock } from '@shared/clockTime'
 
 type DragMode = 'start' | 'end' | 'scrub' | null
@@ -122,7 +122,8 @@ export function Timeline(): JSX.Element | null {
     // second: `.` stepped back 0.15 s and the right arrow moved 0.05 s instead of 0.1 in QA's measurement.
     const now = playheadNow(useVideoStore.getState())
     let next: number
-    switch (e.key) {
+    // T-185 (1): the key by `shortcutKey`: `,` `.` I O answer on a Russian or Greek layout (`key` "ш", `code` KeyI) as they do on a Latin one.
+    switch (shortcutKey(e)) {
       case ' ':
         // T-120: the guide's "click the track, then Space". The slider is the focused element after a click,
         // not the Player's column, so the Player's own handler never heard it, and an unhandled Space scrolls
@@ -151,12 +152,10 @@ export function Timeline(): JSX.Element | null {
         break
       // T-134 (2): one mark per press, as the Player's I / O are (see there); the arrows and , . above repeat on purpose.
       case 'i':
-      case 'I':
         e.preventDefault()
         if (!e.repeat) setMarker('in')
         return
       case 'o':
-      case 'O':
         e.preventDefault()
         if (!e.repeat) setMarker('out')
         return

@@ -1,10 +1,12 @@
 import { useEffect } from 'react'
 import { anyDialogClaim } from './useFocusTrap'
-import { inputTypeOf, isTextEntryTarget } from '../lib/keyOwnership'
+import { inputTypeOf, isTextEntryTarget, shortcutKey } from '../lib/keyOwnership'
 
 /** The subset of a KeyboardEvent the undo/redo decision needs. */
 export interface UndoRedoKey {
   key: string
+  /** The key's position (`KeyboardEvent.code`): a non-Latin layout's `key` is not "z" (T-185 (1)). */
+  code: string
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
@@ -37,7 +39,8 @@ export function undoRedoIntent(e: UndoRedoKey): 'undo' | 'redo' | null {
   if (e.modalOpen) return null
   const ctrl = e.ctrlKey || e.metaKey
   if (!ctrl) return null
-  const key = e.key.toLowerCase()
+  // T-185 (1): the letter by `shortcutKey`, so Ctrl+Z undoes on a Russian or Greek layout too (`key` "я", `code` KeyZ).
+  const key = shortcutKey(e)
   if (key === 'z' && !e.shiftKey) return 'undo'
   if (key === 'y' || (key === 'z' && e.shiftKey)) return 'redo'
   return null
@@ -52,6 +55,7 @@ export function useUndoRedoHotkeys(undo: () => void, redo: () => void): void {
     function onKey(e: KeyboardEvent): void {
       const intent = undoRedoIntent({
         key: e.key,
+        code: e.code,
         ctrlKey: e.ctrlKey,
         metaKey: e.metaKey,
         shiftKey: e.shiftKey,

@@ -15,7 +15,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { loadImage, storedDataUrl } from '../../lib/boundedImage'
 import { claimFirst } from '../../lib/claimFirst'
-import { inputTypeOf, isTextEntryTarget } from '../../lib/keyOwnership'
+import { inputTypeOf, isTextEntryTarget, shortcutKey } from '../../lib/keyOwnership'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
 import { SpecCard } from '../../components/SpecCard'
@@ -91,12 +91,13 @@ export function ImportPanel(): JSX.Element {
     // marks the paste that follows as a repeat. A fresh keydown (or the key's release, or losing the window) clears it, so a second deliberate Ctrl+V pastes again.
     let pasteHeld = false
     function onKeyDown(e: KeyboardEvent): void {
-      // T-155 (2): the chord is the paste key by POSITION as well as by letter (`code` is KeyV on a Cyrillic or Greek layout, where `key` is that layout's letter), and Shift+Insert.
-      const isV = e.code === 'KeyV' || e.key.toLowerCase() === 'v'
-      if (((e.ctrlKey || e.metaKey) && isV) || (e.shiftKey && e.key === 'Insert')) pasteHeld = e.repeat
+      // T-155 (2): the chord is the paste key by POSITION as well as by letter (`code` is KeyV on a Cyrillic or Greek layout, where `key` is that layout's letter), and Shift+Insert. T-185 (1): that rule is `shortcutKey`, held once for every shortcut.
+      const k = shortcutKey(e)
+      if (((e.ctrlKey || e.metaKey) && k === 'v') || (e.shiftKey && k === 'Insert')) pasteHeld = e.repeat
     }
     function onKeyUp(e: KeyboardEvent): void {
-      if (e.code === 'KeyV' || e.key.toLowerCase() === 'v' || e.key === 'Insert') pasteHeld = false
+      const k = shortcutKey(e)
+      if (k === 'v' || k === 'Insert') pasteHeld = false
     }
     function onPaste(e: ClipboardEvent): void {
       // T-163 (4): a dialog (or the coachmark) is a claim over the window, as for every other studio key (ImageStudio, RecordStudio, undo/redo): a picture pasted behind the

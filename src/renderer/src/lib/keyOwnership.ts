@@ -106,3 +106,32 @@ export function focusOwnsKey(tagName: string, inputType: string | null | undefin
 export function hasChordModifier(e: { ctrlKey: boolean; metaKey: boolean; altKey: boolean }): boolean {
   return e.ctrlKey || e.metaKey || e.altKey
 }
+
+/**
+ * The key a SHORTCUT means, whatever keyboard layout is active (T-185 (1)). `KeyboardEvent.key` is the character the
+ * layout prints, so on a Russian or Greek layout the Z key reports "я" or "ζ" and Ctrl+Z, R, I, O and the rest went
+ * dead; `KeyboardEvent.code` is the key's POSITION, which is the wrong answer on AZERTY (its W sits where QWERTY's Z
+ * does). So the letter a LATIN layout prints wins, and the position is only the fallback for a key that prints no Latin
+ * letter - the order T-155 (2) settled for the paste chord, now held in one place:
+ *
+ *  - `key` is one ASCII letter: that letter in lower case (so `Z` and `z` are one shortcut, and AZERTY's W is `w`);
+ *  - `key` is any other printable ASCII character (`,` `.` `?` Space `1`): itself, so a Latin layout's punctuation key
+ *    stays what it prints even where it sits on a letter's position (AZERTY's comma is the M key);
+ *  - `code` is `Key<A-Z>` (a non-Latin letter, a dead key): that letter in lower case, the key's position;
+ *  - `code` is `Comma` or `Period` (a non-ASCII character there: Russian "б" and "ю"): `,` or `.`;
+ *  - anything else - the named keys (Space is the printable case above; ArrowLeft, Home, End, Delete, Backspace,
+ *    Escape, Enter, Insert) - `key` unchanged.
+ *
+ * Pure: takes the two strings, so the node-env unit test drives the whole table. A shortcut compares THIS, never
+ * `e.key` against a letter (tests/unit/interactionWiring.test.ts pins it); `?` stays on `e.key` (a typed character
+ * every layout produces).
+ */
+export function shortcutKey(e: { key: string; code: string }): string {
+  if (/^[A-Za-z]$/.test(e.key)) return e.key.toLowerCase()
+  if (/^[\x20-\x7e]$/.test(e.key)) return e.key
+  const letter = /^Key([A-Z])$/.exec(e.code)?.[1]
+  if (letter) return letter.toLowerCase()
+  if (e.code === 'Comma') return ','
+  if (e.code === 'Period') return '.'
+  return e.key
+}

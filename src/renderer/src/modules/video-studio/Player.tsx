@@ -9,7 +9,7 @@ import { usePreviewCopyRun } from './store/runs'
 import { CropControls, CropOverlay, type AspectMode } from './CropOverlay'
 import { SafeZoneOverlay } from './SafeZoneOverlay'
 import { Icon } from '../../components/Icon'
-import { focusOwnsKey, hasChordModifier, inputTypeOf } from '../../lib/keyOwnership'
+import { focusOwnsKey, hasChordModifier, inputTypeOf, shortcutKey } from '../../lib/keyOwnership'
 import { claimFirst } from '../../lib/claimFirst'
 import { reportFailure } from '../../lib/reportFailure'
 import { formatClock } from '@shared/clockTime'
@@ -344,7 +344,8 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
     if (focusOwnsKey(tag, inputTypeOf(e.target), e.key)) return
     // T-124 (29): a chord (Ctrl+O, Alt+Left...) is not a bare-letter shortcut, and is not this handler's to swallow.
     if (hasChordModifier(e)) return
-    switch (e.key) {
+    // T-185 (1): the key by `shortcutKey`: `,` `.` I O answer on a Russian or Greek layout (`key` "ш", `code` KeyI) as they do on a Latin one.
+    switch (shortcutKey(e)) {
       case ' ':
         e.preventDefault()
         // T-133 (7b): a toggle is one decision per press - a held Space flipped play/pause at the keyboard's repeat rate (~30 Hz) and
@@ -371,12 +372,10 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
       // one is an undo step, so a second of holding evicted real edits from the 50-step history, and during playback the point drifted to the
       // last repeat's frame. `preventDefault` still runs on a repeat (a held key must not reach the page's own shortcuts).
       case 'i':
-      case 'I':
         e.preventDefault()
         if (!e.repeat) setMarker('in')
         break
       case 'o':
-      case 'O':
         e.preventDefault()
         if (!e.repeat) setMarker('out')
         break

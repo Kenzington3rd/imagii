@@ -4086,3 +4086,85 @@ test.describe('round 126 Track A (T-177 (2)): a drop that carries no file says s
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-185 (1): a shortcut is the key on any keyboard layout (events dispatched with a non-Latin `key` and the real `code`, the T-155 (2) shape)
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Video Studio - the shortcuts on a non-Latin layout (T-185 (1))', () => {
+  // A keydown on the focused element, as the OS sends it: `key` is the layout's letter, `code` the key's position.
+  const press = (window: Page, key: string, code: string, ctrl = false): Promise<void> =>
+    window.evaluate(
+      ([k, c, ctrlKey]) => {
+        ;(document.activeElement ?? document.body).dispatchEvent(
+          new KeyboardEvent('keydown', { key: k as string, code: c as string, ctrlKey: ctrlKey as boolean, bubbles: true, cancelable: true })
+        )
+      },
+      [key, code, ctrl] as const
+    )
+
+  test('timeline: "ш" and "щ" (the I and O keys) set the in and out points, "б" and "ю" (Comma, Period) step a frame, Ctrl+"я" (the Z key) puts the points back', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t185-timeline-keys')
+    try {
+      const slider = window.getByRole('slider', { name: 'Playhead' })
+      await expect.poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 }).toBeGreaterThan(FIXTURE_SECONDS)
+      const { dur } = await seekableRanges(window)
+      const frame = 1 / FIXTURE_FPS
+
+      const at40 = await trackPointAt(window, 0.4)
+      await window.mouse.click(at40.x, at40.y)
+      await expectScrubbedTo(window, dur * 0.4, 'a click at 40% of the track')
+      await expect(slider, 'the click handed the keyboard to the slider').toBeFocused()
+      await press(window, 'ш', 'KeyI')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: '"ш" on the I key sets the In point' }).toBeGreaterThan(0.5)
+      const at80 = await trackPointAt(window, 0.8)
+      await window.mouse.click(at80.x, at80.y)
+      await expectScrubbedTo(window, dur * 0.8, 'a click at 80% of the track')
+      await press(window, 'щ', 'KeyO')
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: '"щ" on the O key sets the Out point' }).toBeLessThan(FIXTURE_SECONDS)
+
+      // Ctrl+"я" is Undo: the Out point first, then the In point.
+      await press(window, 'я', 'KeyZ', true)
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'Ctrl+"я" puts the Out point back' }).toBe(FIXTURE_SECONDS)
+      await press(window, 'я', 'KeyZ', true)
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'and a second one puts the In point back' }).toBeLessThan(0.15)
+
+      // "б" on the Comma key and "ю" on the Period key step one frame from the slider.
+      await slider.focus()
+      const parked = await settledTime(window)
+      await press(window, 'ю', 'Period')
+      await expectScrubbedTo(window, parked + frame, '"ю" (Period) from the slider')
+      await press(window, 'б', 'Comma')
+      await press(window, 'б', 'Comma')
+      await expectScrubbedTo(window, parked - frame, '"б" (Comma) twice from the slider')
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('player: "ш" and "щ" set the in and out points and "ю" steps a frame with the Player focused; Ctrl+"я" puts the points back', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t185-player-keys')
+    try {
+      await expect.poll(async () => (await seekableRanges(window)).dur, { timeout: 20_000 }).toBeGreaterThan(FIXTURE_SECONDS)
+      const frame = 1 / FIXTURE_FPS
+      await window.getByRole('group', { name: 'Video player' }).focus()
+      const parked = await settledTime(window)
+      await press(window, 'ю', 'Period')
+      await expectScrubbedTo(window, parked + frame, '"ю" (Period) in the Player')
+      for (let i = 0; i < 5; i++) await window.keyboard.press('ArrowRight')
+      await expectScrubbedTo(window, parked + frame + 0.5, 'five nudges')
+      await press(window, 'ш', 'KeyI')
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: '"ш" on the I key sets the In point from the Player' }).toBeGreaterThan(0.3)
+      for (let i = 0; i < 5; i++) await window.keyboard.press('ArrowRight')
+      await press(window, 'щ', 'KeyO')
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: '"щ" on the O key sets the Out point from the Player' }).toBeLessThan(FIXTURE_SECONDS)
+      await press(window, 'я', 'KeyZ', true)
+      await expect.poll(async () => (await timelineReadouts(window))[2], { timeout: 10_000, message: 'Ctrl+"я" puts the Out point back' }).toBe(FIXTURE_SECONDS)
+      await press(window, 'я', 'KeyZ', true)
+      await expect.poll(async () => (await timelineReadouts(window))[0], { timeout: 10_000, message: 'and a second one puts the In point back' }).toBeLessThan(0.15)
+    } finally {
+      await app.close()
+    }
+  })
+})

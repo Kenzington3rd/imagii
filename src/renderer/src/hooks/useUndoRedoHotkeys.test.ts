@@ -9,6 +9,7 @@ import { undoRedoIntent } from './useUndoRedoHotkeys'
  */
 const base: {
   key: string
+  code: string
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
@@ -17,6 +18,7 @@ const base: {
   modalOpen: boolean
 } = {
   key: 'z',
+  code: 'KeyZ',
   ctrlKey: false,
   metaKey: false,
   shiftKey: false,
@@ -52,8 +54,9 @@ describe('undoRedoIntent', () => {
   })
 
   it('ignores unrelated keys', () => {
-    for (const key of ['a', 'Escape', 'Enter', ' ', 'ArrowLeft']) {
-      expect(undoRedoIntent({ ...base, key, ctrlKey: true })).toBeNull()
+    const unrelated: [string, string][] = [['a', 'KeyA'], ['Escape', 'Escape'], ['Enter', 'Enter'], [' ', 'Space'], ['ArrowLeft', 'ArrowLeft']]
+    for (const [key, code] of unrelated) {
+      expect(undoRedoIntent({ ...base, key, code, ctrlKey: true })).toBeNull()
     }
   })
 
@@ -107,5 +110,39 @@ describe('undoRedoIntent', () => {
   it('still fires from a SELECT or a button (not text entry)', () => {
     expect(undoRedoIntent({ ...base, ctrlKey: true, tagName: 'SELECT' })).toBe('undo')
     expect(undoRedoIntent({ ...base, ctrlKey: true, tagName: 'BUTTON' })).toBe('undo')
+  })
+})
+
+/**
+ * T-185 (1): Ctrl+Z read `e.key` alone, and on a Russian, Greek or any non-Latin layout `key` is that layout's letter
+ * ("я" for the Z key), so undo and redo were dead there. `shortcutKey` reads the letter a Latin layout prints, and the
+ * key's position (`code`) only for a key that prints no Latin letter.
+ */
+describe('undoRedoIntent on a non-Latin layout (T-185 (1))', () => {
+  it('Ctrl+"я" (the Z key on a Russian layout) undoes; Ctrl+"н" (the Y key) redoes; Ctrl+Shift+"я" redoes', () => {
+    expect(undoRedoIntent({ ...base, key: 'я', code: 'KeyZ', ctrlKey: true })).toBe('undo')
+    expect(undoRedoIntent({ ...base, key: 'н', code: 'KeyY', ctrlKey: true })).toBe('redo')
+    expect(undoRedoIntent({ ...base, key: 'Я', code: 'KeyZ', ctrlKey: true, shiftKey: true })).toBe('redo')
+  })
+
+  it('Cmd (Meta) on a Greek layout: "ζ" on the Z key undoes', () => {
+    expect(undoRedoIntent({ ...base, key: 'ζ', code: 'KeyZ', metaKey: true })).toBe('undo')
+  })
+
+  it('AZERTY discriminates: its Z key (code KeyW) is still undo, and its W key (code KeyZ) is NOT', () => {
+    expect(undoRedoIntent({ ...base, key: 'z', code: 'KeyW', ctrlKey: true })).toBe('undo')
+    expect(undoRedoIntent({ ...base, key: 'w', code: 'KeyZ', ctrlKey: true })).toBeNull()
+  })
+
+  it('a non-Latin letter on another key is nothing, and a bare non-Latin Z is nothing', () => {
+    expect(undoRedoIntent({ ...base, key: 'ч', code: 'KeyX', ctrlKey: true })).toBeNull()
+    expect(undoRedoIntent({ ...base, key: 'я', code: 'KeyZ' })).toBeNull()
+  })
+
+  it('the guards stand for the non-Latin key too: a text field and an open dialog still win, a checkbox does not', () => {
+    expect(undoRedoIntent({ ...base, key: 'я', code: 'KeyZ', ctrlKey: true, tagName: 'INPUT', inputType: 'text' })).toBeNull()
+    expect(undoRedoIntent({ ...base, key: 'я', code: 'KeyZ', ctrlKey: true, tagName: 'TEXTAREA' })).toBeNull()
+    expect(undoRedoIntent({ ...base, key: 'я', code: 'KeyZ', ctrlKey: true, modalOpen: true })).toBeNull()
+    expect(undoRedoIntent({ ...base, key: 'я', code: 'KeyZ', ctrlKey: true, tagName: 'INPUT', inputType: 'checkbox' })).toBe('undo')
   })
 })

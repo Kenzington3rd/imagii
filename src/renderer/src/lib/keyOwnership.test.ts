@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { NON_TEXT_INPUT_TYPES, controlOwnsKey, focusOwnsKey, hasChordModifier, isTextEntryTarget } from './keyOwnership'
+import { NON_TEXT_INPUT_TYPES, controlOwnsKey, focusOwnsKey, hasChordModifier, isTextEntryTarget, shortcutKey } from './keyOwnership'
 
 /**
  * T-123 (2): who owns a key when a control has focus. Every guard in the renderer asked "is it an INPUT?", and a
@@ -127,5 +127,45 @@ describe('hasChordModifier', () => {
 
   it('every modifier at once is still one chord', () => {
     expect(hasChordModifier({ ctrlKey: true, metaKey: true, altKey: true })).toBe(true)
+  })
+})
+
+/**
+ * T-185 (1): a shortcut is the key on any keyboard layout. The letter a LATIN layout prints wins (AZERTY's Z is Z, its
+ * W is not); the key's position is only the fallback for a key that prints no Latin letter; Comma / Period stand in
+ * for a non-ASCII key there; every named key is itself.
+ */
+describe('shortcutKey', () => {
+  it.each([
+    ['US z', 'z', 'KeyZ', 'z'],
+    ['Shift Z', 'Z', 'KeyZ', 'z'],
+    ['Russian я on the Z key', 'я', 'KeyZ', 'z'],
+    ['Russian Я (Shift) on the Z key', 'Я', 'KeyZ', 'z'],
+    ['Russian н on the Y key', 'н', 'KeyY', 'y'],
+    ['Russian к on the R key', 'к', 'KeyR', 'r'],
+    ['Russian ш on the I key', 'ш', 'KeyI', 'i'],
+    ['Greek ζ on the Z key', 'ζ', 'KeyZ', 'z'],
+    ['AZERTY z (its Z key sits at KeyW)', 'z', 'KeyW', 'z'],
+    ['AZERTY w (its W key sits at KeyZ): NOT z, the position is only a fallback', 'w', 'KeyZ', 'w'],
+    ['Russian б on the Comma key', 'б', 'Comma', ','],
+    ['Russian ю on the Period key', 'ю', 'Period', '.'],
+    ['Russian . on the Slash key', '.', 'Slash', '.'],
+    ['US comma', ',', 'Comma', ','],
+    ['US period', '.', 'Period', '.'],
+    ['AZERTY comma, which sits at KeyM: stays a comma, not m', ',', 'KeyM', ','],
+    ['AZERTY ; on the Comma key: stays ;, not a comma', ';', 'Comma', ';'],
+    ['Space', ' ', 'Space', ' '],
+    ['ArrowLeft', 'ArrowLeft', 'ArrowLeft', 'ArrowLeft'],
+    ['Home', 'Home', 'Home', 'Home'],
+    ['End', 'End', 'End', 'End'],
+    ['Delete', 'Delete', 'Delete', 'Delete'],
+    ['Backspace', 'Backspace', 'Backspace', 'Backspace'],
+    ['Insert', 'Insert', 'Insert', 'Insert'],
+    ['Escape', 'Escape', 'Escape', 'Escape'],
+    ['Enter', 'Enter', 'Enter', 'Enter'],
+    ['a digit', '1', 'Digit1', '1'],
+    ['a non-Latin key on no letter position and no named key', 'я', 'Backquote', 'я']
+  ])('%s', (_name, key, code, expected) => {
+    expect(shortcutKey({ key, code })).toBe(expected)
   })
 })
