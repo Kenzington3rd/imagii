@@ -5160,3 +5160,164 @@ test.describe('T-191 (1): a held Enter on Clear list or on a Recent pick', () =>
     })
   }
 })
+
+// ── T-192 (4): a double-click on the autosave banner's Clear, Later or Dismiss does not open the studio under it ──────────────────────────────
+//
+// The first press removes the banner, Home's card grid (the same `max-w-4xl` box) moves up into its place, and the second press of a double-click lands on whatever is
+// now under the pointer. Measured in the built app on the unchanged tree (a real two-press sequence, the second ~60 ms after the banner went, detail 2), at the 1280x870
+// window this display gives and at 1366x768, 1306x734, 1161x653 and 1024x640: Clear (healthy banner), Clear and Dismiss (damaged banner), pressed at the middle of the
+// button, land on Video Studio's card (`#/video`) at every size, and the app navigates there. Later, pressed at the middle, lands on NOTHING at any of them: Home puts the
+// "Last autosave: N min ago" line (28 px) where the banner was and the pointer, 25 px down, is on it. The line's height is the ceiling: the button is 24 px tall, so the
+// lower part of Later (more than 28 px under the banner's top) is over the card, and a person's pointer is anywhere on the button. Pressed there, Later lands on Video
+// Studio's card as the other three do, and that is the case pinned for it. The fix is `swallowRepeatClicks()` at the moment each of the three removes the banner.
+//
+// Time: the app swallows repeat presses for half a second after it starts (App's route-change rule, `/` to `/home`), and the banner is up before that has run out, so every
+// case first lets the page be older than 2 s - without that wait the second press is dropped on the unchanged build too and the cases would pass for the wrong reason.
+test.describe('T-192 (4): a double-click on the autosave banner\'s buttons', () => {
+  const DAMAGED = '{"schemaVersion":2,"savedAt":175534'
+  const OFFER = /imagii autosaved your work/
+  const NOTICE = /imagii found an autosave from .*, but it's damaged/
+
+  type Case = { button: 'Restore' | 'Clear' | 'Later' | 'Dismiss'; damaged: boolean; where: 'middle' | 'lower edge' }
+  const CASES: Case[] = [
+    { button: 'Clear', damaged: false, where: 'middle' },
+    { button: 'Later', damaged: false, where: 'lower edge' },
+    { button: 'Clear', damaged: true, where: 'middle' },
+    { button: 'Dismiss', damaged: true, where: 'middle' }
+  ]
+
+  /** Launch with the autosave on disk, wait out the startup swallow, size the window if asked, and return the pointer's point on the button. */
+  async function openBanner(label: string, c: Case, size?: readonly [number, number], route?: string) {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seedAutosave(userDataDir, c.damaged ? DAMAGED : { ...canvasProject('Kept rect'), ...(route ? { place: { route } } : {}) })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    if (size) await setContentSize(app, window, size[0], size[1])
+    await expect(window.getByText(c.damaged ? NOTICE : OFFER)).toBeVisible({ timeout: 20_000 })
+    await window.waitForFunction(() => performance.now() > 2000)
+    const button = window.getByRole('button', { name: c.button, exact: true })
+    const box = await button.boundingBox()
+    if (!box) throw new Error(`${c.button} has no box`)
+    const x = box.x + box.width / 2
+    const y = c.where === 'middle' ? box.y + box.height / 2 : box.y + box.height - 3
+    return { app, window, root, userDataDir, x, y }
+  }
+
+  const bannerGone = (window: Page): Promise<unknown> =>
+    window.waitForFunction(() => !/autosaved your work|but it's damaged/.test(document.body.innerText))
+
+  const cardUnder = (window: Page, x: number, y: number): Promise<string | null> =>
+    window.evaluate(([px, py]) => document.elementFromPoint(px as number, py as number)?.closest('a')?.getAttribute('href') ?? null, [x, y])
+
+  for (const c of CASES) {
+    const which = `${c.button} on the ${c.damaged ? 'damaged' : 'healthy'} banner`
+    for (const size of [undefined, [1366, 768]] as const) {
+      const at = size ? `${size[0]}x${size[1]}` : 'the default window'
+      test(`${which}, double-clicked at its ${c.where} in ${at}: the second press opens no studio and Home stays`, async () => {
+        test.setTimeout(120_000)
+        const { app, window, root, userDataDir, x, y } = await openBanner(`t192-${c.button}-${c.damaged ? 'd' : 'h'}`, c, size)
+        try {
+          await window.mouse.move(x, y)
+          await window.mouse.down({ clickCount: 1 })
+          await window.mouse.up({ clickCount: 1 })
+          await bannerGone(window)
+          // The premise: the point the button was at is now a Home card (a link that ignores `detail`), so the second press has something to open.
+          expect(await cardUnder(window, x, y), 'the point the button was at is now a Home card').not.toBeNull()
+          await window.waitForTimeout(60)
+          await window.mouse.down({ clickCount: 2 })
+          await window.mouse.up({ clickCount: 2 })
+          await window.waitForTimeout(1000)
+          expect(await window.evaluate(() => window.location.hash), 'the second press opened no studio').toBe('#/home')
+          await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+          // The first press still did its own work.
+          if (c.button === 'Clear') expect(existsSync(autosaveFile(userDataDir)), 'Clear deleted the file').toBe(false)
+          else expect(existsSync(autosaveFile(userDataDir)), `${c.button} kept the file`).toBe(true)
+          // The swallow is for half a second: a press after that is a decision, and it works.
+          await window.waitForTimeout(300)
+          await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+          await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+        } finally {
+          await app.close().catch(() => undefined)
+          cleanup(root)
+        }
+      })
+    }
+
+    // The control: the guard is the REPEAT, not the speed. A single press (detail 1) at the same point, as soon after the banner goes, is a person's own decision and opens the card.
+    test(`${which}: a single click on the card that takes its place, straight after, still opens it (control)`, async () => {
+      test.setTimeout(120_000)
+      const { app, window, root, x, y } = await openBanner(`t192-ctl-${c.button}-${c.damaged ? 'd' : 'h'}`, c)
+      try {
+        await window.mouse.move(x, y)
+        await window.mouse.down({ clickCount: 1 })
+        await window.mouse.up({ clickCount: 1 })
+        await bannerGone(window)
+        await window.waitForTimeout(60)
+        await window.mouse.down({ clickCount: 1 })
+        await window.mouse.up({ clickCount: 1 })
+        await expect.poll(() => window.evaluate(() => window.location.hash), { timeout: 15_000 }).toBe('#/video')
+      } finally {
+        await app.close().catch(() => undefined)
+        cleanup(root)
+      }
+    })
+  }
+
+  // Restore, the banner's fourth button. An autosave made on Home (no route, or `/home`) applies without a route change, so App's swallow never runs: the banner goes when
+  // the apply lands and the cards move up under the pointer. Pressed at its lower edge (at the middle the pointer is on the "Last autosave" line, as with Later). Measured on
+  // the unchanged build: the second press navigates to `#/video`, for a missing route and for `/home`.
+  const RESTORE: Case = { button: 'Restore', damaged: false, where: 'lower edge' }
+  for (const route of [undefined, '/home'] as const) {
+    for (const size of [undefined, [1366, 768]] as const) {
+      const at = size ? `${size[0]}x${size[1]}` : 'the default window'
+      test(`Restore on the healthy banner (autosave route ${route ?? 'none'}), double-clicked at its lower edge in ${at}: the autosave is applied once, the second press opens no studio and Home stays`, async () => {
+        test.setTimeout(120_000)
+        const { app, window, root, x, y } = await openBanner('t192-restore', RESTORE, size, route)
+        try {
+          await installToastLog(window)
+          await window.mouse.move(x, y)
+          await window.mouse.down({ clickCount: 1 })
+          await window.mouse.up({ clickCount: 1 })
+          await bannerGone(window)
+          expect(await cardUnder(window, x, y), 'the point the button was at is now a Home card').not.toBeNull()
+          await window.waitForTimeout(60)
+          await window.mouse.down({ clickCount: 2 })
+          await window.mouse.up({ clickCount: 2 })
+          await window.waitForTimeout(1000)
+          expect(await window.evaluate(() => window.location.hash), 'the second press opened no studio').toBe('#/home')
+          await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Restored from autosave')
+          expect((await readToastLog(window)).filter((t) => t === 'Restored from autosave'), 'applied once').toHaveLength(1)
+          // The swallow is for half a second: a press after that is a decision, and it works - and the studio it opens holds the restored layer once.
+          await window.waitForTimeout(300)
+          await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+          await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+          await expect(window.getByText('Kept rect'), 'the autosave landed in the canvas, once').toHaveCount(1)
+        } finally {
+          await app.close().catch(() => undefined)
+          cleanup(root)
+        }
+      })
+    }
+  }
+
+  test('Restore on the healthy banner: a single click on the card that takes its place, straight after, still opens it (control)', async () => {
+    test.setTimeout(120_000)
+    const { app, window, root, x, y } = await openBanner('t192-restore-ctl', RESTORE)
+    try {
+      await window.mouse.move(x, y)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await bannerGone(window)
+      await window.waitForTimeout(60)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await expect.poll(() => window.evaluate(() => window.location.hash), { timeout: 15_000 }).toBe('#/video')
+    } finally {
+      await app.close().catch(() => undefined)
+      cleanup(root)
+    }
+  })
+})

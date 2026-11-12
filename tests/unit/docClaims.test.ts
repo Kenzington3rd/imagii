@@ -217,11 +217,11 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
     ['canvasStore.ts:391', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 391, 391, /makeLineLayer\(points: number\[\], name: 'Line' \| 'Pencil' = 'Line'\)/],
     ['canvasStore.ts:197', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 197, 197, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
     ['canvasStore.ts:130', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 130, 130, /future: \[\]/],
-    ['ImageStudio.tsx:69-78', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 69, 78, /key === 'v'[\s\S]*setTool\('pencil'\)/],
-    ['ImageStudio.tsx:61', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 61, 61, /if \(hasChordModifier\(e\)\) return/],
-    ['ImageStudio.tsx:58', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 58, 58, /focusOwnsKey\(/],
+    ['ImageStudio.tsx:70-79', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 70, 79, /key === 'v'[\s\S]*setTool\('pencil'\)/],
+    ['ImageStudio.tsx:62', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 62, 62, /if \(hasChordModifier\(e\)\) return/],
+    ['ImageStudio.tsx:59', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 59, 59, /focusOwnsKey\(/],
     ['PropertiesPanel.tsx:52', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 52, 52, /<PositionBox value=\{layer\.x\}/],
-    ['ImportPanel.tsx:81', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 81, 81, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
+    ['ImportPanel.tsx:94', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 94, 94, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]
 
@@ -716,9 +716,9 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
     ['Open project', 'Home.tsx:101', home, 101, 101, ['onClick={handleLoad}']],
     ['Save project', 'Home.tsx:107', home, 107, 107, ['onClick={handleSave}']],
     ['NavCard x5', 'Home.tsx:117-151', home, 117, 151, ['<NavCard']],
-    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:263-283', autosave, 263, 283, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Later']],
-    // The row writes this cite in its shorthand (`:225-238`, the same file as the cite before it). T-140 (6) re-pointed both cites (+9 lines above them: the banner's listener and the backstop's sentence), not loosened; T-160 (1) again (-6 lines above them: the age gate and its constant), not loosened. T-184 (4), (5) again (+18 lines above the offer's buttons, +18 above the damaged notice's: the status region's helper and the banners' `max-w-4xl` / `withRegion` wrappers), re-pointed, not loosened.
-    ['AutosaveRestore: Restore / Clear / Later', ':237-250', autosave, 237, 250, ['onClick={() => void clearAutosave()}', 'onClick={() => setDismissed(true)}', 'Dismiss']]
+    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:275-295', autosave, 275, 295, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={dismissBanner}', 'Later']],
+    // The row writes this cite in its shorthand (`:225-238`, the same file as the cite before it). T-140 (6) re-pointed both cites (+9 lines above them: the banner's listener and the backstop's sentence), not loosened; T-160 (1) again (-6 lines above them: the age gate and its constant), not loosened. T-184 (4), (5) again (+18 lines above the offer's buttons, +18 above the damaged notice's: the status region's helper and the banners' `max-w-4xl` / `withRegion` wrappers), re-pointed, not loosened. T-192 (4) again (+12 lines above them: the `dismissBanner` helper and its comment, +1 the import, +2 Restore's comment and swallow; Later and Dismiss now press `dismissBanner`, which is `setDismissed(true)` and the swallow), re-pointed, not loosened.
+    ['AutosaveRestore: Restore / Clear / Later', ':249-262', autosave, 249, 262, ['onClick={() => void clearAutosave()}', 'onClick={dismissBanner}', 'Dismiss']]
   ]
 
   it('the Home table was found, with its rows (a scan that matched nothing would look like a clean table)', () => {

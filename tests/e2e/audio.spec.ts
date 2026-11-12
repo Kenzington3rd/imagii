@@ -6851,3 +6851,260 @@ test.describe('T-191 (4): the waveform\'s played part differs from the unplayed 
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-192 (2): a held Enter on a cut chip puts back ONE cut. The chips are index-keyed, so after one is put back the focused node shows the NEXT cut, and the key's
+// auto-repeats (keyboard clicks, `detail` 0, which `isRepeatPress` lets through) put back every one after it - each an Undo step. `ignoreHeldEnter` is the rule the
+// preset Save and the layer Duplicate buttons already carry; a fresh Enter on the chip now under focus still puts that one back (the list-row behaviour).
+// T-192 (3): a press that swaps Audio Studio between its importer and its editor leaves the keyboard on the page (the next Tab starts at the Home link). Choose file…
+// and a Recent entry (the pick) put focus on the waveform's Play once the player is ready; Close puts it on the importer's Choose file…. Only when the press held
+// focus: a click that focused nothing, a focus the person moved elsewhere while the chooser was open, and a drop move nothing.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Audio Studio - a held Enter puts back one cut; a swapped studio keeps the keyboard\'s place (T-192 (2), (3))', () => {
+  const CHOOSE = { name: 'Choose file…' }
+  const chooseButton = (window: Page) => window.getByRole('button', CHOOSE)
+  const closeButton = (window: Page) => window.getByRole('button', { name: 'Close', exact: true })
+  const onBody = (window: Page): Promise<boolean> => window.evaluate(() => document.activeElement === document.body || document.activeElement === null)
+
+  /** The chooser opening IS a call to `showOpenDialog` in MAIN; `delayMs` holds the answer back (a native dialog that is still open). */
+  async function stubCountedOpenDialog(app: ElectronApplication, filePath: string, delayMs = 0): Promise<void> {
+    await app.evaluate(({ dialog }, { picked, delayMs }) => {
+      const g = globalThis as unknown as { __t192Opens?: number }
+      g.__t192Opens = 0
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => {
+        g.__t192Opens = (g.__t192Opens ?? 0) + 1
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+        return { canceled: false, filePaths: [picked] }
+      }
+    }, { picked: filePath, delayMs })
+  }
+  const opens = (app: ElectronApplication): Promise<number> =>
+    app.evaluate(() => (globalThis as unknown as { __t192Opens?: number }).__t192Opens ?? 0)
+
+  async function sixCuts(window: Page): Promise<string[]> {
+    for (let i = 0; i < 6; i++) {
+      await dragCut(window, 0.05 + i * 0.16, 0.05 + i * 0.16 + 0.08)
+      await expect(cutChips(window)).toHaveCount(i + 1)
+    }
+    return cutChips(window).allTextContents()
+  }
+
+  test('Enter held on the first of six chips puts back exactly one; a fresh Enter then puts back the next', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t192-held-chip')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const all = await sixCuts(window)
+      const first = cutChips(window).first()
+      await first.focus()
+      await expect(first).toBeFocused()
+      // The key goes down and stays down: the first keydown presses the chip ...
+      await window.keyboard.down('Enter')
+      await expect(cutChips(window)).toHaveCount(5)
+      // ... and its auto-repeats land on the chip that took its place.
+      for (let i = 0; i < 4; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(400)
+      await expect(cutChips(window), 'a repeat put back another cut (red on the base: all but one)').toHaveCount(5)
+      expect(await cutChips(window).allTextContents(), 'the first cut is the one that went').toEqual(all.slice(1))
+
+      // Control: a fresh Enter is a decision. It puts back the chip now under focus, which is the next cut.
+      await window.keyboard.press('Enter')
+      await expect(cutChips(window)).toHaveCount(4)
+      expect(await cutChips(window).allTextContents()).toEqual(all.slice(2))
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Choose file… pressed with Enter leaves focus on the waveform\'s Play; a Recent entry pressed with Enter does too', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-pick-keys')
+    const { window, app } = studio
+    try {
+      await stubOpenDialog(app, studio.fixture)
+      const choose = chooseButton(window)
+      await choose.focus()
+      await expect(choose).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(playButton(window), 'the swap put the focus on Play, not <body> (red on the base: the body)').toBeFocused()
+      // The keyboard goes on from there: Enter on Play starts the sound.
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: 'Pause', exact: true })).toBeVisible()
+      await window.keyboard.press('Enter')
+
+      // Close (Enter) brings the importer back with Choose file… focused; Tab goes to the Recent toggle, which opens its list and a pick from it.
+      await closeButton(window).focus()
+      await window.keyboard.press('Enter')
+      await expect(chooseButton(window)).toBeFocused()
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      // The Recent list loads after the importer mounts: Tab only once its toggle is there to be reached.
+      await expect(toggle).toBeVisible()
+      await window.keyboard.press('Tab')
+      await expect(toggle).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await window.keyboard.press('Tab')
+      await expect(window.getByRole('button', { name: /e2e-tone\.wav/ }).first()).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(playButton(window), 'a Recent pick lands on Play too (red on the base: the body)').toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('Close pressed with Enter leaves focus on the importer\'s Choose file…, and a held Enter opens no chooser', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-close-keys')
+    const { window, app } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await stubCountedOpenDialog(app, studio.fixture)
+      const close = closeButton(window)
+      await close.focus()
+      await expect(close).toBeFocused()
+      await window.keyboard.down('Enter')
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await expect(chooseButton(window), 'Choose file… has the focus, not <body> (red on the base: the body)').toBeFocused()
+      // The auto-repeats of the Enter that pressed Close land on the button the swap focused: they open no chooser (T-191 (1): the keys down stop acting until let go).
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(500)
+      expect(await opens(app), 'a repeat opened the file chooser').toBe(0)
+      await expect(chooseButton(window)).toBeFocused()
+      // A fresh Enter on it is a decision: the chooser opens and the sound loads.
+      await window.keyboard.press('Enter')
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      expect(await opens(app)).toBe(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a pick and a Close that held no focus (a click on nothing focused) move nothing', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-no-focus')
+    const { window, app } = studio
+    try {
+      await stubOpenDialog(app, studio.fixture)
+      expect(await onBody(window), 'the premise: nothing has focus').toBe(true)
+      // `click()` on the element focuses nothing (a mouse press would focus the button in Chromium).
+      await chooseButton(window).evaluate((el: HTMLElement) => el.click())
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'the pick moved the focus though the press had none').toBe(true)
+
+      await closeButton(window).evaluate((el: HTMLElement) => el.click())
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'Close moved the focus though the press had none').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a drop opens the sound and moves nothing, though an earlier pick from the keyboard had focus', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-drop')
+    const { window, app } = studio
+    try {
+      await stubOpenDialog(app, null)
+      const choose = chooseButton(window)
+      await choose.focus()
+      // A canceled chooser is a press that failed: it leaves no record behind for the next swap.
+      await window.keyboard.press('Enter')
+      await expect(choose).toBeFocused()
+      await window.waitForTimeout(300)
+      await window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await dropAndWaitReady(studio)
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'a drop moved the focus (the canceled pick\'s record outlived it)').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('focus the person put elsewhere while the chooser was open stays there', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-elsewhere')
+    const { window, app } = studio
+    try {
+      // The chooser answers 1.5 s after it opens; the person moves on in the meantime.
+      await stubCountedOpenDialog(app, studio.fixture, 1500)
+      const choose = chooseButton(window)
+      await choose.focus()
+      await window.keyboard.press('Enter')
+      const tour = window.getByRole('button', { name: 'Show tutorial' })
+      await tour.focus()
+      await expect(tour).toBeFocused()
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      await expect(tour, 'the swap took the focus from the control the person had moved to').toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a pick that fails to load leaves no record for the drop that follows', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-failed-pick')
+    const { window, app } = studio
+    try {
+      // A file with a sound extension and no sound in it: the importer refuses it with its toast.
+      const garbage = path.join(studio.root, 'source', 'not-a-sound.wav')
+      writeFileSync(garbage, Buffer.from('this is not a wav file'))
+      await stubOpenDialog(app, garbage)
+      await chooseButton(window).focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).not.toEqual([])
+      await expect(chooseButton(window)).toBeEnabled()
+      await expect(window.getByText('Drop audio or video here')).toBeVisible()
+      await window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await dropAndWaitReady(studio)
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'a drop moved the focus (the failed pick\'s record outlived it)').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a pick whose studio was left while the chooser was open leaves no record for the sound that arrives', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-left')
+    const { window, app } = studio
+    try {
+      await stubCountedOpenDialog(app, studio.fixture, 1500)
+      await chooseButton(window).focus()
+      await window.keyboard.press('Enter')
+      // The chooser is open: the person goes Home, and the sound is picked and loaded while they are away.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.waitForTimeout(2500)
+      await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'the studio they came back to took the focus for a press they walked away from').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a real mouse click on Choose file… and on Close puts the focus on the new content too (the swap rule for a mouse, as T-189)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t192-mouse')
+    const { window, app } = studio
+    try {
+      await stubOpenDialog(app, studio.fixture)
+      await chooseButton(window).click()
+      await expect(playButton(window)).toBeEnabled({ timeout: 30_000 })
+      await expect(playButton(window)).toBeFocused()
+      await closeButton(window).click()
+      await expect(chooseButton(window)).toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

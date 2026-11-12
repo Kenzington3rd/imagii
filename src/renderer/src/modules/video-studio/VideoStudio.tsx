@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
 import { HomeLink } from '../../components/HomeLink'
@@ -35,6 +35,7 @@ import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { reportFailure } from '../../lib/reportFailure'
 import { videoTutorial } from '../../tutorials/videoTutorial'
+import { dropSwapPress, recordSwapPress } from '../../lib/swapFocus'
 
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
@@ -67,7 +68,10 @@ export function VideoStudio(): JSX.Element {
   // un-undoable in place. Same binding as Audio Studio and Stream Graphics.
   useUndoRedoHotkeys(undo, redo)
 
-  function handleClose(): void {
+  // T-192 (3): a pick's record of "this control had focus" lives until the Player can take it; a studio that goes away first must not leave it for the next video.
+  useEffect(() => () => dropSwapPress('video-play'), [])
+
+  function handleClose(hadFocus: boolean): void {
     // UX round 18: clearSource() silently wiped every clip and its edits.
     // Confirm first whenever there is anything to lose, and not otherwise (T-147 (3): a video
     // nobody touched has one pristine clip and nothing else, `videoSessionHasLoss`; clearSource also
@@ -77,6 +81,8 @@ export function VideoStudio(): JSX.Element {
     // on screen. The question says so, so a person who closes the video does not believe they stopped it.
     const message = videoDiscardMessage(useVideoStore.getState(), 'close', jobsKeepGoingSentence(readVideoRunSnapshot()))
     if (message !== null && !confirm(message)) return
+    // T-192 (3): Close takes itself away with the video, and focus goes to the importer's Choose file… when Close held it (read at the press, before the confirm).
+    recordSwapPress('video-choose', hadFocus)
     clearSource()
   }
 
@@ -208,7 +214,7 @@ export function VideoStudio(): JSX.Element {
                 <Icon name="audio" size={15} /> Clean audio
               </button>
               <span className="min-w-0 truncate max-w-[40ch]" title={source.fileName}>{source.fileName}</span>
-              <button className="btn-ghost px-3 py-1.5 whitespace-nowrap shrink-0" onClick={handleClose}>
+              <button className="btn-ghost px-3 py-1.5 whitespace-nowrap shrink-0" onClick={(e) => handleClose(document.activeElement === e.currentTarget)}>
                 Close
               </button>
             </>

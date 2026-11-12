@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useVideoStore } from './store/videoStore'
 import { useImportRun } from './store/runs'
@@ -8,6 +8,7 @@ import { basename } from '../../components/OutputDirLabel'
 import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
+import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
 import { describeFailedOpen, examineDroppedFile } from '@shared/importDiagnostics'
 import {
   VIDEO_EXTENSIONS,
@@ -32,12 +33,26 @@ export function Importer(): JSX.Element {
   // T-131 (5): and one chooser at a time. `busy` is only set once a file was PICKED, so a double-click on "Choose file…" opened two
   // choosers (the first's answer loads the file, the second's replaced it or was refused). Claimed before the dialog, given back after.
   const pickingRef = useRef(false)
+  // T-192 (3): the importer is the new content when Close brings it back (focus goes to Choose file… when Close held it), and the row is what a pick's press records
+  // from: Choose file… or the Recent toggle (a Recent entry hands the focus to the toggle before its pick runs, T-140 (9)). `lib/swapFocus.ts`.
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const chooseRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    focusAfterSwap('video-choose', chooseRef.current)
+  }, [])
+  /** A press that may open a video: the pick's focus is recorded while this row still has it, and dropped by every way the pick ends without one. */
+  function recordPick(): void {
+    const active = document.activeElement
+    recordSwapPress('video-play', active !== null && rowRef.current !== null && rowRef.current.contains(active))
+  }
 
   /** Refuses a second import while one runs — it used to start a PARALLEL conversion
    *  (two ffmpeg transcodes fighting for the CPU, then whichever finished last won). */
   function refuseIfBusy(): boolean {
     const running = useImportRun.getState().run
     if (running === null) return false
+    // T-192 (3): a refused press swaps nothing.
+    dropSwapPress('video-play')
     toast(
       running.converting
         ? 'Still converting the last video. Wait for it to finish.'
@@ -54,12 +69,20 @@ export function Importer(): JSX.Element {
     // T-175 (3): a part kept for a video that could not be opened (clips waiting for an unplugged drive) is let go when a DIFFERENT video opens here. Asked before the
     // run is claimed or anything is said, over the file this opens (`videoKey` of the loaded video: the picked path, converted or not); Cancel opens nothing.
     const keptQuestion = keptPartQuestion('video', filePath, basename(filePath))
-    if (keptQuestion !== null && !confirm(keptQuestion)) return
+    if (keptQuestion !== null && !confirm(keptQuestion)) {
+      dropSwapPress('video-play')
+      return
+    }
     advise?.()
-    if (!useImportRun.getState().begin({ filePath, converting: false })) return
+    if (!useImportRun.getState().begin({ filePath, converting: false })) {
+      dropSwapPress('video-play')
+      return
+    }
     // T-136 (2): what the video store held when this import began. The importer is on screen only while no video is open, but the conversion takes
     // minutes and nothing locks the app: a video that arrives meanwhile (a project opened from Home, "Edit in Video Studio") is the one being edited.
     const heldBefore = useVideoStore.getState().source
+    // T-192 (3): set once the video is open: the Player mounts with it and takes the pick's record. Any other end drops it (the `finally`).
+    let kept = false
     try {
       let sourcePath = filePath
       // Round 20: stream-dump containers (flv/ts/wmv/mpg/3gp) can't play
@@ -84,6 +107,7 @@ export function Importer(): JSX.Element {
       // T-107: the store keeps the ORIGINAL beside the working copy, so a saved
       // project can point at the file the person owns and convert again on open.
       await loadSource(sourcePath, needsConversion ? filePath : undefined)
+      kept = true
       await push(filePath)
       toast.success('Video loaded')
     } catch (err) {
@@ -97,6 +121,7 @@ export function Importer(): JSX.Element {
       const sentence = await describeFailedOpen(err, filePath, 'video', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })
       toast.error(sentence, { duration: 8000 })
     } finally {
+      if (!kept) dropSwapPress('video-play')
       useImportRun.getState().end()
     }
   }
@@ -132,10 +157,17 @@ export function Importer(): JSX.Element {
     void handleFile(filePath, advise)
   }
 
+  function pickRecent(path: string): void {
+    recordPick()
+    void handleFile(path)
+  }
+
   async function onPickFile(): Promise<void> {
+    recordPick()
     await claimFirst(pickingRef, async () => {
       const filePath = await window.api.video.pickFile()
       if (filePath) await handleFile(filePath)
+      else dropSwapPress('video-play')
     })
   }
 
@@ -158,11 +190,11 @@ export function Importer(): JSX.Element {
       <p className="text-ink-muted text-sm mb-6">
         {formatHint(VIDEO_EXTENSIONS)}. {busy ? 'Loading…' : 'Or use the file picker.'}
       </p>
-      <div className="flex items-center gap-2">
-        <button className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
+      <div className="flex items-center gap-2" ref={rowRef}>
+        <button ref={chooseRef} className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
           Choose file…
         </button>
-        <RecentFilesMenu recent={recent} onPick={(p) => void handleFile(p)} onClear={() => void clear()} />
+        <RecentFilesMenu recent={recent} onPick={pickRecent} onClear={() => void clear()} />
       </div>
     </div>
   )

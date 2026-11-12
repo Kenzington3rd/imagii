@@ -10226,7 +10226,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (with the default TMPDIR); the expediter runs the full suite and the real-media
   suite on the merged tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 141)
+- **Status:** done (round 141 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10804,6 +10804,73 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 141 — T-192, the five counted items of sweep 79 and three
+sibling sites counted during the round, landed in the commit that
+carries this entry. Three Sonnet workers in fresh clones of 00cb6cb,
+disjoint files. Track A (items 2, 3 and 5): a held Enter on an Audio
+Studio cut chip puts back one cut (`ignoreHeldEnter`: the chips are
+index-keyed, so after a removal the focused node shows the next cut).
+A press that swaps a studio between its importer and its editor keeps
+the keyboard's place: `lib/swapFocus.ts` (NEW, with its unit test)
+records at the press, in module scope, that the control held focus,
+and the new content's own effect moves focus to its primary control
+only while focus is on the body - Stream Graphics' template cards,
+"Start with text" and "Import image" to the Select tool; Audio and
+Video "Choose file…" and a Recent entry to Play (Audio's once the
+player is ready); either studio's Close to "Choose file…"; and,
+counted from the worker's found-not-fixed, the last layer removed by
+any press inside the editor (its ✕, Delete, Ctrl+Z) to "Import image",
+recorded by the editor root's stable callback ref as it detaches. A
+press that fails, is refused or outlives its studio drops the record,
+and `focusAfterSwap` holds the keys still down (T-191's
+`holdHeldKeys`). A double-click on a layer's Move up or Move down
+moves it once (`isRepeatPress`; T-154 (3)'s "repeat-tolerant" claim is
+corrected in LESSONS and IC). Track B (items 1 and 6): the default
+Ellipse is drawn in the accent like the Rectangle, and
+designTokensInSync.test.ts pins `accent-muted` as a hover state and
+nothing else. Item 6 was found by the expediter: T-191 (6)'s abort
+file failed 5 of 30 runs on the T-191 tree under four CPU burners, and
+twice in an ordinary verify. A model download that ends with a write
+in flight reported a second outcome (Node emits ERR_STREAM_DESTROYED
+when the install destroys its own stream mid-write), and a Cancel
+before the partial's open landed left the partial behind; the stream's
+'error' listener now stands down when the install itself ended the
+transfer, and `cleanupPartial` waits for the stream's 'close' before
+it removes the file. The test file waits on named conditions instead
+of clocks, and its fake request emits nothing after 'abort' or
+'error', as Electron's does. Track C (item 4): the autosave banner's
+Clear, Later and Dismiss call `swallowRepeatClicks()` when the banner
+goes, so a double-click's second press no longer opens the Home card
+that moves up into its place; Restore does too, counted from the
+worker's measurement (an autosave on Home applies with no route
+change). Deviations, accepted: `holdHeldKeys()` inside
+`focusAfterSwap`; targets named per control; the Image empty state and
+the importers' Recent picks record from their row's focus; the
+`'image-import'` drop on ImageStudio's unmount left out (its mutation
+survived because the next ImportPanel mount spends the record, and no
+keyboard route change can leave one); Later and Restore pinned at
+their lower edge (the middle lands on the "Last autosave" line);
+docClaims and interactionWiring pins moved by the changes. Expediter:
+four independent mutations - the stream-error guard narrowed to
+`settled`, the close-wait keyed on `destroyed`, Restore's swallow only
+for an autosave with no route, and the video importer's failed-load
+drop removed. The last survived on the first hand-back (nothing pinned
+a failed load) and was killed by the cases it sent back for; the other
+three were killed. At merge Track B's two LESSONS entries were given
+their separators and one doubled separator was collapsed, and the full
+suite found image.spec.ts's properties-panel case still pinning the
+Ellipse's old accent-muted fill: the pin moved with the change and was
+re-pointed (Track B's gates were unit-only; its brief should have
+asked for a grep of the old value). Ledger: every worker mutation
+killed but Track A's unmount drop (above, its line left out); every
+restore identical. The abort file ran 30 times under four CPU burners
+on the merged tree with no failure. Gates on the merged tree: npm run
+verify twice (216 files, 7166 tests), test:media (566 cases: 538 run,
+28 skipped), the abort file 30 times under four CPU burners (no
+failure), and the full Playwright suite with the default TMPDIR (952
+tests, 61.9 min: 951 passed, and the one failure was the pin
+re-pointed above; image.spec.ts then ran whole, 170 passed).
 
 Round 140 — T-191, the six counted items of sweep 78, landed in the
 commit that carries this entry. Three Sonnet workers in fresh clones

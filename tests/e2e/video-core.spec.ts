@@ -4168,3 +4168,179 @@ test.describe('Video Studio - the shortcuts on a non-Latin layout (T-185 (1))', 
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-192 (3): a press that swaps Video Studio between its importer and its editor leaves the keyboard on the page (the next Tab starts at the Home link). Choose file…
+// and a Recent entry (the pick) put focus on the Player's Play once the video is open; Close puts it on the importer's Choose file…. Only when the press held focus: a
+// click that focused nothing, a focus the person moved elsewhere while the chooser was open, and a drop move nothing (the drop is `launchWithVideo`'s import).
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Video Studio - a swapped studio keeps the keyboard\'s place (T-192 (3))', () => {
+  const chooseButton = (window: Page): Locator => window.getByRole('button', { name: 'Choose file…' })
+  const closeButton = (window: Page): Locator => window.getByRole('button', { name: 'Close', exact: true })
+  const playButton = (window: Page): Locator => window.locator('[data-tutorial="video-player"]').getByRole('button', { name: 'Play', exact: true })
+  const onBody = (window: Page): Promise<boolean> => window.evaluate(() => document.activeElement === document.body || document.activeElement === null)
+
+  /** Replace the OS open dialog in MAIN; the answer comes `delayMs` after it opens (a native dialog that is still open). */
+  async function stubOpenDialog(app: ElectronApplication, filePath: string, delayMs = 0): Promise<void> {
+    await app.evaluate(({ dialog }, { picked, delayMs }) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => {
+        if (delayMs > 0) await new Promise((resolve) => setTimeout(resolve, delayMs))
+        return { canceled: false, filePaths: [picked] }
+      }
+    }, { picked: filePath, delayMs })
+  }
+
+  /** Launch and walk to the empty Video Studio (no import). */
+  async function launchEmpty(name: string): Promise<{ app: ElectronApplication; window: Page }> {
+    const userDataDir = path.join(root, `ud-${name}-${Date.now().toString(36)}`)
+    seedUserData(userDataDir)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 15_000 })
+    await installToastLog(window)
+    return { app, window }
+  }
+
+  test('Choose file… pressed with Enter leaves focus on the Player\'s Play; a Recent entry pressed with Enter does too', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchEmpty('t192-pick-keys')
+    try {
+      await stubOpenDialog(app, fixture)
+      const choose = chooseButton(window)
+      await choose.focus()
+      await expect(choose).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await expect(playButton(window), 'the swap put the focus on Play, not <body> (red on the base: the body)').toBeFocused()
+      // The keyboard goes on from there: Enter on Play starts the video.
+      await window.keyboard.press('Enter')
+      await expect.poll(async () => (await videoState(window)).paused, { timeout: 10_000 }).toBe(false)
+      await window.keyboard.press('Enter')
+
+      // Close (Enter) brings the importer back with Choose file… focused; Tab goes to the Recent toggle, which opens its list and a pick from it.
+      await closeButton(window).focus()
+      await window.keyboard.press('Enter')
+      await expect(chooseButton(window)).toBeFocused()
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      // The Recent list loads after the importer mounts: Tab only once its toggle is there to be reached.
+      await expect(toggle).toBeVisible()
+      await window.keyboard.press('Tab')
+      await expect(toggle).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await window.keyboard.press('Tab')
+      await expect(window.getByRole('button', { name: /video-core\.mp4/ }).first()).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await expect(playButton(window), 'a Recent pick lands on Play too (red on the base: the body)').toBeFocused()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('Close pressed with Enter leaves focus on the importer\'s Choose file…', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchWithVideo('t192-close-keys')
+    try {
+      const close = closeButton(window)
+      await close.focus()
+      await expect(close).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(window.getByText('Drop a video here')).toBeVisible()
+      await expect(chooseButton(window), 'Choose file… has the focus, not <body> (red on the base: the body)').toBeFocused()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a pick and a Close that held no focus (a click on nothing focused) move nothing; a drop moves nothing', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchEmpty('t192-no-focus')
+    try {
+      await stubOpenDialog(app, fixture)
+      expect(await onBody(window), 'the premise: nothing has focus').toBe(true)
+      // `click()` on the element focuses nothing (a mouse press would focus the button in Chromium).
+      await chooseButton(window).evaluate((el: HTMLElement) => el.click())
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'the pick moved the focus though the press had none').toBe(true)
+
+      await closeButton(window).evaluate((el: HTMLElement) => el.click())
+      await expect(window.getByText('Drop a video here')).toBeVisible()
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'Close moved the focus though the press had none').toBe(true)
+
+      // A drop: the importer is replaced and nothing takes the focus.
+      await dropOnVideoImporter(window, fixture, path.basename(fixture))
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'a drop moved the focus').toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a pick that fails to load leaves no record for the drop that follows', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchEmpty('t192-failed-pick')
+    try {
+      // A file with a video extension and no video in it: the importer refuses it with its toast.
+      const garbage = path.join(root, `not-a-video-${Date.now().toString(36)}.mp4`)
+      writeFileSync(garbage, Buffer.from('this is not an mp4 file'))
+      await stubOpenDialog(app, garbage)
+      await chooseButton(window).focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).not.toEqual([])
+      await expect(chooseButton(window)).toBeEnabled()
+      await expect(window.getByText('Drop a video here')).toBeVisible()
+      await window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await dropOnVideoImporter(window, fixture, path.basename(fixture))
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'a drop moved the focus (the failed pick\'s record outlived it)').toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a pick whose studio was left while the chooser was open leaves no record for the video that arrives', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchEmpty('t192-left')
+    try {
+      await stubOpenDialog(app, fixture, 1500)
+      await chooseButton(window).focus()
+      await window.keyboard.press('Enter')
+      // The chooser is open: the person goes Home, and the video is picked and loaded while they are away.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.waitForTimeout(2500)
+      await window.locator('a', { hasText: 'Video Studio' }).first().click()
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'the studio they came back to took the focus for a press they walked away from').toBe(true)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('focus the person put elsewhere while the chooser was open stays there', async () => {
+    test.setTimeout(120_000)
+    const { app, window } = await launchEmpty('t192-elsewhere')
+    try {
+      await stubOpenDialog(app, fixture, 1500)
+      await chooseButton(window).focus()
+      await window.keyboard.press('Enter')
+      const tour = window.getByRole('button', { name: 'Show tutorial' })
+      await tour.focus()
+      await expect(tour).toBeFocused()
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 30_000 })
+      await window.waitForTimeout(400)
+      await expect(tour, 'the swap took the focus from the control the person had moved to').toBeFocused()
+    } finally {
+      await app.close()
+    }
+  })
+})

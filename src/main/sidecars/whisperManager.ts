@@ -773,6 +773,12 @@ async function runInstall(
     }
     async function cleanupPartial(): Promise<void> {
       try {
+        // T-192 (6): wait for the write stream to close first. A Cancel in the first moments of a download destroys a stream whose open() is
+        // still pending in the threadpool: existsSync found no file, cleanup settled, and when the open landed it created the .partial (O_CREAT)
+        // and only then closed the fd, leaving the partial behind. Every caller has destroyed or ended `out`, so 'close' always follows. This
+        // also makes the EBUSY note below true: the fd really is closed before the unlink.
+        const s = out
+        if (s && !s.closed) await new Promise<void>((r) => s.once('close', () => r()))
         if (existsSync(partialPath)) await unlink(partialPath)
       } catch {
         /* ignore */
@@ -807,6 +813,13 @@ async function runInstall(
       // with no listener — crashing the whole main process. Settle the
       // install cleanly instead.
       stream.on('error', (err: Error) => {
+        // T-192 (6): Node emits 'error' (ERR_STREAM_DESTROYED, "Cannot call write after a stream was destroyed") when a destroy() lands
+        // while a write is in flight, and a 141 MB download nearly always has one. Every path below that ends the transfer destroys this
+        // stream on purpose, with `me.cancelled` or `settled` already true (the abort handler after a Cancel; settle's own abort; the
+        // response and request 'error' handlers settle in the same turn, before that later tick). That error is our own destroy, not a
+        // failure: reporting it showed a second message, or settled the install with the raw Node text instead of "Download canceled".
+        // A genuine write failure (ENOSPC) arrives with neither flag set and still reports.
+        if (me.cancelled || settled) return
         stream.destroy()
         void cleanupPartial()
         onProgress({ phase: 'failed', message: err.message })

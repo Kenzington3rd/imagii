@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import tailwindConfig from '../../tailwind.config.js'
 import { RENDERER_ROOT } from './routeSources'
@@ -531,5 +531,59 @@ describe('text over a picture clears AA over white content (T-184 (1))', () => {
     const panel = read('modules/references/ReferencePanel.tsx')
     expect(panel).toMatch(/<span className="text-xs text-ink-base">\{result\.source\}<\/span>/)
     expect(panel).not.toMatch(/text-ink-dim">\{result\.source\}/)
+  })
+})
+
+/**
+ * T-192 (1): DESIGN_GUIDE says `accent-muted` is the hover state of accent elements and nothing else (1.08:1 from `accent`, so it cannot tell
+ * two drawn things apart). The pin: no renderer source but styles/tokens.ts names the ACCENT_MUTED identifier (a fill or stroke in JS can never
+ * be a hover), and every `accent-muted` class token in a source or a stylesheet carries a `hover:` variant (`md:hover:bg-accent-muted` passes,
+ * `focus:bg-accent-muted` and `bg-accent-muted` do not). An `@apply` passes by the same test: index.css's `.btn-primary` applies
+ * `hover:bg-accent-muted`, a hover variant itself; its rule is not a hover state, so a bare `bg-accent-muted` in an `@apply` is refused too.
+ * `accent.muted` (a `theme('colors.accent.muted')` read) is refused outright: it has no hover form.
+ */
+function nonHoverAccentMuted(text: string): string[] {
+  const bad: string[] = []
+  for (const m of text.matchAll(/[^\s"'`{}();,]*accent-muted[^\s"'`{}();,]*/g)) {
+    const head = m[0].slice(0, m[0].indexOf('accent-muted'))
+    if (!/(?:^|:)hover:/.test(head)) bad.push(m[0])
+  }
+  for (const m of text.matchAll(/accent\.muted/g)) bad.push(m[0])
+  return bad
+}
+
+function stylesheetsUnder(dir: string): string[] {
+  return (readdirSync(dir, { recursive: true }) as string[]).filter((f) => f.endsWith('.css')).map((f) => path.join(dir, f))
+}
+
+describe('accent-muted is a hover state and nothing else (T-192 (1))', () => {
+  it('no renderer source but styles/tokens.ts names ACCENT_MUTED', () => {
+    const tokens = path.resolve(RENDERER_ROOT, 'styles/tokens.ts')
+    const offenders = sourceFilesUnder(RENDERER_ROOT)
+      .filter((f) => path.resolve(f) !== tokens && /\bACCENT_MUTED\b/.test(code(f)))
+      .map((f) => path.relative(RENDERER_ROOT, f))
+    expect(offenders).toEqual([])
+  })
+
+  it('every accent-muted class in a source or a stylesheet is a hover: variant', () => {
+    const offenders: string[] = []
+    for (const file of [...sourceFilesUnder(RENDERER_ROOT), ...stylesheetsUnder(RENDERER_ROOT)]) {
+      for (const t of nonHoverAccentMuted(code(file))) offenders.push(`${path.relative(RENDERER_ROOT, file)}: ${t}`)
+    }
+    expect(offenders).toEqual([])
+  })
+
+  it('the scan is not vacuous: the hover uses it allows exist (Timeline trim handles, .btn-primary)', () => {
+    expect(code(path.resolve(RENDERER_ROOT, 'modules/video-studio/Timeline.tsx'))).toMatch(/hover:bg-accent-muted/)
+    expect(code(path.resolve(RENDERER_ROOT, 'styles/index.css'))).toMatch(/hover:bg-accent-muted/)
+  })
+
+  it('control: a bare, a focus:, an @apply and a theme() use are refused; hover: and stacked hover: pass', () => {
+    expect(nonHoverAccentMuted('className="bg-accent-muted"')).toEqual(['bg-accent-muted'])
+    expect(nonHoverAccentMuted('className="x focus:bg-accent-muted"')).toEqual(['focus:bg-accent-muted'])
+    expect(nonHoverAccentMuted('@apply px-2 border-accent-muted;')).toEqual(['border-accent-muted'])
+    expect(nonHoverAccentMuted("theme('colors.accent.muted')")).toEqual(['accent.muted'])
+    expect(nonHoverAccentMuted('className="hover:bg-accent-muted"')).toEqual([])
+    expect(nonHoverAccentMuted('className="md:hover:bg-accent-muted bg-accent"')).toEqual([])
   })
 })

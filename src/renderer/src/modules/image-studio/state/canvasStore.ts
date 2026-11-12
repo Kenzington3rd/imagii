@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import { ACCENT, ACCENT_MUTED, BG_BASE, EMBER, INK_BASE, withAlpha } from '../../../styles/tokens'
+import { ACCENT, BG_BASE, EMBER, INK_BASE, withAlpha } from '../../../styles/tokens'
 import type {
   CanvasDocument,
   CanvasLayer,
@@ -377,8 +377,8 @@ export function makeEllipseLayer(x: number, y: number, rx = 80, ry = 60): Ellips
     opacity: 1,
     radiusX: rx,
     radiusY: ry,
-    fill: withAlpha(ACCENT_MUTED, 0.4),
-    stroke: ACCENT_MUTED,
+    fill: withAlpha(ACCENT, 0.4),
+    stroke: ACCENT,
     strokeWidth: 2
   }
 }

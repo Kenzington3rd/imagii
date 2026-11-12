@@ -1026,11 +1026,11 @@ test.describe('Image Studio — tools and drawing', () => {
         ).toHaveClass(/bg-accent/)
       }
 
-      // The uppercase bindings are the same rows in ImageStudio.tsx:69-78.
+      // The uppercase bindings are the same rows in ImageStudio.tsx:70-79.
       await window.keyboard.press('Shift+R')
       await expect(window.getByText('Tool: Rectangle')).toBeVisible()
 
-      // Ctrl+V is the paste path, not the Select shortcut: any chord is left alone (ImageStudio.tsx:61).
+      // Ctrl+V is the paste path, not the Select shortcut: any chord is left alone (ImageStudio.tsx:62).
       await window.keyboard.press('Control+v')
       await expect(window.getByText('Tool: Rectangle')).toBeVisible()
 
@@ -1393,7 +1393,7 @@ test.describe('Image Studio — selection', () => {
       await dragOnStage(window, { x: 500, y: 200 }, { x: 700, y: 350 })
       await expectLayerCount(window, 3)
 
-      // ── the INPUT guard first (ImageStudio.tsx:58): typing in the name
+      // ── the INPUT guard first (ImageStudio.tsx:59): typing in the name
       //    field and pressing Delete edits TEXT, it does not delete the layer.
       const name = field(window, 'Name')
       await name.click()
@@ -1920,7 +1920,8 @@ test.describe('Image Studio — properties panel', () => {
       // An ellipse gets the same three fields; a line layer gets none of them.
       await window.locator(TOOLBAR).getByRole('button', { name: 'Ellipse' }).click()
       await dragOnStage(window, { x: 700, y: 250 }, { x: 900, y: 400 })
-      await expect(field(window, 'Fill')).toHaveValue('rgba(245, 46, 46, 0.4)')
+      // T-192 (1): the default Ellipse is drawn in the accent like the Rectangle (it was accent-muted, rgba(245, 46, 46, 0.4)); re-pointed at the merge.
+      await expect(field(window, 'Fill')).toHaveValue('rgba(255, 49, 49, 0.4)')
       await window.locator(TOOLBAR).getByRole('button', { name: '+ More' }).click()
       await window.locator(TOOLBAR).getByRole('button', { name: 'Line' }).click()
       await dragOnStage(window, { x: 200, y: 600 }, { x: 500, y: 700 })
@@ -1984,7 +1985,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:81).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:94).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -8273,4 +8274,322 @@ test.describe('Image Studio - a held Enter on a button that opens a dialog leave
       }
     })
   }
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-192 (3), (5): the empty state's presses keep the keyboard's place; a double-clicked Move arrow moves the layer once
+// ═══════════════════════════════════════════════════════════════════════════
+// (3) a template card, "Start with text" and "Import image" unmount with the empty state when the canvas gets its first layer, and a removed element takes focus to <body>
+// (STYLE_GUIDE's swap rule): the next Tab started at the Home link. The press records that its control held focus (`lib/swapFocus.ts`) and the studio puts it on the Select
+// tool, the toolbar's first control, when the layer lands - only while focus is on <body>: a click that focused nothing, a focus the person moved while the chooser was
+// open, a chooser that was canceled and a paste (no press) move nothing.
+// (5) the swapped-in layer's same arrow is under the pointer when the first press of a double-click lands, and the second press moved it back: the order unchanged, two Undo steps.
+// Each repeat-press test waits past the half second App swallows repeats after a route change (T-153 (3)), or the second press never arrives.
+test.describe('Image Studio - the empty state keeps the keyboard\'s place; a Move arrow is one press (T-192 (3), (5))', () => {
+  const selectTool = (window: Page): Locator => window.locator(TOOLBAR).getByRole('button', { name: 'Select', exact: true })
+  const onBody = (window: Page): Promise<boolean> => window.evaluate(() => document.activeElement === document.body || document.activeElement === null)
+  const undoButton = (window: Page): Locator => window.getByRole('button', { name: 'Undo', exact: true })
+
+  /** Record the file inputs the app clicks and the choosers they open; each is answered by hand. */
+  async function recordChoosers(window: Page): Promise<Array<{ setFiles: (f: string) => Promise<void> }>> {
+    const choosers: Array<{ setFiles: (f: string) => Promise<void> }> = []
+    window.on('filechooser', (c) => choosers.push(c as unknown as { setFiles: (f: string) => Promise<void> }))
+    await window.evaluate(() => {
+      const click = HTMLInputElement.prototype.click
+      HTMLInputElement.prototype.click = function (this: HTMLInputElement) {
+        if (this.type === 'file') (window as unknown as { __lastFileInput?: HTMLInputElement }).__lastFileInput = this
+        return click.call(this)
+      }
+    })
+    return choosers
+  }
+
+  test('Enter on a template card, on "Start with text" and on "Import image" each leave focus on the Select tool', async () => {
+    test.setTimeout(180_000)
+    // A template card.
+    const a = await openStudio('t192-focus-template')
+    try {
+      const card = templateCard(a.window, templateById('yt-thumb-clean'))
+      await card.focus()
+      await expect(card).toBeFocused()
+      await a.window.keyboard.press('Enter')
+      await expectTemplateApplied(a.window, templateById('yt-thumb-clean'))
+      await expect(selectTool(a.window), 'the first layer put the focus on the Select tool, not <body> (red on the base: the body)').toBeFocused()
+      // The keyboard goes on from there: Tab reaches the next tool.
+      await a.window.keyboard.press('Tab')
+      await expect(a.window.locator(TOOLBAR).getByRole('button', { name: 'Rectangle', exact: true })).toBeFocused()
+    } finally {
+      await closeStudio(a)
+    }
+
+    // "Start with text".
+    const b = await openStudio('t192-focus-text')
+    try {
+      const start = b.window.getByRole('button', { name: 'Start with text' })
+      await start.focus()
+      await expect(start).toBeFocused()
+      await b.window.keyboard.press('Enter')
+      await expectLayerCount(b.window, 1)
+      await expect(selectTool(b.window), 'red on the base: the body').toBeFocused()
+    } finally {
+      await closeStudio(b)
+    }
+
+    // "Import image": the chooser answers, and the layer lands.
+    const c = await openStudio('t192-focus-import')
+    try {
+      const choosers = await recordChoosers(c.window)
+      const pick = c.window.getByRole('button', { name: 'Import image', exact: true })
+      await pick.focus()
+      await expect(pick).toBeFocused()
+      await c.window.keyboard.press('Enter')
+      await expect.poll(() => choosers.length, { timeout: 10_000 }).toBe(1)
+      await choosers[0]!.setFiles(c.fixturePng)
+      await expectLayerCount(c.window, 1)
+      await expect(selectTool(c.window), 'red on the base: the body').toBeFocused()
+    } finally {
+      await closeStudio(c)
+    }
+  })
+
+  test('a click that focused nothing, a paste and a canceled chooser move nothing', async () => {
+    test.setTimeout(180_000)
+    // `click()` on the element focuses nothing (a mouse press would focus the control in Chromium).
+    const a = await openStudio('t192-nofocus-template')
+    try {
+      expect(await onBody(a.window), 'the premise: nothing has focus').toBe(true)
+      await templateCard(a.window, templateById('yt-thumb-clean')).evaluate((el: HTMLElement) => el.click())
+      await expectTemplateApplied(a.window, templateById('yt-thumb-clean'))
+      await a.window.waitForTimeout(400)
+      expect(await onBody(a.window), 'a template card moved the focus though the press had none').toBe(true)
+    } finally {
+      await closeStudio(a)
+    }
+
+    const b = await openStudio('t192-nofocus-text')
+    try {
+      await b.window.getByRole('button', { name: 'Start with text' }).evaluate((el: HTMLElement) => el.click())
+      await expectLayerCount(b.window, 1)
+      await b.window.waitForTimeout(400)
+      expect(await onBody(b.window), '"Start with text" moved the focus though the press had none').toBe(true)
+    } finally {
+      await closeStudio(b)
+    }
+
+    // A chooser that is dismissed is a press that failed: it leaves no record for the layer a paste then puts on the canvas.
+    const c = await openStudio('t192-canceled')
+    try {
+      const choosers = await recordChoosers(c.window)
+      const pick = c.window.getByRole('button', { name: 'Import image', exact: true })
+      await pick.focus()
+      await c.window.keyboard.press('Enter')
+      await expect.poll(() => choosers.length, { timeout: 10_000 }).toBe(1)
+      await c.window.evaluate(() => {
+        const input = (window as unknown as { __lastFileInput?: HTMLInputElement }).__lastFileInput
+        if (!input) throw new Error('no file input was clicked')
+        input.dispatchEvent(new Event('cancel'))
+      })
+      await c.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await c.app.evaluate(async ({ clipboard, nativeImage }, dataUrl) => {
+        clipboard.writeImage(nativeImage.createFromDataURL(dataUrl))
+      }, `data:image/png;base64,${readFileSync(c.fixturePng).toString('base64')}`)
+      await c.window.waitForTimeout(500)
+      await c.app.evaluate(({ BrowserWindow }) => {
+        BrowserWindow.getAllWindows()[0]?.webContents.paste()
+      })
+      await expectLayerCount(c.window, 1)
+      await c.window.waitForTimeout(400)
+      expect(await onBody(c.window), 'a paste moved the focus (the canceled pick\'s record outlived it)').toBe(true)
+    } finally {
+      await closeStudio(c)
+    }
+  })
+
+  test('focus the person put elsewhere while the chooser was open stays there', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t192-elsewhere')
+    const { window } = studio
+    try {
+      const choosers = await recordChoosers(window)
+      await window.getByRole('button', { name: 'Import image', exact: true }).focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(() => choosers.length, { timeout: 10_000 }).toBe(1)
+      const tour = window.getByRole('button', { name: 'Show tutorial' })
+      await tour.focus()
+      await expect(tour).toBeFocused()
+      await choosers[0]!.setFiles(studio.fixturePng)
+      await expectLayerCount(window, 1)
+      await window.waitForTimeout(400)
+      await expect(tour, 'the swap took the focus from the control the person had moved to').toBeFocused()
+      await expect(selectTool(window)).not.toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('an "Import image" whose studio was left while the chooser was open leaves no record for the canvas that fills', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t192-left')
+    const { window } = studio
+    try {
+      const choosers = await recordChoosers(window)
+      await window.getByRole('button', { name: 'Import image', exact: true }).focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(() => choosers.length, { timeout: 10_000 }).toBe(1)
+      // The chooser is open: the person goes Home, and the picture is picked while they are away.
+      await window.getByRole('link', { name: 'Home' }).click()
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await choosers[0]!.setFiles(studio.fixturePng)
+      await window.waitForTimeout(1500)
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expectLayerCount(window, 1)
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'the studio they came back to took the focus for a press they walked away from').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  // The other way: the LAST layer going swaps the canvas back for the empty state and unmounts the control that held focus (the layer's ✕, a toolbar tool). The editor's root records
+  // the press as it detaches and the empty state's Import image button spends it.
+  const importButton = (window: Page): Locator => window.getByRole('button', { name: 'Import image', exact: true })
+
+  test('the only layer\'s Remove layer pressed with Enter, and the Delete key with focus on a tool, each leave focus on Import image', async () => {
+    test.setTimeout(150_000)
+    const a = await openStudio('t192-last-x')
+    try {
+      await startBlank(a.window)
+      await a.window.waitForTimeout(300)
+      const remove = a.window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' })
+      await remove.focus()
+      await expect(remove).toBeFocused()
+      await a.window.keyboard.press('Enter')
+      await expect(a.window.getByText('Pick a template to start')).toBeVisible()
+      await expect(importButton(a.window), 'the empty state\'s primary control has the focus, not <body> (red on the base: the body)').toBeFocused()
+    } finally {
+      await closeStudio(a)
+    }
+
+    const b = await openStudio('t192-last-delete')
+    try {
+      await startBlank(b.window)
+      await expect(selectTool(b.window), 'the premise: focus is on a toolbar tool, the layer is selected').toBeFocused()
+      await b.window.keyboard.press('Delete')
+      await expect(b.window.getByText('Pick a template to start')).toBeVisible()
+      await expect(importButton(b.window), 'red on the base: the body').toBeFocused()
+    } finally {
+      await closeStudio(b)
+    }
+  })
+
+  test('controls: a ✕ on one of two layers leaves the editor up; the last layer removed by a click that focused nothing leaves focus on <body>', async () => {
+    test.setTimeout(150_000)
+    const a = await openStudio('t192-two-layers')
+    try {
+      await startBlank(a.window)
+      await a.window.locator(IMPORT).getByRole('button', { name: '+ Add text' }).click()
+      await expectLayerCount(a.window, 2)
+      const remove = a.window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' })
+      await remove.focus()
+      await a.window.waitForTimeout(800)
+      await a.window.keyboard.press('Enter')
+      await expectLayerCount(a.window, 1)
+      await a.window.waitForTimeout(300)
+      await expect(a.window.getByText('Pick a template to start')).toHaveCount(0)
+      await expect(importButton(a.window)).toHaveCount(0)
+    } finally {
+      await closeStudio(a)
+    }
+
+    const b = await openStudio('t192-last-nofocus')
+    try {
+      await startBlank(b.window)
+      await b.window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      expect(await onBody(b.window), 'the premise: nothing has focus').toBe(true)
+      await b.window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' }).evaluate((el: HTMLElement) => el.click())
+      await expect(b.window.getByText('Pick a template to start')).toBeVisible()
+      await b.window.waitForTimeout(400)
+      expect(await onBody(b.window), 'the swap moved the focus though nothing had it').toBe(true)
+    } finally {
+      await closeStudio(b)
+    }
+  })
+
+  test('a studio left with focus inside the editor leaves no record for a later last-layer removal that held none', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t192-left-editor')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      await expect(selectTool(window)).toBeFocused()
+      // Leaving by a click that moves no focus: the editor detaches with focus inside it.
+      await window.getByRole('link', { name: 'Home' }).evaluate((el: HTMLElement) => el.click())
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible()
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expectLayerCount(window, 1)
+      await window.evaluate(() => (document.activeElement as HTMLElement | null)?.blur())
+      await window.locator(`${LAYERS} li`).first().getByRole('button', { name: 'Remove layer' }).evaluate((el: HTMLElement) => el.click())
+      await expect(window.getByText('Pick a template to start')).toBeVisible()
+      await window.waitForTimeout(400)
+      expect(await onBody(window), 'the empty state took the focus for a press that was never made (a record outlived the studio)').toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a real double-click on a middle layer\'s Move layer up moves it ONE row, with ONE Undo step', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t192-move-up')
+    const { window } = studio
+    try {
+      await templateCard(window, templateById('yt-thumb-clean')).click()
+      // Top row first: Subtitle, Title, Eyebrow, Accent stripe.
+      expect(await layerNames(window)).toEqual(['Subtitle', 'Title', 'Eyebrow', 'Accent stripe'])
+      await window.waitForTimeout(800)
+      await layerRow(window, 'Title').getByRole('button', { name: 'Move layer up' }).dblclick()
+      await expect.poll(() => layerNames(window)).toEqual(['Title', 'Subtitle', 'Eyebrow', 'Accent stripe'])
+      await window.waitForTimeout(800)
+      expect(await layerNames(window), 'still moved one row a moment later (red on the base: back where it was)').toEqual(['Title', 'Subtitle', 'Eyebrow', 'Accent stripe'])
+      // One Undo puts it back where it was: the double-click was one step.
+      await undoButton(window).click()
+      await expect.poll(() => layerNames(window), { message: 'one Undo undoes the move (red on the base: two steps)' }).toEqual(['Subtitle', 'Title', 'Eyebrow', 'Accent stripe'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a real double-click on a middle layer\'s Move layer down moves it ONE row, with ONE Undo step', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t192-move-down')
+    const { window } = studio
+    try {
+      await templateCard(window, templateById('yt-thumb-clean')).click()
+      expect(await layerNames(window)).toEqual(['Subtitle', 'Title', 'Eyebrow', 'Accent stripe'])
+      await window.waitForTimeout(800)
+      await layerRow(window, 'Title').getByRole('button', { name: 'Move layer down' }).dblclick()
+      await expect.poll(() => layerNames(window)).toEqual(['Subtitle', 'Eyebrow', 'Title', 'Accent stripe'])
+      await window.waitForTimeout(800)
+      expect(await layerNames(window), 'still moved one row a moment later (red on the base: back where it was)').toEqual(['Subtitle', 'Eyebrow', 'Title', 'Accent stripe'])
+      await undoButton(window).click()
+      await expect.poll(() => layerNames(window), { message: 'one Undo undoes the move (red on the base: two steps)' }).toEqual(['Subtitle', 'Title', 'Eyebrow', 'Accent stripe'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: two separate presses on Move layer up move the layer two rows (the arrow still repeats)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t192-move-twice')
+    const { window } = studio
+    try {
+      await templateCard(window, templateById('yt-thumb-clean')).click()
+      await window.waitForTimeout(800)
+      await layerRow(window, 'Eyebrow').getByRole('button', { name: 'Move layer up' }).click()
+      await expect.poll(() => layerNames(window)).toEqual(['Subtitle', 'Eyebrow', 'Title', 'Accent stripe'])
+      await layerRow(window, 'Eyebrow').getByRole('button', { name: 'Move layer up' }).click()
+      await expect.poll(() => layerNames(window)).toEqual(['Eyebrow', 'Subtitle', 'Title', 'Accent stripe'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
 })

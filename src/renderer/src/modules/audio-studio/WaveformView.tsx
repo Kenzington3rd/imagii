@@ -9,7 +9,8 @@ import { ACCENT, EMBER, INK_DIM, withAlpha } from '../../styles/tokens'
 import { PLAYBACK_ERROR_MESSAGE, peaksMaxMagnitude } from '@shared/audio'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { formatClock } from '@shared/clockTime'
-import { isRepeatPress } from '../../lib/repeatPress'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
+import { dropSwapPress, focusAfterSwap } from '../../lib/swapFocus'
 
 /**
  * Every region this view puts on the waveform for a stored cut carries this id
@@ -40,6 +41,14 @@ export function WaveformView(): JSX.Element | null {
   const [time, setTime] = useState(0)
   const [ready, setReady] = useState(false)
   const [mediaEl, setMediaEl] = useState<HTMLMediaElement | null>(null)
+  const playRef = useRef<HTMLButtonElement | null>(null)
+
+  // T-192 (3): a file picked with the keyboard (Choose file…, a Recent entry) replaced the importer the focus was on, and the next Tab started at the top of the window.
+  // Play is the studio's primary control, and it is disabled until the player is ready, so the focus is put on it then (STYLE_GUIDE's swap rule; `lib/swapFocus.ts`
+  // holds the press's record and moves focus only while it is on <body>). A swap that no such press made (a drop, a project opened from Home) moves nothing.
+  useEffect(() => {
+    if (ready) focusAfterSwap('audio-play', playRef.current)
+  }, [ready])
 
   useEffect(() => {
     // A file whose waveform is still being read has no player yet: nothing from the last one may stay ready.
@@ -115,6 +124,7 @@ export function WaveformView(): JSX.Element | null {
     const offError = ws.on('error', (err) => {
       console.error('[audio-waveform] the player could not play the file', err)
       setReady(false)
+      dropSwapPress('audio-play')
       toast.error(PLAYBACK_ERROR_MESSAGE, { id: 'waveform-error', duration: ERROR_TOAST_MS })
     })
     const offPlay = ws.on('play', () => setPlaying(true))
@@ -215,6 +225,7 @@ export function WaveformView(): JSX.Element | null {
       )}
       <div className="flex items-center gap-3 text-sm">
         <button
+          ref={playRef}
           className="btn-ghost px-3 py-2 disabled:opacity-50"
           onClick={togglePlay}
           disabled={!ready}
@@ -250,6 +261,9 @@ export function WaveformView(): JSX.Element | null {
                 if (isRepeatPress(e)) return
                 removeCutRegion(i)
               }}
+              // T-192 (2): the chips are index-keyed, so after one is put back the focused node shows the NEXT cut; a held Enter's repeats (keyboard clicks, `detail` 0)
+              // put back every one after it, each an Undo step. A repeat is not a new decision; a fresh Enter puts back the chip now under focus.
+              onKeyDown={ignoreHeldEnter}
               className="px-2 py-0.5 bg-accent/20 border border-accent/40 rounded hover:bg-accent/30"
               title="Click to put this part back"
             >

@@ -11,6 +11,7 @@ import { SafeZoneOverlay } from './SafeZoneOverlay'
 import { Icon } from '../../components/Icon'
 import { focusOwnsKey, hasChordModifier, inputTypeOf, shortcutKey } from '../../lib/keyOwnership'
 import { claimFirst } from '../../lib/claimFirst'
+import { focusAfterSwap } from '../../lib/swapFocus'
 import { reportFailure } from '../../lib/reportFailure'
 import { formatClock } from '@shared/clockTime'
 
@@ -160,6 +161,13 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
   // safe because every way a DIFFERENT file arrives goes through `loadSource` / `clearSource`, which zero `currentTime` in the store - so a
   // non-zero value at mount always belongs to this file. A path change while MOUNTED (the ref) is a different file: it starts at 0 as before.
   const mountedRef = useRef(false)
+  // T-192 (3): a video picked with the keyboard (Choose file…, a Recent entry) replaced the importer the focus was on, and the next Tab started at the top of the window.
+  // Play is this studio's primary control (STYLE_GUIDE's swap rule; `lib/swapFocus.ts` holds the press's record and moves focus only while it is on <body>): a Player that
+  // mounts for any other reason (a drop, a project opened from Home, "Edit in Video Studio", a trip back from another studio) moves nothing.
+  const playRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    focusAfterSwap('video-play', playRef.current)
+  }, [])
   useEffect(() => {
     const mounting = !mountedRef.current
     mountedRef.current = true
@@ -462,6 +470,7 @@ export function Player({ onVideoElement }: PlayerProps): JSX.Element | null {
 
       <div className="flex items-center gap-3 text-sm">
         <button
+          ref={playRef}
           className="btn-ghost px-3 py-2"
           onClick={togglePlay}
           title={playing ? 'Pause (Space)' : 'Play (Space)'}

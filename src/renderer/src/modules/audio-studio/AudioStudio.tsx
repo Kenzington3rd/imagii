@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
@@ -18,6 +18,7 @@ import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { audioTutorial } from '../../tutorials/audioTutorial'
+import { dropSwapPress, recordSwapPress } from '../../lib/swapFocus'
 
 // T-112: the close-confirm helpers live in `audioClose.ts` so Video Studio's "Clean
 // audio" can ask the same question without importing this component. Re-exported here
@@ -42,13 +43,19 @@ export function AudioStudio(): JSX.Element {
   // studios.
   useUndoRedoHotkeys(undo, redo)
 
-  function handleClose(): void {
+  // T-192 (3): a pick's record of "this control had focus" lives until the waveform's Play can take it; a studio that goes away first (a trip to Home while the
+  // waveform is read) must not leave it for the next sound that opens.
+  useEffect(() => () => dropSwapPress('audio-play'), [])
+
+  function handleClose(hadFocus: boolean): void {
     // The button only renders with a source loaded, so "a source is loaded"
     // is already true here.
     // T-146: Close does not stop an export that is running - it takes the Export panel away, and the closed-sound card (`AudioJobRunning`) keeps the Cancel on
     // screen. The question says so (even with no edits to lose), so a person who closes the sound does not believe they stopped it. Read when Close is pressed.
     const keepsGoing = exportKeepsGoingSentence(useAudioExport.getState().running)
     if (!confirmAudioClose(chain, (message) => confirm(message), 'close', keepsGoing)) return
+    // T-192 (3): Close takes itself away with the sound, and focus goes to the importer's Choose file… when Close held it (read at the press, before the confirm).
+    recordSwapPress('audio-choose', hadFocus)
     clearSource()
   }
 
@@ -79,7 +86,7 @@ export function AudioStudio(): JSX.Element {
               <span className="ml-3 text-ink-muted truncate max-w-[40ch]" title={source.fileName}>
                 {source.fileName}
               </span>
-              <button className="btn-ghost px-3 py-1.5 ml-2" onClick={handleClose}>
+              <button className="btn-ghost px-3 py-1.5 ml-2" onClick={(e) => handleClose(document.activeElement === e.currentTarget)}>
                 Close
               </button>
             </>

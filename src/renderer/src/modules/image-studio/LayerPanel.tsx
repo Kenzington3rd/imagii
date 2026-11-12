@@ -119,6 +119,8 @@ export function LayerPanel(): JSX.Element {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
+                    // T-192 (5): the swap puts the same arrow of the swapped-in layer under the pointer; a double-click moves the layer once.
+                    if (isRepeatPress(e)) return
                     moveUp(layer.id)
                   }}
                   className="text-ink-dim hover:text-ink-base px-1 flex"
@@ -130,6 +132,8 @@ export function LayerPanel(): JSX.Element {
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
+                    // T-192 (5): as Move up.
+                    if (isRepeatPress(e)) return
                     moveDown(layer.id)
                   }}
                   className="text-ink-dim hover:text-ink-base px-1 flex"

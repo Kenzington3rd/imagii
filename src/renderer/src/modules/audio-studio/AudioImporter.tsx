@@ -1,4 +1,4 @@
-import { useRef, useState, type DragEvent } from 'react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
 import toast from 'react-hot-toast'
 import { useAudioStore, waveformArrived, type AudioSource } from './state/audioStore'
 import { useAudioImportRun } from './state/audioImport'
@@ -8,6 +8,7 @@ import { basename } from '../../components/OutputDirLabel'
 import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
+import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
 import { describeFailedOpen, examineDroppedFile, pathLooksLikeCloudSync } from '@shared/importDiagnostics'
 import { assertDefined } from '@shared/assert'
 import { audioNeedsExtraction, formatHint, AUDIO_EXTENSIONS } from '@shared/mediaFormats'
@@ -27,11 +28,25 @@ export function AudioImporter(): JSX.Element {
   const { recent, push, remove, clear } = useRecentFiles('audio')
   // T-131 (5): and one chooser at a time (the Importer's `pickingRef`): `busy` is set only once a file was picked.
   const pickingRef = useRef(false)
+  // T-192 (3): the importer is the new content when Close brings it back (focus goes to Choose file… when Close held it), and the row is what a pick's press records
+  // from: Choose file… or the Recent toggle (a Recent entry hands the focus to the toggle before its pick runs, T-140 (9)). `lib/swapFocus.ts`.
+  const rowRef = useRef<HTMLDivElement | null>(null)
+  const chooseRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    focusAfterSwap('audio-choose', chooseRef.current)
+  }, [])
+  /** A press that may open a sound: the pick's focus is recorded while this row still has it, and dropped by every way the pick ends without one. */
+  function recordPick(): void {
+    const active = document.activeElement
+    recordSwapPress('audio-play', active !== null && rowRef.current !== null && rowRef.current.contains(active))
+  }
 
   /** Refuses a second import while one runs. */
   function refuseIfBusy(): boolean {
     const running = useAudioImportRun.getState().run
     if (running === null) return false
+    // T-192 (3): a refused press swaps nothing.
+    dropSwapPress('audio-play')
     toast(
       running.extracting
         ? 'Still extracting audio from the last file. Wait for it to finish.'
@@ -47,13 +62,21 @@ export function AudioImporter(): JSX.Element {
     // T-175 (3): a chain kept for a sound that could not be opened (an unplugged drive) is let go when a DIFFERENT file opens here. Asked before the run is claimed or
     // anything is said, over the file this opens (`soundKey` of the loaded sound: the picked path, whether it is played as it is or extracted); Cancel opens nothing.
     const keptQuestion = keptPartQuestion('audio', filePath, basename(filePath))
-    if (keptQuestion !== null && !confirm(keptQuestion)) return
+    if (keptQuestion !== null && !confirm(keptQuestion)) {
+      dropSwapPress('audio-play')
+      return
+    }
     advise?.()
     const extracting = audioNeedsExtraction(filePath)
-    if (!useAudioImportRun.getState().begin({ filePath, extracting })) return
+    if (!useAudioImportRun.getState().begin({ filePath, extracting })) {
+      dropSwapPress('audio-play')
+      return
+    }
     // T-137 (1): what Audio Studio held when this import began. The importer is on screen only while no sound is open, but an extraction takes
     // minutes and nothing locks the app: a sound that arrives meanwhile (a project opened from Home, Clean audio on a video) is the one being edited.
     const heldBefore = useAudioStore.getState().source
+    // T-192 (3): set once the sound is open and its waveform has arrived: from there the studio's Play takes the pick's record. Any other end drops it (the `finally`).
+    let kept = false
     try {
       console.info('[audio-import] loading', filePath)
       let opened: AudioSource
@@ -77,6 +100,7 @@ export function AudioImporter(): JSX.Element {
       // T-132 (11): the file is OPEN, but its waveform is read after that (T-129) and main can still refuse it (an unknown WAV format,
       // a damaged stream): the studio then lets go of it and says why. "Loaded" and a Recent entry are for a file that stayed.
       if (!(await waveformArrived(opened))) return
+      kept = true
       await push(filePath)
       toast.success('Loaded')
     } catch (err) {
@@ -87,6 +111,7 @@ export function AudioImporter(): JSX.Element {
       const sentence = await describeFailedOpen(err, filePath, 'audio', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })
       toast.error(sentence, { duration: 8000 })
     } finally {
+      if (!kept) dropSwapPress('audio-play')
       useAudioImportRun.getState().end()
     }
   }
@@ -126,10 +151,19 @@ export function AudioImporter(): JSX.Element {
     void loadFile(filePath, advise)
   }
 
+  function pickRecent(path: string): void {
+    recordPick()
+    void loadFile(path)
+  }
+
   async function onPickFile(): Promise<void> {
+    recordPick()
     await claimFirst(pickingRef, async () => {
       const filePath = await window.api.audio.pickFile()
-      if (!filePath) return
+      if (!filePath) {
+        dropSwapPress('audio-play')
+        return
+      }
       // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
       // before the cloud-sync warning, for the reason the drop does.
       if (refuseIfBusy()) return
@@ -166,11 +200,11 @@ export function AudioImporter(): JSX.Element {
       <p className="text-ink-muted text-sm mb-6">
         {formatHint(AUDIO_EXTENSIONS)} — or any video to extract its audio.
       </p>
-      <div className="flex items-center gap-2">
-        <button className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
+      <div className="flex items-center gap-2" ref={rowRef}>
+        <button ref={chooseRef} className="btn-primary disabled:opacity-50" onClick={onPickFile} disabled={busy}>
           {busy ? 'Loading…' : 'Choose file…'}
         </button>
-        <RecentFilesMenu recent={recent} onPick={(p) => void loadFile(p)} onClear={() => void clear()} />
+        <RecentFilesMenu recent={recent} onPick={pickRecent} onClear={() => void clear()} />
       </div>
       <p className="text-xs text-ink-dim mt-4 max-w-md">
         Files in OneDrive / Google Drive that show as cloud-only need to be marked "Always keep

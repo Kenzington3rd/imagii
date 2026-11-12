@@ -17,7 +17,7 @@ import {
 import { CANVAS_TEMPLATES } from '../templates'
 import { ASSET_CATALOG } from '../../references/assetCatalog'
 import { READABLE_CONTRAST, contrastRatio, estimatedTextBox, newTextLook, surfacesUnder, worstContrast } from '@shared/newText'
-import { BG_BASE, INK_BASE } from '../../../styles/tokens'
+import { ACCENT, BG_BASE, INK_BASE, withAlpha } from '../../../styles/tokens'
 import { MAX_SCHEMA_VERSION, validateProject } from '@shared/projectValidation'
 
 /**
@@ -1037,5 +1037,19 @@ describe('every canvas the app makes passes validateProject (T-188 (1) control)'
     useCanvasStore.getState().setRotation(rect.id, 33.5)
     useCanvasStore.getState().updateLayer(rect.id, { scaleX: -1, scaleY: 2, opacity: 0.5 })
     expect(reasonOf(useCanvasStore.getState().doc)).toBe('ok')
+  })
+})
+
+describe('the default Ellipse is drawn in the accent, like the Rectangle (T-192 (1))', () => {
+  it('fill is the accent at 40% and stroke the accent', () => {
+    const e = makeEllipseLayer(10, 10)
+    expect(e.fill).toBe(withAlpha(ACCENT, 0.4))
+    expect(e.stroke).toBe(ACCENT)
+  })
+
+  it('control: it matches the Rectangle default beside it', () => {
+    const e = makeEllipseLayer(0, 0)
+    const r = makeRectLayer(0, 0)
+    expect([e.fill, e.stroke]).toEqual([r.fill, r.stroke])
   })
 })

@@ -18,6 +18,7 @@ import { claimFirst } from '../../lib/claimFirst'
 import { inputTypeOf, isTextEntryTarget, shortcutKey } from '../../lib/keyOwnership'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
+import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
 import { SpecCard } from '../../components/SpecCard'
 
 import { placementFor, storedImageMaxDim } from '@shared/imageBounds'
@@ -48,11 +49,22 @@ export function ImportPanel(): JSX.Element {
   const [dragOver, setDragOver] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
 
+  // T-192 (3): the empty state's presses (a template card, "Import image", "Start with text") swap it for the canvas, and the pressed control goes with it: focus
+  // falls to <body> and the next Tab starts at the Home link. The press records that it held focus (`lib/swapFocus.ts`) and the studio puts it on the Select tool when
+  // the first layer lands (STYLE_GUIDE's swap rule). `emptyRef` is the empty state's root, so the same handlers called from the import bar (a canvas already open: no
+  // swap) record nothing. A press that ends with no layer (a canceled chooser, a refused file) drops the record.
+  const emptyRef = useRef<HTMLDivElement | null>(null)
+  function recordPress(): void {
+    const active = document.activeElement
+    recordSwapPress('image-select', active !== null && emptyRef.current !== null && emptyRef.current.contains(active))
+  }
+
   // Stream Graphics pivot: when the canvas is empty, surface the
   // templates catalog as the primary call-to-action. The drop-zone
   // becomes secondary. Users still get the modal version of templates
   // via the toolbar button once they have layers loaded.
   function applyTemplate(template: CanvasTemplate): void {
+    recordPress()
     const doc = cloneDoc(template.doc)
     doc.layers = doc.layers.map((l) => ({ ...l, id: nanoid(8) }))
     setDocument(doc)
@@ -60,6 +72,7 @@ export function ImportPanel(): JSX.Element {
 
   async function ingestFile(file: File): Promise<void> {
     if (!isImage(file.name)) {
+      dropSwapPress('image-select')
       toast.error('Unsupported file type')
       return
     }
@@ -82,6 +95,7 @@ export function ImportPanel(): JSX.Element {
       addLayer({ ...makeImageLayer(stored, place.width, place.height, place.x, place.y), name: file.name })
       toast.success(`Added ${file.name}`)
     } catch (err) {
+      dropSwapPress('image-select')
       reportFailure(err, { failed: "Couldn't import that image." })
     }
   }
@@ -171,7 +185,14 @@ export function ImportPanel(): JSX.Element {
   // the claim is given back when the chooser answers (a file) or is dismissed (`cancel`), so a person who cancels can open it again.
   // simplification: a chooser that ends with neither event (none known on this Chromium) would leave the buttons idle until the studio is reopened.
   const pickingRef = useRef(false)
+  // T-192 (3), the other way: the last layer going swaps the canvas back for this empty state (ImageStudio records the press that held focus as the editor detaches), and the
+  // empty state's primary control, Import image, takes it when this mounts. Nothing recorded (a studio just opened, a project, the first visit) moves nothing.
+  const importRef = useRef<HTMLButtonElement | null>(null)
+  useEffect(() => {
+    focusAfterSwap('image-import', importRef.current)
+  }, [])
   async function pickFile(): Promise<void> {
+    recordPress()
     await claimFirst(
       pickingRef,
       () =>
@@ -182,9 +203,13 @@ export function ImportPanel(): JSX.Element {
           input.onchange = () => {
             const file = input.files?.[0]
             if (file) void ingestFile(file)
+            else dropSwapPress('image-select')
             resolve()
           }
-          input.oncancel = () => resolve()
+          input.oncancel = () => {
+            dropSwapPress('image-select')
+            resolve()
+          }
           input.click()
         })
     )
@@ -192,6 +217,7 @@ export function ImportPanel(): JSX.Element {
 
   // T-140 (2): the word is sized, placed and inked for the document that is open when the button is pressed (it was a fixed (120, 120) in the app's near-black).
   function addText(): void {
+    recordPress()
     addLayer(textLayerFor(useCanvasStore.getState().doc))
   }
 
@@ -246,7 +272,7 @@ export function ImportPanel(): JSX.Element {
   // normal toolbar+canvas+layers layout.
   const grouped = getTemplatesByCategory()
   return (
-    <div className="flex flex-col gap-5 overflow-y-auto" data-tutorial="image-import">
+    <div ref={emptyRef} className="flex flex-col gap-5 overflow-y-auto" data-tutorial="image-import">
       <div className="flex flex-col gap-2">
         <h2 className="text-xl font-semibold">Pick a template to start</h2>
         <p className="text-ink-muted text-sm">
@@ -295,7 +321,7 @@ export function ImportPanel(): JSX.Element {
             Drop, paste (Ctrl+V), or import a file to edit your own image instead.
           </div>
           <div className="flex gap-2 flex-shrink-0">
-            <button className="btn-primary" onClick={pickFile}>
+            <button ref={importRef} className="btn-primary" onClick={pickFile}>
               Import image
             </button>
             <button

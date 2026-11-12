@@ -7,6 +7,7 @@ import { applyProjectHeld } from '../hooks/useAutosave'
 import { countOf } from '@shared/plural'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { reportFailure } from '../lib/reportFailure'
+import { swallowRepeatClicks } from '../lib/repeatPress'
 import { Icon } from './Icon'
 import { useAutosaveOffer, useRestoreRun, withdrawWhenSessionGainsWork } from './restoreRun'
 
@@ -165,6 +166,8 @@ export function AutosaveRestore(): JSX.Element {
       }
       // T-138 (5): said to every mounted banner (see the listener above), which drops its offer: this one's, or the one that replaced it.
       useRestoreRun.getState().patch({ applied: true })
+      // T-192 (4): an autosave made on Home applies with no route change, so App's swallow never runs: the banner goes and the cards move up under the pointer.
+      swallowRepeatClicks()
       // T-47: and back to the studio they were in, with the selections and
       // the playhead applyProject just put back. Only on the user's own
       // click — continuity is what Restore means, never something that
@@ -194,6 +197,7 @@ export function AutosaveRestore(): JSX.Element {
       // is not a backup, so the status line goes with it now, not on the next visit to Home.
       setInfo({ exists: false })
       setDismissed(true)
+      swallowRepeatClicks()
     } catch (err) {
       // T-57: a clear that failed leaves the file exactly where it was, so
       // the banner stays too — with its button, because trying again is the
@@ -210,6 +214,14 @@ export function AutosaveRestore(): JSX.Element {
     } finally {
       setClearing(false)
     }
+  }
+
+  // T-192 (4): Later and Dismiss take the banner away, Home's cards move up under the pointer, and the second press of a double-click lands on the card there (Video
+  // Studio's). The window-level rule for "what this covered moves under the pointer" (T-131 (8), T-139 (9)): a repeat press does not reach what is under it for half a second.
+  // Clear does the same at the moment its own removal lands (`clearAutosave`, after the unlink).
+  function dismissBanner(): void {
+    setDismissed(true)
+    swallowRepeatClicks()
   }
 
   const ageText =
@@ -244,7 +256,7 @@ export function AutosaveRestore(): JSX.Element {
         </button>
         <button
           className="btn-ghost px-3 py-1 text-xs"
-          onClick={() => setDismissed(true)}
+          onClick={dismissBanner}
         >
           Dismiss
         </button>
@@ -277,7 +289,7 @@ export function AutosaveRestore(): JSX.Element {
       </button>
       <button
         className="btn-ghost px-3 py-1 text-xs"
-        onClick={() => setDismissed(true)}
+        onClick={dismissBanner}
       >
         Later
       </button>

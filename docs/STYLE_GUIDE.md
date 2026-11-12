@@ -759,7 +759,27 @@ Repeated UI is a component, not copy-paste:
   the tour's Next and Done hold a repeat by their own rule (`tutorialKeyIntent` answers 'hold', T-132 (6)). A
   receiver whose repeat is an idempotent re-select or does nothing (the Line tool, the first source tile, the Gain
   slider) or whose focus is the safe answer of a question (`data-initial-focus`) needs none. A reveal is sticky for the control's life (T-190 (2)): the toolbar's Line and Pencil, once shown by "+ More"
-  or by L / P, stay, so a later tool key cannot unmount the focused one.
+  or by L / P, stay, so a later tool key cannot unmount the focused one. T-192 (3) adds the swaps between a studio's
+  importer and its editor, which cross components and take time (a native chooser, a conversion, a waveform read), so
+  the press records "this control had focus" in MODULE scope (`lib/swapFocus.ts`, `recordSwapPress`: Record's
+  press-recorded flag, made to survive the swap) and the new content's own effect spends it (`focusAfterSwap`): Stream
+  Graphics' template cards, **Start with text** and **Import image** -> the **Select** tool (`ImageStudio`'s effect,
+  keyed on the first layer); Audio Studio's **Choose file…** and a Recent entry -> the waveform's **Play** (once the
+  player is ready: it is disabled until then); Video Studio's -> the Player's **Play**; either studio's **Close** ->
+  that importer's **Choose file…**; and the swap the other way, Stream Graphics' LAST layer going (a layer's **Remove
+  layer**, Delete, Ctrl+Z) -> the empty state's **Import image**: the control that held focus (the ✕, a tool) is
+  unmounted with the editor, so the editor's root (a stable `useCallback` ref in `ImageStudio`) records the press as
+  it DETACHES - React calls a ref with null before the DOM node is removed, so `document.activeElement` is still the
+  control - and `ImportPanel`'s mount effect spends it (an inline callback ref would be called with null on every
+  render and record falsely). The record is named for the control the content will focus, so one press's flag is
+  only ever spent by the content it was recorded for; a press that FAILS (a canceled chooser, a refused or failed
+  load) drops it (`dropSwapPress`), and so does a studio that is left before the swap came. It moves focus only while
+  focus is on `<body>` or nowhere, so a swap by a drop, a mouse press that focused nothing, a project opened from Home,
+  an autosave Restore or the tour moves nothing, and focus the person put on another control while the chooser was open
+  stays there. Focus it hands over meets the held Enter like every other receiver (T-191 (1)): `focusAfterSwap` calls
+  `holdHeldKeys()`, so the press's own auto-repeats never act on the Play, the tool or the chooser button it landed on.
+  A new swap of this kind records its press, names its target in `SwapTarget`, and drops the record on every way the
+  press ends without a swap.
 - **Smooth scrolling that script asks for reads the Reduce-motion setting itself (T-119).** The `prefers-reduced-motion`
   block in `index.css` sets `scroll-behavior: auto`, which governs scrolling CSS decides but not
   `scrollIntoView({ behavior: 'smooth' })`, an explicit option. The coachmark asks `matchMedia` and passes

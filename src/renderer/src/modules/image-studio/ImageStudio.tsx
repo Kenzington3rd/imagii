@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
 
 // INIT-F (round 15): human-readable tool labels for the header badge.
 const TOOL_LABELS: Record<string, string> = {
@@ -82,6 +83,28 @@ export function ImageStudio(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedLayerId, removeLayer, setTool])
 
+  // T-192 (3): the first layer swaps the empty state's controls (a template card, "Import image", "Start with text") for the canvas, and the pressed one goes with it. When
+  // the press held focus it goes to the Select tool, the toolbar's first control (STYLE_GUIDE's swap rule; `lib/swapFocus.ts` holds the record and moves focus only while it is
+  // on <body>). Keyed on whether there are layers: a canvas that opens with some (a project, an autosave Restore) or gets them back by Redo finds no record and moves nothing.
+  const hasLayers = layers.length > 0
+  useEffect(() => {
+    if (!hasLayers) return
+    focusAfterSwap('image-select', document.querySelector<HTMLElement>('[data-tutorial="image-toolbar"] button[title^="Select"]'))
+  }, [hasLayers])
+  // ... and a press whose swap has not come (a chooser still open) is not left for a canvas that fills while the person is on another route.
+  useEffect(() => () => dropSwapPress('image-select'), [])
+
+  // T-192 (3), the other way: the LAST layer going (the Layers panel's Remove layer, Delete, Ctrl+Z) swaps the canvas back for the empty state and unmounts the control that held focus
+  // (a layer's ✕, a toolbar tool). That control is gone before any effect can ask, so the editor's root records it as it detaches: React calls a ref with null BEFORE the DOM node is
+  // removed, so `document.activeElement` still is the focused control there. The callback is STABLE (`useCallback` with no dependencies): an inline arrow is called with null on
+  // every re-render and would record falsely. The empty state's Import image button, its primary control, spends the record (`ImportPanel`). A studio that is left (the same detach) leaves it
+  // for the next ImportPanel that mounts, which spends it whether or not it has a button to focus.
+  const editorEl = useRef<HTMLElement | null>(null)
+  const editorRef = useCallback((el: HTMLDivElement | null) => {
+    if (el === null && editorEl.current !== null && editorEl.current.contains(document.activeElement)) recordSwapPress('image-import', true)
+    editorEl.current = el
+  }, [])
+
   return (
     // T-140 (5): `overflow-auto` like the four sibling studios, the backstop: the canvas gives way first (it flexes down to its floor), and a window short enough that the
     // rest still does not fit scrolls instead of clipping the Export bar where the wheel cannot reach it.
@@ -117,7 +140,7 @@ export function ImageStudio(): JSX.Element {
       {layers.length === 0 ? (
         <ImportPanel />
       ) : (
-        <>
+        <div ref={editorRef} className="contents">
           <ImportPanel />
           <Toolbar />
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_clamp(260px,16%,380px)] gap-4 min-h-0">
@@ -132,7 +155,7 @@ export function ImageStudio(): JSX.Element {
               <PropertiesPanel />
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {tutorial.active ? (
