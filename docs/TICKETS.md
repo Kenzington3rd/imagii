@@ -10529,6 +10529,46 @@ IMG-PREC.
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 145 — see the Done entry)
 
+## T-197 — sweep-84 fix (round 146)
+
+- **Spec:** the eighty-fourth sweep's verified finding (candidate clean pass #1 on d1ffc3e, the T-196 tree; the count
+  stays at 0). Item 1 found by UX reader 1 from source and measured by the expediter in the built app; a sibling of
+  T-132 (11)'s rule (whoever celebrates a file asks `waveformArrived` first) at a site it did not name. Twelve readers
+  clean, no send-backs (design reader 1 and the ffmpeg reader were still out when this ticket was written; a finding
+  from either joins this track). Not counted: a collapsed chat-log disclosure still weighting the highlight scan (the
+  person added the log; collapsing is not removing); 'Could not read file path' beside the app's 'Couldn't' (BRANDING
+  has no contraction rule: polish); the ledgered T-110 letters and earlier dispositions each reader named. One worker
+  track: audio-studio/AudioStudio.tsx (and hooks/useTutorial.ts only if the class check needs it), with a describe in
+  audio.spec.ts.
+
+  **The one track — the Audio tour waits for the waveform (item 1).**
+  1. **[LOW] A first sound that opens and is then refused opens the Audio tour over the importer, and Skip uses it up**
+     (audio-studio/AudioStudio.tsx:37 `useTutorial(audioTutorial, source !== null)`: the first-run tour opens when the
+     sound OPENS, and its waveform is read after that (T-129), so a sound main refuses (an unknown WAV format) opens the
+     tour and then empties the studio under it; nothing closes the tour when the studio lets go; measured by the
+     expediter on a built d1ffc3e with tutorialSeen.audio unset: 182 ms after the drop the tour reads 'Audio Studio
+     tutorial - step 1 of 8: Welcome to Audio Studio' over the importer, it still stands there 3 s later, its steps
+     point at a waveform, Cleanup, Levels and Export that are gone, Skip persists tutorialSeen.audio, and a readable
+     file opened afterwards brings no tour; control: a readable first sound opens it). Fix: the Audio tour is ready when
+     the sound's waveform has ARRIVED (the studio holds a source and its waveform), not when the file opens - the T-132
+     (11) rule the importer's "Loaded" and the project open already follow - so a refused sound never opens it and the
+     first readable sound does. Class check: every other `useTutorial` caller's readiness (Video Studio `source !==
+     null`, Stream Graphics `layers.length > 0`, References none) - name whether its studio can let go of what made it
+     ready after the tour has opened, and fix the same way any that can; if none can, say so and change nothing else.
+  Covering tests: e2e (NEW describe at the end of audio.spec.ts) - first run (tutorialSeen.audio unset), the
+  unknown-format WAV dropped: no tour dialog at any moment from the drop to the refusal and 3 s after it (sample it
+  every 100 ms), tutorialSeen.audio still unset on disk (red on the base: the tour opens over the importer); then a
+  readable WAV dropped: the tour opens at step 1 (red on the base after the base's Skip: none); control: a readable
+  first sound opens the tour (green on the base). Unit or wiring pin: the Audio tour's readiness reads the waveform.
+  Docs: IC rows for the Audio tour (revised in place), LESSONS at the TOP, TESTING paragraph, STYLE_GUIDE's T-132 (11)
+  sentence names the tour.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
+  track moves and update each pin in place; the expediter runs the full suite and the real-media suite on the merged
+  tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 146)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
