@@ -10393,6 +10393,73 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 143 — see the Done entry)
 
+## T-195 — sweep-82 fixes (round 144)
+
+- **Spec:** the eighty-second sweep's verified findings (candidate clean pass #1 on 7c1adf6, the T-194 tree; the count
+  stays at 0). Item 1 found by UX reader 1 from source and measured by the expediter in the built app; item 2 flagged by
+  UX reader 1 as possibly speculative and measured by the expediter, counted as a defect matching a done ticket
+  (T-174 (4)). Fourteen readers clean (the Electron reader after one coverage send-back). Not counted: no landmark
+  regions (every studio has its h1 and h3 headings, so a screen reader can already skip by heading: an initiative);
+  many long text overlays on one clip passing Windows' 32,767-character command line (about 140 overlays of 40
+  characters each, by the builder's 215-character drawtext; captions are the subtitle path; `-filter_script` is the
+  upgrade); the per-clip platform ticks with no apply-to-all and no clip heading (T-110 (as)); the ledgered T-110
+  letters each reader named. Two worker tracks, disjoint files: Track A = item 1 (audio-studio/ExportDialog.tsx and the
+  class grep's sites); Track B = item 2 (project/ProjectIO.ts, audio-studio/state/audioStore.ts). The ffmpeg reader was
+  still out when this ticket was written; a finding from it joins Track A. At merge the expediter also corrects
+  INTERACTION_COVERAGE.md's round 143 Track B Docs line (it calls three remarks stale that the same round fixed).
+
+  **Track A — the pressed control stays where it is (item 1).**
+  1. **[LOW] Unticking "Re-attach to video" moves it under the pointer, and a double-click opens the Format menu**
+     (audio-studio/ExportDialog.tsx:142-183: in the row's DOM order Format and Bitrate come BEFORE the checkbox and are
+     hidden while `source.fromVideo && muxBack`, so unticking mounts them in front of it; measured by the expediter on a
+     built 7c1adf6 with a video's sound open: the label moves from x 49 to 365, and the second press of a real
+     double-click, and of two presses 80 ms apart, sends its mousedown, mouseup and click to the Format select, which
+     takes the focus; a mousedown on a select opens its list - the T-168 (6) / T-194 (3) class). Fix: render the
+     Re-attach checkbox FIRST in the row, so unticking adds Format and Bitrate to its right and ticking takes them away
+     from its right: the control just pressed never moves, so neither a repeat nor a deliberate second press a moment
+     later lands on a select (a repeat swallow alone would still move the box). The tour's and USER_GUIDE's sentences
+     stay true; check them. Class grep: every control in the renderer whose press mounts or unmounts siblings BEFORE it
+     in its own row, or ABOVE it in its column, so the pressed control itself moves (checkbox reveals, toggles, "+ More"
+     style buttons); measure in the built app each one that moves, fix the same way any where the moved press lands on
+     another control, and name the rest with the reason.
+  Covering tests: e2e (NEW describe at the end of audio.spec.ts, after the half second App swallows repeats after a
+  route change) - a video's sound open with Re-attach ticked: a real double-click (two presses 80 ms apart) on the
+  label's text leaves the box unticked, the box at the same x before and after, Format and Bitrate shown to its right,
+  no select focused, and the second press's events on the label (red on the base: on the Format select); ticking it
+  again hides them and the box does not move (control). Unit (NEW describe at the end of interactionWiring.test.ts) -
+  the checkbox precedes the Format and Bitrate labels in the row. Docs: IC rows, a Dispositions section for the class
+  grep, LESSONS at the TOP, TESTING paragraph, USER_GUIDE if its Export passage names the order.
+
+  **Track B — a sound that opens and is then refused keeps its work (item 2).**
+  2. **[LOW] A project or autosave whose sound opens and then fails its waveform read loses its chain**
+     (project/ProjectIO.ts:612-628 keeps a studio part only when `loadSource` throws, and `loadSource` resolves once the
+     file is OPEN; its waveform is read after that, and audio-studio/state/audioStore.ts:139-143 resets the source and
+     the chain to the default on a refusal; measured by the expediter on a built 7c1adf6: a project naming the T-132
+     (11) unknown-format WAV with Hum removal and Remove low rumble on opens with the refusal sentence ("... Re-export
+     it as a standard PCM WAV or MP3 and try again."), Save project then says "Nothing to save yet.", and the file
+     re-exported at the same path and opened again has the default chain; the control - the file missing at open - keeps
+     both). T-174 (4) keeps a part whose file "was unavailable or failed"; this is its failed path. Fix: when THIS
+     sound's waveform read is refused, the open keeps its part exactly as a load that threw does (`keptParts.audio`:
+     its key, `extracted`, the chain), so `captureProject` writes it while no sound is open (Save project and the
+     autosave) and the same file opened again gets it back; it is not kept when the studio let go for another reason
+     (Close, another file opened) or a newer open or file has replaced it since (the T-174 (4) rules). The open is not
+     made to wait for the waveform (a long file's read takes seconds): the decision follows the refusal. The sentences
+     are unchanged; the refusal's "try again" becomes true.
+  Covering tests: e2e (NEW describe at the end of home-chrome.spec.ts) - Open project naming an unknown-format WAV with
+  Hum removal and Remove low rumble on: Save project writes the audio part with both (red on the base: "Nothing to save
+  yet."), and the file replaced by a standard WAV and opened in Audio Studio has both checked (red: unchecked); the
+  same from an autosave Restore with another studio holding work: the next autosave on disk still holds the chain (red:
+  it does not); control: a DIFFERENT file opened after the refusal lets the kept chain go. Unit (ProjectIO.test.ts NEW
+  describe) - the refusal keeps the part; a Close, another file and a newer open do not. Docs: IC rows (the T-174 (4)
+  rows revised in place), LESSONS at the TOP, TESTING paragraph, USER_GUIDE's saving passage if it names the case.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
+  track moves and update each pin in place; any e2e double-click waits out App's route-change repeat swallow first
+  (T-193's merge lesson); the expediter runs the full suite and the real-media suite on the merged tree; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 144)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
