@@ -10462,15 +10462,17 @@ IMG-PREC.
 
 ## T-196 — sweep-83 fixes (round 145)
 
-- **Spec:** the eighty-third sweep's verified finding (candidate clean pass #1 on 7d81c3a, the T-195 tree; the count
+- **Spec:** the eighty-third sweep's verified findings (candidate clean pass #1 on 7d81c3a, the T-195 tree; the count
   stays at 0). Item 1 found by UX reader 1 from source and by QA renderer reader A with a scratch unit test, and
-  measured by the expediter in the built app; a new consequence of T-195 (2). Thirteen readers clean (no send-backs;
-  the ffmpeg reader was still out when this ticket was written, and a finding from it joins this track). Not counted:
+  measured by the expediter in the built app; a new consequence of T-195 (2). Item 2 noted by the ffmpeg reader as a
+  case the standing entry's wording does not name, counted by the expediter (added after item 1 was dispatched).
+  Thirteen readers clean (no send-backs). Not counted:
   the ledgered T-110 letters and earlier sweeps' dispositions each reader named (among them Export's shrinking primary
   over its folder chip, IC:3514; a schema-invalid config.json stopping launch, IC:2986; the Clip Kit's 6 s toasts,
-  TICKETS:9601). One worker track: project/ProjectIO.ts and its test, with a describe in home-chrome.spec.ts.
+  TICKETS:9601). Two worker tracks, disjoint files: Track A = item 1 (project/ProjectIO.ts and its test, with a
+  describe in home-chrome.spec.ts); Track B = item 2 (main/ffmpeg/filters.ts and its tests, a Layer 5 case).
 
-  **The one track — a kept chain is kept until its file is read (item 1).**
+  **Track A — a kept chain is kept until its file is read (item 1).**
   1. **[LOW] A kept Audio Studio chain is lost when its file opens and is refused**
      (project/ProjectIO.ts:447-453 `giveBackAudio`, run by the store subscriber at :478 when a source opens, applies a
      kept part to the same file and DELETES it at once, before that file's waveform is read; only `applyProject` keeps a
@@ -10497,6 +10499,29 @@ IMG-PREC.
   whose source is refused keeps the part again; one whose read arrives does not; a Close or another file opened before
   the refusal does not; a newer apply since does not. Docs: IC rows (the T-174 (4) and T-195 (2) rows revised in
   place), LESSONS at the TOP, TESTING paragraph, USER_GUIDE's saving passage (any number of tries).
+
+  **Track B — text overlays and the watermark find the system's fonts (item 2).**
+  2. **[LOW] Text overlays and the watermark name C:\Windows\Fonts, so a Windows on another drive fails every export
+     carrying them**
+     (main/ffmpeg/filters.ts:376 `overlayFontPath` and :524 `watermarkFilter` print `C\\:/Windows/Fonts/<file>` into the
+     graph; drawtext opens that file, so on a Windows whose system drive is not C: every export carrying a text overlay
+     or the watermark fails; LESSONS_LEARNED.md's "Known-and-accepted" entry (2026-08-09, bug round 18) accepts the literal
+     "while the app ships Windows-only" and says to bundle a font before a cross-platform build, which does not name a
+     Windows on another drive; by reading). Fix: the font folder is the system's: `%SystemRoot%\Fonts`, falling back to
+     `%windir%` and then `C:\Windows`, read in main when the graph is built (so a test can set it) and printed in the
+     graph with the escaping a path needs inside a quoted filter option (verify with real ffmpeg, a root holding a
+     space, an apostrophe and a drive colon); the table of file names and the Arial fallback for an unknown key are
+     unchanged. Where no variable is set (Linux, the test machines) the graph is byte-identical to today's, so the Layer
+     5 cases that swap the shipped font string for a local font keep working; update any whose string the change moves.
+     The LESSONS entry is amended in place with what changed.
+  Covering tests: unit (NEW describe at the end of filters.test.ts) - with `SystemRoot` = `D:\Windows` the overlay's and
+  the watermark's fontfile name D:'s Fonts folder, escaped; with only `windir` set, that folder; with neither, today's
+  C: string byte for byte. Layer 5 (NEW describe at the end of tests/integration/media.spec.ts, IMG-PREC: an ffmpeg
+  command change) - a real export with a text overlay and a watermark on the binary that has drawtext, with `SystemRoot`
+  pointed at a temp folder whose path holds a space and an apostrophe and whose Fonts holds the box's sans font as
+  arial.ttf and arialbd.ttf: exit 0, and the frame differs from the same export without them (red on the base: the base
+  names C:/Windows and drawtext cannot open it). Docs: the LESSONS entry amended, a LESSONS entry at the TOP, TESTING
+  paragraph, IC rows for the overlay and watermark if they name the path.
 - **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
