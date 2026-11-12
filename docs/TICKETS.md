@@ -10100,7 +10100,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 140)
+- **Status:** done (round 140 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10678,6 +10678,53 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 140 — T-191, the six counted items of sweep 78, landed in the
+commit that carries this entry. Three Sonnet workers in fresh clones
+of c1df39b, disjoint files. Track A (items 1 and 2): a key still held
+does not act on the control a press hands focus to. `holdHeldKeys()`
+(lib/repeatPress.ts) applies the held-key guard's existing rule - the
+keys down now are swallowed as repeats until let go, a fresh press
+acts - which `swallowRepeatClicks` already applied at a dialog's
+close; `Modal` now calls it when it opens, and RecentFilesMenu where
+Clear list hands focus to the importers' "Choose file…" and where a
+pick hands it to the toggle. A held Enter on Clear list no longer
+opens the file chooser once per repeat, a refused pick no longer
+flickers the menu, and a dialog opened by a held Enter (Templates,
+Variants, Presets, the board Rename, the safe-zone question) no longer
+takes the repeat on its first control. Track B (items 3-5): after
+"Clear thumbnail cache" every tile of every board uses the address it
+came from at once, so "→ Canvas" works in the same visit; the Audio
+waveform's unplayed bars are `INK_DIM` beside the played `ACCENT`
+(6.2:1 and 5.29:1 on its background, and different in hue; they were
+1.08:1 apart); DESIGN_GUIDE's raw-color exceptions list names the
+typing example's three sites, and noRawHex.test.ts now fails when its
+allow-list names a file the guide does not. Track C (item 6): a model
+download that fails while the transfer is live (a refused answer, a
+write that cannot land, a response error) aborts the request, so the
+rest of the 141 MB no longer downloads behind a panel that says it
+failed; a success, a Cancel and the request's own error are unchanged,
+and a download that ends whole but fails its check is not aborted.
+Deviations, accepted: the safe-zone case in video-pipelines.spec.ts
+(video-core holds no Export question); the guard's `hold` method
+beside `dialogClosed`; three interactionWiring pins, one
+failurePathLanguage pin and one IC cite moved by the changes;
+DESIGN_GUIDE's accent-muted and ink-dim rows; the abort test as a new
+beside-file (it needs file-wide mocks); a `live` flag and the abort
+handler's settled early-return (which also stops a second "Download
+canceled" after a request error). Expediter: item 2 was first ruled
+under round 139's disposition and then counted (that disposition names
+only the two questions whose closing is the safe answer). The
+expediter's mutations were all killed: a fresh keydown not recorded as
+down (five unit cases), the guide without canvasColor.ts (the new
+noRawHex case), and Cancel's settle not marked as the request's own
+(the Cancel control: two aborts). At merge, Track C's LESSONS entry
+lacked its trailing separator and was given one. Ledger: every
+mutation killed, none survived; every restore identical. Gates on the
+merged tree: npm run verify twice (215 files, 7140 tests each),
+test:media 538 passed and 28 skipped of 566 (476 s), and the full xvfb
+Playwright suite (the default temp folder), 910 passed in 58.9 min, no
+failures.
 
 Round 139 — T-190, the six counted items of sweep 77, landed in the
 commit that carries this entry (item 6 in 0b44a33, the ticket's own

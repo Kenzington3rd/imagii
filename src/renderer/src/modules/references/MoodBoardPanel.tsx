@@ -192,6 +192,9 @@ export function MoodBoardPanel(): JSX.Element {
   async function onClearThumbs(): Promise<void> {
     try {
       await window.api.moodboard.clearThumbs()
+      // T-191 (3): the clear deleted every cached file, and a tile already drawn never fires `onError` for a file it decoded before; "→ Canvas" then loaded the deleted
+      // file. Every item of every board uses the address it came from at once (a refused clear throws above and marks nothing).
+      setUncachedItemIds(new Set(useReferencesStore.getState().collections.flatMap((c) => c.items.map((i) => i.id))))
       toast.success('Thumbnail cache cleared')
     } catch (err) {
       reportFailure(err, { failed: "Couldn't clear the thumbnail cache." })

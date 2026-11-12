@@ -5,7 +5,7 @@ import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.e
 import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
-import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
+import { ACCENT, EMBER, INK_DIM, withAlpha } from '../../styles/tokens'
 import { PLAYBACK_ERROR_MESSAGE, peaksMaxMagnitude } from '@shared/audio'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 import { formatClock } from '@shared/clockTime'
@@ -61,7 +61,9 @@ export function WaveformView(): JSX.Element | null {
       url: source.url,
       peaks: waveform.peaks,
       duration: waveform.duration,
-      waveColor: ACCENT_MUTED,
+      // T-191 (4): the unplayed wave is INK_DIM (6.2:1 on the waveform's `bg-bg-base`), the played part ACCENT (5.29:1): the two clear 3:1 (WCAG 1.4.11) and differ in hue.
+      // It was ACCENT_MUTED beside ACCENT, about 1.03:1 apart - the played part could not be told from the rest; accent-muted is the hover state of accent elements.
+      waveColor: INK_DIM,
       progressColor: ACCENT,
       cursorColor: EMBER,
       cursorWidth: 2,

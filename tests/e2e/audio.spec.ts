@@ -13,6 +13,7 @@ import os from 'node:os'
 import { fileURLToPath } from 'node:url'
 import { ffmpegPath, ffprobePath } from '../../src/main/ffmpeg/paths'
 import { DEFAULT_CHAIN_SPEC } from '../../src/shared/audio'
+import { ACCENT, BG_BASE, INK_DIM } from '../../src/renderer/src/styles/tokens'
 import { chooserCalls, recordSlowChooser } from './chooser'
 import { dragThrough, dragTo } from './drag'
 import {
@@ -6752,6 +6753,99 @@ test.describe('Audio Studio - a held Enter on Remove opens no chooser (T-190 (1)
       await window.keyboard.press('Enter')
       await expect(panel).toContainText('Background music: e2e-tone.wav')
       expect(await opens(app)).toBe(2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ── T-191 (4): the waveform's played part can be told from the rest ───────────────────────────────────────────────────────────────────────────────────────────────
+//
+// `waveColor` was ACCENT_MUTED beside `progressColor: ACCENT` (rgb(245,46,46) against rgb(255,49,49), about 1.03:1): after a seek, or while playing, the played part could not
+// be told from the rest. The unplayed wave is INK_DIM now. The colours are read from the pixels wavesurfer drew (its shadow root is open): the unplayed bars from the wave's own
+// canvases, the played bars from the progress layer's canvases (`.progress`, a clipped copy drawn in the progress colour), which sit on top of them left of the playhead. The background is the container's computed colour.
+test.describe('T-191 (4): the waveform\'s played part differs from the unplayed part', () => {
+  type Rgb = [number, number, number]
+
+  /** The most common fully opaque colour in the columns of one layer between two fractions of the waveform's width (the bars' own fill, not their anti-aliased edges). */
+  function dominantColour(window: Page, layer: 'wave' | 'progress', fromFrac: number, toFrac: number): Promise<Rgb> {
+    return window.evaluate(
+      ({ layer, fromFrac, toFrac }) => {
+        const host = document.querySelector('[data-tutorial="audio-waveform"] .card > div > div')
+        const root = host?.shadowRoot
+        if (!root) throw new Error('the waveform has no shadow root: wavesurfer drew nothing')
+        const all = [...root.querySelectorAll('canvas')] as HTMLCanvasElement[]
+        const canvases = all.filter((c) => (c.closest('.progress') !== null) === (layer === 'progress'))
+        if (canvases.length === 0) throw new Error(`the ${layer} layer has no canvas`)
+        const counts = new Map<string, number>()
+        for (const canvas of canvases) {
+          const ctx = canvas.getContext('2d')
+          if (!ctx || canvas.width === 0) continue
+          const left = parseFloat(canvas.style.left || '0')
+          const scale = canvas.width / (parseFloat(canvas.style.width) || canvas.width)
+          const total = (host as HTMLElement).clientWidth
+          const { data } = ctx.getImageData(0, 0, canvas.width, canvas.height)
+          for (let x = 0; x < canvas.width; x++) {
+            const frac = (left + x / scale) / total
+            if (frac < fromFrac || frac > toFrac) continue
+            for (let y = 0; y < canvas.height; y++) {
+              const i = (y * canvas.width + x) * 4
+              if (data[i + 3] !== 255) continue
+              const key = `${data[i]},${data[i + 1]},${data[i + 2]}`
+              counts.set(key, (counts.get(key) ?? 0) + 1)
+            }
+          }
+        }
+        const best = [...counts.entries()].sort((a, b) => b[1] - a[1])[0]
+        if (!best) throw new Error(`no opaque ${layer} pixel between ${fromFrac} and ${toFrac}`)
+        return best[0].split(',').map(Number) as [number, number, number]
+      },
+      { layer, fromFrac, toFrac }
+    )
+  }
+
+  const hex = (h: string): Rgb => [1, 3, 5].map((i) => parseInt(h.slice(i, i + 2), 16)) as Rgb
+  const luminance = ([r, g, b]: Rgb): number => {
+    const lin = (v: number): number => {
+      const c = v / 255
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+    }
+    return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b)
+  }
+  const contrast = (a: Rgb, b: Rgb): number => {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x) as [number, number]
+    return (hi + 0.05) / (lo + 0.05)
+  }
+
+  test('after a seek to the middle a played bar and an unplayed bar differ, and each clears 3:1 against the waveform\'s background', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t191-wave-colours')
+    const { window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const surface = window.locator(`${WAVEFORM} .card > div`).first()
+      const box = await surface.boundingBox()
+      if (!box) throw new Error('waveform surface has no box')
+      await window.mouse.click(box.x + box.width * 0.5, box.y + box.height / 2)
+      const transport = window.locator(`${WAVEFORM} .font-mono`).first()
+      await expect
+        .poll(async () => parseTimestampPair((await transport.textContent()) ?? '')[0], { timeout: 10_000, intervals: [200] })
+        .toBeGreaterThan(1.2)
+
+      const bg = await surface.evaluate((el) => {
+        const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(getComputedStyle(el).backgroundColor)
+        return m ? ([Number(m[1]), Number(m[2]), Number(m[3])] as [number, number, number]) : null
+      })
+      expect(bg, 'the waveform\'s background is bg-base').toEqual(hex(BG_BASE))
+
+      const played = await dominantColour(window, 'progress', 0.1, 0.4)
+      const unplayed = await dominantColour(window, 'wave', 0.6, 0.9)
+      const spread = Math.hypot(played[0] - unplayed[0], played[1] - unplayed[1], played[2] - unplayed[2])
+      expect(spread, `played ${played} and unplayed ${unplayed} differ (red on the base: about 11 apart)`).toBeGreaterThan(60)
+      expect(played, 'the played part is the accent').toEqual(hex(ACCENT))
+      expect(unplayed, 'the unplayed wave is ink-dim').toEqual(hex(INK_DIM))
+      expect(contrast(played, hex(BG_BASE)), 'played bar on the background (control: green on the base too)').toBeGreaterThanOrEqual(3)
+      expect(contrast(unplayed, hex(BG_BASE)), 'unplayed bar on the background (control: green on the base too)').toBeGreaterThanOrEqual(3)
     } finally {
       await closeStudio(studio)
     }

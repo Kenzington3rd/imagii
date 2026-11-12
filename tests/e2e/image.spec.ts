@@ -8229,3 +8229,48 @@ test.describe('Image Studio - a held Enter on Generate does not press Save all (
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-191 (2): a button that opens a dialog hands the focus to the dialog's first control inside its own keydown (the focus trap), and a HELD Enter's auto-repeats are keyboard
+// clicks on whatever has focus. Variants' header Close took the first repeat (5 repeats, 0 dialogs), Templates' Close the same. `Modal` now holds the keys that are down
+// when it opens (`holdHeldKeys`), so the repeats are swallowed until the key is let go; a fresh Enter on the control is a decision and acts. Playwright marks a keydown for
+// a key that is already down as a repeat, which is what a held key does.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Image Studio - a held Enter on a button that opens a dialog leaves the dialog open (T-191 (2))', () => {
+  for (const [name, host, button] of [
+    ['Templates', IMPORT, 'Templates'],
+    ['Variants', EXPORT, 'Variants']
+  ] as const) {
+    test(`${name}: the repeats of the Enter that opened the dialog do not press its first control; a fresh Enter on Close closes it`, async () => {
+      test.setTimeout(120_000)
+      const studio = await openStudio(`t191-held-${name.toLowerCase()}`)
+      const { window } = studio
+      try {
+        const t = templateById('yt-thumb-bold')
+        await templateCard(window, t).click()
+        await expectTemplateApplied(window, t)
+        const opener = window.locator(host).getByRole('button', { name: button })
+        const dialog = window.locator('[role="dialog"]')
+        await opener.focus()
+        await expect(opener).toBeFocused()
+        // The key goes down and stays down: the first keydown opens the dialog ...
+        await window.keyboard.down('Enter')
+        await expect(dialog).toBeVisible()
+        const close = dialog.getByRole('button', { name: 'Close' }).first()
+        await expect(close, 'the premise: the trap put the focus on the first control, inside the same event').toBeFocused()
+        // ... and its auto-repeats land on it, where each was a keyboard click.
+        for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+        await window.keyboard.up('Enter')
+        await window.waitForTimeout(700)
+        await expect(dialog, 'a repeat pressed Close').toBeVisible()
+        await expect(close).toBeFocused()
+
+        // A fresh Enter is a decision: it closes the dialog.
+        await window.keyboard.press('Enter')
+        await expect(dialog).toHaveCount(0)
+      } finally {
+        await closeStudio(studio)
+      }
+    })
+  }
+})

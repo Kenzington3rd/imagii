@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
+import { holdHeldKeys } from '../lib/repeatPress'
 
 interface RecentFilesMenuProps {
   recent: string[]
@@ -52,7 +53,12 @@ export function RecentFilesMenu({
   function closeToToggle(): void {
     const hadFocus = focusIsInside()
     setOpen(false)
-    if (hadFocus) toggleRef.current?.focus()
+    if (hadFocus) {
+      toggleRef.current?.focus()
+      // T-191 (1): a pick's own Enter is still down, and its auto-repeats are clicks on the toggle (a refused or converting pick leaves the importer up):
+      // each one reopened and closed the menu. The key down now stops acting until it is let go.
+      holdHeldKeys()
+    }
   }
 
   useEffect(() => {
@@ -126,6 +132,9 @@ export function RecentFilesMenu({
                   const before = wrapperRef.current?.previousElementSibling
                   if (before instanceof HTMLElement) before.focus()
                   else toggleRef.current?.focus()
+                  // T-191 (1): the Enter that pressed Clear list is still down, and its auto-repeats are clicks on the control that has the focus now (the importers'
+                  // "Choose file…" opened the chooser once per repeat). The key down now stops acting until it is let go; a fresh Enter on it still acts.
+                  holdHeldKeys()
                 }
                 onClear()
               }}

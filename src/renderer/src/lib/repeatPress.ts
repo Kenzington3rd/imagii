@@ -52,10 +52,14 @@ export function createHeldKeyGuard(): {
   keyDown: (e: { key: string; repeat: boolean }) => boolean
   keyUp: (e: { key: string }) => void
   dialogClosed: () => void
+  hold: () => void
   reset: () => void
 } {
   const down = new Set<string>()
   let guarded = new Set<string>()
+  const hold = (): void => {
+    guarded = new Set(down)
+  }
   return {
     /** True when this keydown must be swallowed: a repeat of a key that was held through a closing dialog. */
     keyDown(e) {
@@ -71,9 +75,10 @@ export function createHeldKeyGuard(): {
       down.delete(e.key)
       guarded.delete(e.key)
     },
-    dialogClosed() {
-      guarded = new Set(down)
-    },
+    /** T-191: a press has just handed focus to another control (a dialog opened or closed, a menu moved focus): the keys down NOW stop acting until let go. */
+    hold,
+    /** A dialog has just closed: the same rule as `hold` (kept under the name T-133 (7a) gave it). */
+    dialogClosed: hold,
     /** The window lost focus: a key-up that happens elsewhere never arrives. */
     reset() {
       down.clear()
@@ -100,6 +105,18 @@ if (typeof window !== 'undefined') {
   window.addEventListener('blur', () => heldKeys.reset())
 }
 
+/**
+ * T-191 (1), (2): a press that HANDS FOCUS to another control, inside its own keydown, while the key stays down. The auto-repeats of a held Enter are keyboard
+ * clicks on whatever has focus, so they landed on the control the press had just focused: the first control of a dialog it opened (Variants' Close took the
+ * first repeat), or the control before a menu that Clear list had unmounted (the importers' "Choose file…" opened the chooser once per repeat). The rule is the
+ * one `swallowRepeatClicks` applies when a dialog closes, named for what it does: the keys down now are swallowed as repeats until they are let go, and a fresh
+ * press is a decision and acts. `Modal` calls it when it opens; `RecentFilesMenu` where Clear list and a pick move focus. A press with no key down (the mouse)
+ * holds nothing.
+ */
+export function holdHeldKeys(): void {
+  heldKeys.hold()
+}
+
 let swallowUntil = 0
 let listening = false
 
@@ -121,7 +138,7 @@ let listening = false
 export function swallowRepeatClicks(now: number = performance.now()): void {
   swallowUntil = now + REPEAT_SWALLOW_MS
   // T-133 (7a): and the same dialog's HELD KEY (Enter or Space) stops acting until it is let go.
-  heldKeys.dialogClosed()
+  holdHeldKeys()
   if (listening) return
   listening = true
   const swallow = (e: MouseEvent): void => {

@@ -5050,3 +5050,113 @@ test.describe('T-189 (2): a project whose clip colour grade is malformed is refu
     }
   })
 })
+
+// ── T-191 (1): a key still held does not act on the control a Recent press hands focus to ───────────────────────────────────────────────────────────────────
+//
+// With no entries left, "Clear list" unmounts the whole menu and puts the focus on the control before it - both importers' "Choose file…" - inside the Enter's own
+// keydown; the auto-repeats of the held key are keyboard clicks on that button, which has no repeat guard, so the chooser opened once per repeat. A pick is the same
+// shape: it hands the focus to the toggle, and a pick that is refused (or still converting) leaves the importer up, so each repeat reopened and closed the menu.
+// `holdHeldKeys()` (lib/repeatPress.ts) is the held-key guard's rule at those two focus moves. Playwright marks a keydown for a key that is already down as a repeat,
+// which is what a held key does. The chooser is the OS boundary: `dialog.showOpenDialog` is replaced in MAIN and counted (T-126's recorder), and answers "canceled".
+test.describe('T-191 (1): a held Enter on Clear list or on a Recent pick', () => {
+  async function openImporter(
+    label: string,
+    studio: 'Video Studio' | 'Audio Studio',
+    entries: (clip: string, root: string) => string[]
+  ): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; clip: string }> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const clip = path.join(sourceDir, 'recent-source.mp4')
+    await makeFixtureMp4(clip)
+    const list = entries(clip, root)
+    seedUserData(userDataDir, {
+      welcomeSeen: true,
+      tutorialSeen: ALL_TUTORIALS_SEEN,
+      recentFiles: studio === 'Video Studio' ? { video: list } : { audio: list }
+    })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await window.locator('a', { hasText: studio }).first().click()
+    await expect(window.getByText(studio === 'Video Studio' ? 'Drop a video here' : 'Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    return { app, window, root, userDataDir, clip }
+  }
+
+  for (const [studio, bucket] of [
+    ['Video Studio', 'video'],
+    ['Audio Studio', 'audio']
+  ] as const) {
+    test(`${studio}: Enter held on Clear list clears the list and the repeats open no chooser; a fresh Enter on Choose file… still opens it`, async () => {
+      test.setTimeout(180_000)
+      const { app, window, root, userDataDir } = await openImporter(`t191-clear-${bucket}`, studio, (clip) => [clip])
+      try {
+        await recordSlowChooser(app, { files: [] })
+        const toggle = window.getByRole('button', { name: 'Recent (1)' })
+        const chooseFile = window.getByRole('button', { name: 'Choose file…' })
+        await toggle.focus()
+        await window.keyboard.press('Enter')
+        await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+        await window.keyboard.press('Tab')
+        await window.keyboard.press('Tab')
+        await expect(window.getByRole('button', { name: 'Clear list' }), 'the premise: the focus is on Clear list').toBeFocused()
+        // The key goes down and stays down: the first keydown presses Clear list ...
+        await window.keyboard.down('Enter')
+        await expect(window.getByRole('button', { name: /^Recent/ }), 'no entries, no menu').toHaveCount(0)
+        await expect(chooseFile, 'the premise: the focus went to Choose file… inside the same event (T-140 (9))').toBeFocused()
+        // ... and its auto-repeats land on Choose file…, where each one was a keyboard click.
+        for (let i = 0; i < 4; i++) await window.keyboard.down('Enter')
+        await window.keyboard.up('Enter')
+        await window.waitForTimeout(700)
+        expect((await chooserCalls(app)).length, 'a repeat opened the file chooser').toBe(0)
+        await expect.poll(() => readConfig(userDataDir).recentFiles?.[bucket], { timeout: 15_000, intervals: [200] }).toEqual([])
+        await expect(chooseFile, 'the focus stays where Clear list put it').toBeFocused()
+
+        // A fresh Enter is a decision: it opens the chooser (once).
+        await window.keyboard.press('Enter')
+        await expect.poll(async () => (await chooserCalls(app)).length, { timeout: 15_000, intervals: [200] }).toBe(1)
+      } finally {
+        await app.close().catch(() => undefined)
+        cleanup(root)
+      }
+    })
+
+    test(`${studio}: Enter held on a Recent pick that is refused leaves the menu closed with the focus on the toggle; a fresh Enter on the toggle opens it`, async () => {
+      test.setTimeout(180_000)
+      // The first entry is on a drive that is not connected: the pick is refused with the drive sentence and the entry stays, so the importer, its toggle and its list stay.
+      const { app, window, root, userDataDir, clip } = await openImporter(`t191-pick-${bucket}`, studio, (c, r) => [path.join(r, 'unplugged-drive', 'vod.mp4'), c])
+      try {
+        const toggle = window.getByRole('button', { name: 'Recent (2)' })
+        await toggle.focus()
+        await window.keyboard.press('Enter')
+        await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+        await window.keyboard.press('Tab')
+        await expect(window.getByRole('button', { name: /vod\.mp4/ }), 'the premise: the focus is on the first entry').toBeFocused()
+        // The key goes down and stays down: the first keydown picks the entry (the menu closes, the focus goes to the toggle) ...
+        await window.keyboard.down('Enter')
+        await expect(toggle).toHaveAttribute('aria-expanded', 'false')
+        await expect(toggle, 'the premise: the pick handed the focus to the toggle (T-140 (9))').toBeFocused()
+        // ... and an ODD number of auto-repeats lands on the toggle: each is a keyboard click that opens or closes the menu, so an even number would hide the fault.
+        for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+        await window.keyboard.up('Enter')
+        await window.waitForTimeout(700)
+        const drive = "imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again."
+        await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [200] }).toContain(drive)
+        await expect(toggle, 'a repeat reopened the menu').toHaveAttribute('aria-expanded', 'false')
+        await expect(window.getByRole('button', { name: /vod\.mp4/ })).toHaveCount(0)
+        await expect(toggle).toBeFocused()
+        expect(readConfig(userDataDir).recentFiles?.[bucket], 'the refused entry stays, and so does the other').toHaveLength(2)
+
+        // A fresh Enter on the toggle is a decision: it opens the menu.
+        await window.keyboard.press('Enter')
+        await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+        await expect(window.getByRole('button', { name: new RegExp(path.basename(clip).replace('.', '\\.')) })).toBeVisible()
+      } finally {
+        await app.close().catch(() => undefined)
+        cleanup(root)
+      }
+    })
+  }
+})

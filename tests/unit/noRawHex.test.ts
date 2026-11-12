@@ -213,3 +213,42 @@ describe('the scan discriminates — it fires on the code that shipped', () => {
     ])
   })
 })
+
+describe('the guide names every exception the allow-list holds (T-191 (5))', () => {
+  // This file says its allow-list is "exactly what docs/DESIGN_GUIDE.md ('Documented raw-color exceptions') says may". T-186 (1) added two literals here (PropertiesPanel's
+  // placeholder and canvasColor's refusal) and the guide still named TextOverlayEditor's alone: the rule was held from one side only.
+  const GUIDE = path.resolve(__dirname, '..', '..', 'docs', 'DESIGN_GUIDE.md')
+  const MARK = '**Documented raw-color exceptions.**'
+
+  /** The guide's section: from its heading paragraph to the next bold paragraph after the list (`\n\n**`), so a mention elsewhere in the guide does not count. */
+  function exceptionsSection(text: string): string {
+    const start = text.indexOf(MARK)
+    if (start < 0) throw new Error(`DESIGN_GUIDE.md has no "${MARK}" paragraph`)
+    const firstBullet = text.indexOf('\n- **', start)
+    const end = text.indexOf('\n\n**', firstBullet)
+    if (firstBullet < 0 || end < 0) throw new Error('the exceptions list has no end the test can find')
+    return text.slice(start, end)
+  }
+
+  const allowListed = [...EXEMPT_FILES.map((e) => e.file), ...EXEMPT_LITERALS.map((e) => e.file)]
+
+  it('finds the section and its bullets (the check is not vacuous)', () => {
+    const section = exceptionsSection(readFileSync(GUIDE, 'utf8'))
+    expect(section.length).toBeGreaterThan(1000)
+    expect(section.match(/\n- \*\*/g)?.length ?? 0).toBeGreaterThan(5)
+    expect(allowListed.length).toBeGreaterThan(5)
+  })
+
+  it('every file the allow-list names appears in that section', () => {
+    const section = exceptionsSection(readFileSync(GUIDE, 'utf8'))
+    const missing = [...new Set(allowListed)].filter((file) => !section.includes(path.basename(file)))
+    expect(missing, 'allow-listed files the guide\'s raw-color exceptions do not name').toEqual([])
+  })
+
+  it('discriminates: a section without PropertiesPanel is caught (whatever else the guide names)', () => {
+    const unnamed = (section: string): string[] => [...new Set(allowListed)].filter((file) => !section.includes(path.basename(file))).map((f) => path.basename(f))
+    const section = exceptionsSection(readFileSync(GUIDE, 'utf8'))
+    const stripped = unnamed(section.replaceAll('PropertiesPanel.tsx', 'the panel'))
+    expect(stripped.filter((f) => !unnamed(section).includes(f))).toEqual(['PropertiesPanel.tsx'])
+  })
+})

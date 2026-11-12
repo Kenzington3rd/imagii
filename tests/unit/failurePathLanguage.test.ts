@@ -488,7 +488,8 @@ describe('the mood-board cache clear and the tile remove report their refusals (
 
   it('the success toast of the clear comes after the await, in the same try (a refusal never says "cleared")', () => {
     const body = /async function onClearThumbs\(\)[\s\S]*?\n  }\n/.exec(panel().text)?.[0] ?? ''
-    expect(body).toMatch(/try \{\s*await window\.api\.moodboard\.clearThumbs\(\)\s*toast\.success\('Thumbnail cache cleared'\)\s*\} catch/)
+    // T-191 (3): the clear marks every tile uncached after the await (a refusal throws first and marks nothing), then says "cleared": the mark sits between them.
+    expect(body).toMatch(/try \{\s*await window\.api\.moodboard\.clearThumbs\(\)(?:\s*\/\/[^\n]*)*\s*setUncachedItemIds\([^\n]*\)\s*toast\.success\('Thumbnail cache cleared'\)\s*\} catch/)
   })
 
   it('both handlers are the ones the buttons call (no inline arrow awaiting a write is left in the JSX)', () => {

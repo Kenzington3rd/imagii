@@ -748,10 +748,27 @@ async function runInstall(
     // resolve() could be called twice and the partial cleanup could
     // race against itself.
     let settled = false
-    function settle(value: { ok: true; path: string } | { ok: false; reason: string }): void {
+    // T-191 (6): true until the response has ended. A failure settled while the transfer is still
+    // live (a refused answer, a write that cannot land, a response that errored) aborts the request:
+    // `settle` clears `activeInstall`, so Cancel could no longer reach it and the rest of the file
+    // would keep downloading behind a panel that says it failed.
+    let live = true
+    function settle(
+      value: { ok: true; path: string } | { ok: false; reason: string },
+      // The request's own 'error' or 'abort' produced this outcome: it is already over.
+      fromRequest = false
+    ): void {
       if (settled) return
       settled = true
       if (activeInstall === me) activeInstall = null
+      if (!value.ok && live && !fromRequest) {
+        live = false
+        try {
+          request.abort()
+        } catch {
+          /* already done */
+        }
+      }
       resolve(value)
     }
     async function cleanupPartial(): Promise<void> {
@@ -809,6 +826,7 @@ async function runInstall(
         })
       })
       response.on('end', () => {
+        live = false
         stream.end()
         stream.on('finish', () => {
           if (settled) return
@@ -837,13 +855,15 @@ async function runInstall(
         phase: 'failed',
         message: me.cancelled ? 'Download canceled' : err.message
       })
-      settle({ ok: false, reason })
+      settle({ ok: false, reason }, true)
     })
     request.on('abort', () => {
+      // An abort `settle` made after a failure already reported it: no second outcome or message.
+      if (settled) return
       out?.destroy()
       void cleanupPartial().then(() => {
         onProgress({ phase: 'failed', message: 'Download canceled' })
-        settle({ ok: false, reason: CANCELLED_MESSAGE })
+        settle({ ok: false, reason: CANCELLED_MESSAGE }, true)
       })
     })
     request.end()

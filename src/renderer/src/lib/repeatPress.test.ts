@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { REPEAT_SWALLOW_MS, createHeldKeyGuard, ignoreHeldEnter, isRepeatPress, isSwallowedRepeat } from './repeatPress'
+import { REPEAT_SWALLOW_MS, createHeldKeyGuard, holdHeldKeys, ignoreHeldEnter, isRepeatPress, isSwallowedRepeat } from './repeatPress'
 
 // T-131 (4), (6), (8): the rule is the click COUNT. The e2e specs (a real double-click on the Fix wizard, the tour, a closing dialog) are
 // the proof it reaches the person; this is the rule they depend on, with its edges.
@@ -208,5 +208,96 @@ describe('swallowRepeatClicks - the whole repeat press is stopped, not only its 
     const e = press(2, 5_100)
     first?.(e)
     expect(e.stopped).toBe(true)
+  })
+})
+
+// T-191 (1), (2): a press that hands focus to another control inside its own keydown (a dialog's first control, the control before an unmounted menu) leaves the
+// key down, and the key's auto-repeats are clicks on that control. `holdHeldKeys` is the held-key guard's rule applied at an OPEN or a focus move instead of a
+// close; the e2e cases (Variants, Templates, the safe-zone question, Clear list, a pick) are the proof it reaches the person, this is the rule with its edges.
+describe('holdHeldKeys - a key still down when a press hands focus elsewhere stops acting until it is let go (T-191)', () => {
+  type Handler = (e: unknown) => void
+  type KeyEvent = { key: string; repeat: boolean; stopped: boolean; canceled: boolean; stopImmediatePropagation: () => void; preventDefault: () => void }
+  const key = (k: string, repeat: boolean): KeyEvent => {
+    const e: KeyEvent = { key: k, repeat, stopped: false, canceled: false, stopImmediatePropagation: () => { e.stopped = true }, preventDefault: () => { e.canceled = true } }
+    return e
+  }
+  /** The module in a fresh state, listening on a stand-in window; `send` runs the registered handler for one event type. */
+  async function install(): Promise<{ hold: () => void; send: (type: 'keydown' | 'keyup' | 'blur', e?: unknown) => void }> {
+    vi.resetModules()
+    const handlers = new Map<string, Handler>()
+    vi.stubGlobal('window', { addEventListener: (type: string, fn: Handler) => { handlers.set(type, fn) } })
+    const mod = await import('./repeatPress')
+    return { hold: () => mod.holdHeldKeys(), send: (type, e) => handlers.get(type)?.(e) }
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('is exported, and the guard has a method for it beside dialogClosed (which still works)', () => {
+    expect(holdHeldKeys).toBeTypeOf('function')
+    const guard = createHeldKeyGuard()
+    guard.keyDown({ key: 'Enter', repeat: false })
+    guard.hold()
+    expect(guard.keyDown({ key: 'Enter', repeat: true })).toBe(true)
+    const closed = createHeldKeyGuard()
+    closed.keyDown({ key: 'Enter', repeat: false })
+    closed.dialogClosed()
+    expect(closed.keyDown({ key: 'Enter', repeat: true })).toBe(true)
+  })
+
+  it('an Enter that is down is stopped and its default action (the click) canceled for every repeat, until it is let go', async () => {
+    const { hold, send } = await install()
+    send('keydown', key('Enter', false))
+    hold()
+    for (let i = 0; i < 3; i++) {
+      const repeat = key('Enter', true)
+      send('keydown', repeat)
+      expect(repeat.stopped, `repeat ${i + 1} is stopped before any handler`).toBe(true)
+      expect(repeat.canceled, `repeat ${i + 1} has no click`).toBe(true)
+    }
+    send('keyup', { key: 'Enter' })
+    const next = key('Enter', true)
+    send('keydown', next)
+    expect(next.stopped, 'let go ends it').toBe(false)
+  })
+
+  it('a fresh press acts, and clears the hold', async () => {
+    const { hold, send } = await install()
+    send('keydown', key('Enter', false))
+    hold()
+    const fresh = key('Enter', false)
+    send('keydown', fresh)
+    expect(fresh.stopped).toBe(false)
+    expect(fresh.canceled).toBe(false)
+    const after = key('Enter', true)
+    send('keydown', after)
+    expect(after.stopped, 'the key pressed again is a new hold, not the old one').toBe(false)
+  })
+
+  it('does nothing for keys that were up: a dialog the mouse opened, another key, and a repeat nobody saw begin', async () => {
+    const { hold, send } = await install()
+    hold()
+    const mouse = key('Enter', true)
+    send('keydown', mouse)
+    expect(mouse.stopped, 'nothing was down at the open').toBe(false)
+    send('keydown', key('Enter', false))
+    hold()
+    for (const other of [' ', 'ArrowRight', 'a']) {
+      const e = key(other, true)
+      send('keydown', e)
+      expect(e.stopped, `${other} was not down`).toBe(false)
+      expect(e.canceled).toBe(false)
+    }
+  })
+
+  it('a window that lost focus forgets the hold (its key-up never arrives)', async () => {
+    const { hold, send } = await install()
+    send('keydown', key('Enter', false))
+    hold()
+    send('blur')
+    const e = key('Enter', true)
+    send('keydown', e)
+    expect(e.stopped).toBe(false)
   })
 })

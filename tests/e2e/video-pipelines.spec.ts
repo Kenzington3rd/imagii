@@ -16244,3 +16244,44 @@ test.describe('T-190 (5), sent back: the failed export row\'s reason', () => {
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-191 (2): Export raises the safe-zone question inside the keydown of a held Enter, the dialog opens on its safe answer (Cancel, T-114) and the key's auto-repeats were
+// keyboard clicks on it: the question closed before it could be read. `Modal` now holds the keys that are down when it opens, so the repeats are swallowed until the key
+// is let go; a fresh Enter on Cancel still answers. (The question is driven from this spec; the ticket named video-core.spec.ts.)
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('T-191 (2): a held Enter on Export leaves the safe-zone question open on Cancel', () => {
+  test('the repeats do not press Cancel; a fresh Enter on Cancel answers it (nothing exports)', async () => {
+    test.setTimeout(240_000)
+    const studio = await launchWithVideo('t191-safezone-held')
+    const { app, window, outDir } = studio
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      await presetBox(window, 'Reels').check()
+      const exportButton = card.getByRole('button', { name: 'Export 2' })
+      await exportButton.focus()
+      await expect(exportButton).toBeFocused()
+      // The key goes down and stays down: the first keydown asks the question ...
+      await window.keyboard.down('Enter')
+      const modal = window.getByRole('dialog')
+      await expect(modal.getByRole('heading', { name: 'Some platforms will crop the picture' }).last()).toBeVisible()
+      const cancel = modal.getByRole('button', { name: 'Cancel', exact: true })
+      await expect(cancel, 'the premise: it opens on Cancel, inside the same event (T-114)').toBeFocused()
+      // ... and its auto-repeats land on Cancel, where each was a keyboard click.
+      for (let i = 0; i < 5; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(700)
+      await expect(modal, 'a repeat pressed Cancel').toBeVisible()
+      await expect(cancel).toBeFocused()
+
+      // A fresh Enter is a decision: Cancel answers the question and nothing is exported.
+      await window.keyboard.press('Enter')
+      await expect(modal).toHaveCount(0)
+      expect(mp4sOnDisk(outDir), 'Cancel exported nothing').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+})

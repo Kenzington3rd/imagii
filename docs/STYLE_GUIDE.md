@@ -867,7 +867,14 @@ Repeated UI is a component, not copy-paste:
   loads because it has to SEE the key go down. A toggle is one decision per press (T-133 (7b)): Space on the Player and the Timeline and the
   `?` overlay ignore `e.repeat`; so does a marker (T-134 (2)): a held I or O set the point on every auto-repeat, each an undo step, and a second
   of holding filled the store's 50-step history and evicted real edits. The nudge (arrows) and frame-step (`,` `.`) keys repeat by design and
-  are not guarded.
+  are not guarded. **A press that hands focus elsewhere while its key is still down
+  holds that key too (T-191):** the guard's rule is `holdHeldKeys()` (`lib/repeatPress.ts`): the keys down NOW are swallowed as repeats until they are let
+  go, a fresh press acts, a key that was up is not touched (a press with the mouse holds nothing). It is armed at a close (`swallowRepeatClicks`, as
+  above), at every `Modal`'s OPEN (the trap focuses the dialog's first control inside the keydown that opened it, so a held Enter pressed Variants' or
+  Templates' Close, the safe-zone question's Cancel, or confirmed Rename's unchanged name), and in `RecentFilesMenu` where Clear list hands the focus to
+  the control before the menu ("Choose file…" opened the chooser once per repeat) and where `closeToToggle()` hands it to the toggle (each repeat of a
+  refused pick reopened and closed the menu). A new control that moves focus inside a keydown to something that acts on a click calls it there; it
+  needs no per-control `ignoreHeldEnter` and no clock.
 - **A button that makes a record ignores the repeat of its double-click, claims before it writes, and is off while the write is out (T-139 (9)).** "+ Log post" (the
   posting log), "Save current" (Cleanup presets) and "+ Save preset" (Custom export presets) clear their form after the first press, so the second press of a double-click
   found no name and raised a red "Add a clip name first" / "Name your preset first" / "Give it a name", and on a slow write the presets saved a duplicate. `isRepeatPress(e)`

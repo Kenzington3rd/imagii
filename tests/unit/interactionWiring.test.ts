@@ -2264,7 +2264,7 @@ describe('T-131 — the sweep-17 fixes are wired where the person reaches them',
 
   it('(8) a dialog that closes arms the swallow of a double-click\'s second press, in the Modal and in the tour', () => {
     expect(strip(read('components/Modal.tsx'))).toMatch(
-      /useEffect\(\(\) => \{\s*if \(!open\) return\s*openModals\+\+\s*return \(\) => \{\s*openModals--\s*swallowRepeatClicks\(\)\s*\}\s*\}, \[open\]\)/
+      /useEffect\(\(\) => \{\s*if \(!open\) return\s*openModals\+\+\s*holdHeldKeys\(\)\s*return \(\) => \{\s*openModals--\s*swallowRepeatClicks\(\)\s*\}\s*\}, \[open\]\)/
     )
     expect(strip(read('components/Tutorial.tsx'))).toMatch(/useEffect\(\(\) => swallowRepeatClicks, \[\]\)/)
     // One capture-phase handler on the window, ahead of React's, stopping the press before any handler or default action - all three events of it (T-168 (6): a select
@@ -2483,7 +2483,9 @@ describe('T-133 (7) — a held key is one decision, and a key held through a clo
   it('(a) the close of any dialog arms the held-key guard, and the guard listens from the moment the module loads (it has to SEE the key go down)', () => {
     const lib = strip(read('lib/repeatPress.ts'))
     const swallow = lib.slice(lib.indexOf('export function swallowRepeatClicks'))
-    expect(swallow, 'swallowRepeatClicks arms it').toMatch(/heldKeys\.dialogClosed\(\)/)
+    expect(swallow, 'swallowRepeatClicks arms it').toMatch(/holdHeldKeys\(\)/)
+    // T-191: holdHeldKeys is the guard's `hold`, the same rule at an open or a focus move
+    expect(lib).toMatch(/export function holdHeldKeys\(\): void \{\s*heldKeys\.hold\(\)\s*\}/)
     // Capture phase on the window, ahead of React's listeners, and installed at load rather than inside swallowRepeatClicks.
     const moduleLevel = lib.slice(lib.indexOf("if (typeof window !== 'undefined')"), lib.indexOf('let swallowUntil'))
     expect(moduleLevel).toMatch(/addEventListener\(\s*'keydown',[\s\S]*?stopImmediatePropagation\(\)[\s\S]*?preventDefault\(\)[\s\S]*?true\s*\)/)
@@ -3261,7 +3263,7 @@ describe('T-140 Track C - the twenty-sixth sweep', () => {
     expect(menu).toMatch(/const toggleRef = useRef<HTMLButtonElement \| null>\(null\)/)
     expect(menu).toMatch(/<button\s+ref=\{toggleRef\}\s+className="btn-ghost px-3 py-1\.5 text-sm"/)
     expect(menu).toMatch(/function focusIsInside\(\): boolean \{\s*return wrapperRef\.current\?\.contains\(document\.activeElement\) \?\? false\s*\}/)
-    expect(menu).toMatch(/function closeToToggle\(\): void \{\s*const hadFocus = focusIsInside\(\)\s*setOpen\(false\)\s*if \(hadFocus\) toggleRef\.current\?\.focus\(\)\s*\}/)
+    expect(menu).toMatch(/function closeToToggle\(\): void \{\s*const hadFocus = focusIsInside\(\)\s*setOpen\(false\)\s*if \(hadFocus\) \{\s*toggleRef\.current\?\.focus\(\)\s*holdHeldKeys\(\)\s*\}\s*\}/)
     // Escape, the pick and the mouse leaving all go through it
     expect(menu).toMatch(/e\.preventDefault\(\)\s*closeToToggle\(\)/)
     expect(menu).toMatch(/onMouseLeave=\{closeToToggle\}/)
@@ -3270,7 +3272,7 @@ describe('T-140 Track C - the twenty-sixth sweep', () => {
     expect(menu).toMatch(/if \(shouldDismissMenu\(\{ kind: 'pointer', inside \}\)\) setOpen\(false\)/)
     // Clear list: the list is about to be empty and the menu unmounts with its toggle, so the control before it takes the focus (the toggle if there is none)
     expect(menu).toMatch(
-      /const hadFocus = focusIsInside\(\)\s*setOpen\(false\)\s*if \(hadFocus\) \{\s*const before = wrapperRef\.current\?\.previousElementSibling\s*if \(before instanceof HTMLElement\) before\.focus\(\)\s*else toggleRef\.current\?\.focus\(\)\s*\}\s*onClear\(\)/
+      /const hadFocus = focusIsInside\(\)\s*setOpen\(false\)\s*if \(hadFocus\) \{\s*const before = wrapperRef\.current\?\.previousElementSibling\s*if \(before instanceof HTMLElement\) before\.focus\(\)\s*else toggleRef\.current\?\.focus\(\)\s*holdHeldKeys\(\)\s*\}\s*onClear\(\)/
     )
     // ...and in both importers that control exists: Choose file… is the sibling right before the menu
     for (const rel of ['modules/video-studio/Importer.tsx', 'modules/audio-studio/AudioImporter.tsx']) {

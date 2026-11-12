@@ -4193,3 +4193,169 @@ test.describe('T-190 (5), sent back: the Reference Search error card', () => {
     }
   })
 })
+
+// T-191 (3): a tile uses its cached file until its `<img>` fires `onError` (T-79), which a tile already drawn never does for a file it decoded before the clear. "Clear thumbnail
+// cache" marked nothing, so "→ Canvas" on a tile still on screen loaded the deleted file: "That picture didn't load", the same on a retry, and re-saving answered "Already on".
+// After a clear that succeeded every item of every board uses the address it came from at once; a refused clear marks nothing. The source thumbnails here are data: URLs, so the
+// fallback loads without the network.
+test.describe('References - Clear thumbnail cache sends every board\'s tiles to their source (T-191 (3))', () => {
+  const REMOTE = `data:image/png;base64,${PNG_8x6}`
+
+  /** A board of one item: the thumbnail is a data URL (loads offline), the cached copy is a real file in `thumbsDir`. */
+  function boardWithCachedThumb(fx: Fixture, id: string, name: string, title: string, createdAt: number): string {
+    const cachedThumbPath = path.join(fx.thumbsDir, `${id}-thumb.png`)
+    writeFileSync(cachedThumbPath, Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(
+      path.join(fx.boardsDir, `${id}.json`),
+      JSON.stringify({
+        id,
+        name,
+        createdAt,
+        items: [
+          {
+            id: `${id}item`,
+            collectionId: id,
+            thumbnail: REMOTE,
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title,
+            cachedThumbPath,
+            addedAt: createdAt
+          }
+        ]
+      }),
+      'utf8'
+    )
+    return cachedThumbPath
+  }
+
+  /** How many pictures the Stream Graphics stage draws, and the decoded width of the first. */
+  function drawnImages(window: Page): Promise<{ count: number; width: number }> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; getClassName(): string; image?: () => HTMLImageElement }> }> }
+        | undefined
+      const nodes = (stage?.children[0]?.children ?? []).filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image' && n.image)
+      return { count: nodes.length, width: nodes[0] ? (nodes[0].image as () => HTMLImageElement)().naturalWidth : 0 }
+    })
+  }
+
+  /** Records every `src` an `<img>` is given from now on (added with one, or changed), in `window.__t191Srcs`. */
+  async function recordImageSrcs(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const log: string[] = ((window as unknown as { __t191Srcs?: string[] }).__t191Srcs = [])
+      const note = (n: Node): void => {
+        if (n instanceof HTMLImageElement) log.push(`${n.alt}|${n.getAttribute('src')}`)
+        else if (n instanceof Element) n.querySelectorAll('img').forEach((i) => log.push(`${i.alt}|${i.getAttribute('src')}`))
+      }
+      new MutationObserver((records) => {
+        for (const r of records) {
+          if (r.type === 'attributes') note(r.target)
+          else r.addedNodes.forEach(note)
+        }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+    })
+  }
+  const recordedSrcs = (window: Page): Promise<string[]> => window.evaluate(() => (window as unknown as { __t191Srcs: string[] }).__t191Srcs.slice())
+
+  test('after Clear thumbnail cache, "→ Canvas" on a tile already drawn adds the reference layer', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t191-send-after-clear')
+    const cached = boardWithCachedThumb(fx, 'sendboard', 'Send board', 'Sent reference', 1700000000000)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const tile = window.locator('img[alt="Sent reference"]')
+      await expect(tile).toHaveAttribute('src', pathToImagiiFileUrl(cached))
+      await expect.poll(() => tile.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 }).toBe(8)
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+      await expect(tile, 'the tile is on its source address at once (red on the base: still the deleted file)').toHaveAttribute('src', REMOTE)
+
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect.poll(async () => (await drawnImages(window)).count, { timeout: 15_000 }).toBe(1)
+      expect((await drawnImages(window)).width).toBe(8)
+      expect((await readToastLog(window)).join(' | '), 'no "didn\'t load" (red on the base: the toast)').not.toContain("That picture didn't load")
+      // The board is untouched: the item still names its (now empty) cache path, which is what a re-download replaces.
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items[0]?.cachedThumbPath).toBe(cached)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a clear marks the boards that are not open too: a second board\'s tile never asks for its deleted file', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t191-other-board')
+    boardWithCachedThumb(fx, 'firstboard', 'First board', 'First reference', 1700000000000)
+    const cachedB = boardWithCachedThumb(fx, 'secondboard', 'Second board', 'Second reference', 1700000001000)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible()
+      await window.getByRole('button', { name: 'First board, 1 item' }).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('First board')
+      await expect(window.locator('img[alt="First reference"]')).toBeVisible()
+
+      await recordImageSrcs(window)
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+
+      await window.getByRole('button', { name: 'Second board, 1 item' }).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Second board')
+      const second = window.locator('img[alt="Second reference"]')
+      await expect(second).toHaveAttribute('src', REMOTE)
+      await expect.poll(() => second.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 }).toBe(8)
+      const seen = (await recordedSrcs(window)).filter((s) => s.startsWith('Second reference|'))
+      expect(seen.length, 'the observer saw the tile mount').toBeGreaterThan(0)
+      expect(seen, 'it never asked for the file the clear deleted (red with the update limited to the open board)').not.toContain(`Second reference|${pathToImagiiFileUrl(cachedB)}`)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused clear leaves the tile on its cached file', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t191-refused-clear')
+    const cached = boardWithCachedThumb(fx, 'keptboard', 'Kept board', 'Kept reference', 1700000000000)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const tile = window.locator('img[alt="Kept reference"]')
+      await expect(tile).toHaveAttribute('src', pathToImagiiFileUrl(cached))
+      await expect.poll(() => tile.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 }).toBe(8)
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('moodboard:clearThumbs')
+        ipcMain.handle('moodboard:clearThumbs', () => {
+          throw new Error('the clear was refused by the test')
+        })
+      })
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't clear the thumbnail cache.")
+      expect(readdirSync(fx.thumbsDir), 'the cache is as it was').toEqual(['keptboard-thumb.png'])
+      await expect(tile, 'a refusal marks nothing: the tile is still the cached file (red if the mark runs on a refusal too)').toHaveAttribute('src', pathToImagiiFileUrl(cached))
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

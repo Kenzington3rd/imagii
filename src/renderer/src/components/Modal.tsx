@@ -1,6 +1,6 @@
 import { useEffect, useId, useRef, type ReactNode } from 'react'
 import { useFocusTrap } from '../hooks/useFocusTrap'
-import { swallowRepeatClicks } from '../lib/repeatPress'
+import { holdHeldKeys, swallowRepeatClicks } from '../lib/repeatPress'
 
 interface ModalProps {
   open: boolean
@@ -95,6 +95,9 @@ export function Modal({
   useEffect(() => {
     if (!open) return
     openModals++
+    // T-191 (2): the trap focuses the dialog's first control inside the keydown that opened it; a key still down must not act on that control (Variants' Close took
+    // the first repeat of a held Enter). Until it is let go the key's repeats are swallowed; a fresh press, and a dialog the mouse opened, are untouched.
+    holdHeldKeys()
     return () => {
       openModals--
       // T-131 (8): the dialog is gone; the second press of a double-click on its button is about to land on what it covered.

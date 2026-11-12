@@ -19,10 +19,10 @@ hard-code chrome colors in `className` — use the token.
 | `bg-elevated` | `#1c1313` | Cards, panels, modals |
 | `bg-hover` | `#2a1a18` | Hover state for interactive surfaces |
 | `accent` | `#ff3131` | Primary actions, focus rings, active states — neon magma red (5.29:1 on `bg-base`, 4.55:1 on `bg-hover`) |
-| `accent-muted` | `#f52e2e` | Hover state of accent elements |
+| `accent-muted` | `#f52e2e` | Hover state of accent elements - and nothing else: it is 1.08:1 from `accent`, so it cannot tell two drawn things apart (the Audio waveform's unplayed bars were it beside the played `accent` until T-191 (4)) |
 | `ink-base` | `#ece4e2` | Primary text (15.5:1) |
 | `ink-muted` | `#a59a97` | Secondary text, labels (7.1:1) |
-| `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). |
+| `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). It is also the Audio waveform's **unplayed** wave (T-191 (4)): the played part is `accent` (5.29:1), the unplayed bars `ink-dim` (6.2:1), both over the waveform's `bg-base` above WCAG 1.4.11's 3:1 for a graphic, and they differ in hue (red against warm grey), not in lightness (1.17:1 between them); the cursor stays `ember`. A stored cut's `accent/35` wash keeps both readable: a bar under it is 3.36:1 (played) and 3.32:1 (unplayed) against the washed background (measured from a screenshot of the built app). |
 | `ember` | `#fbbf24` | Warning **surfaces** (`bg-ember/10`, `border-ember/40`, the yellow status dot), the icon's sun, and the **playhead** in both timed studios — wavesurfer's cursor in Audio, the Timeline marker in Video. 10.0:1 on `bg-hover`, 7.4:1 on the clip range's `accent/25` fill, so it stays readable over the accent it is drawn across (T-56). |
 
 **The semantic tier (T-71)** — three meanings that used to be carried by
@@ -144,9 +144,16 @@ held by this list alone, so a new one must be added below:
   screen source that changed size mid-take are a video's letterbox, black the way an export's bars are, not a palette color.
   It is a color NAME, not a hex, so `noRawHex.test.ts` does not scan it; it is listed here so the next reader does not take it for
   drift. A retheme must not tint the matte of a recording.
-- **The overlay editor's typing example** (T-104). `placeholder="white or
+- **The typing example, in three places** (T-104, T-186 (1), T-191 (5)). `placeholder="white or
   #ffcc00"` in `TextOverlayEditor.tsx` shows the user the form a color is typed
-  in; it is copy, not a color drawn.
+  in; it is copy, not a color drawn. The same example is the placeholder of the
+  Stream Graphics Properties panel's Fill / Stroke / Color boxes
+  (`image-studio/PropertiesPanel.tsx`) and is in the refusal sentence
+  (`CANVAS_COLOR_REFUSAL` in `image-studio/canvasColor.ts`: "Use a name like
+  white, a code like #ffcc00, or transparent"). All three are copy, none is drawn.
+  `noRawHex.test.ts` holds the rule from this side: every file its allow-list
+  names must appear in this section, so a new exception cannot be added to the
+  test alone.
 - **Document content** (T-71). `image-studio/templates.ts`,
   `references/assetCatalog.ts`, and the blank page's `background:
   '#ffffff'` in `canvasStore.ts` describe **artwork**, not chrome: they
