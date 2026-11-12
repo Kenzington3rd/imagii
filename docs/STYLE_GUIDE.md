@@ -1163,8 +1163,9 @@ If you write the same markup a third time, extract it.
   `audioSettled(outcome)`, about the source `applyProject` recorded in `outcome.audioOpened`, because a refusal that landed before
   anyone asked leaves the studio EMPTY, which is not "nothing was opened"). T-195 (2): whoever keeps state for a file across that read
   asks `waveformRefused(source)` as well, because `waveformArrived` is false for a Close and for another file opened as well as for a
-  refusal; a project open whose sound is refused keeps its part as a load that threw does (T-174 (4)). Play is `disabled:opacity-50`
-  while the waveform is drawn.
+  refusal; a project open whose sound is refused keeps its part as a load that threw does (T-174 (4)). T-196 (1): the give-back
+  of a kept part follows the same read, so a part given back to its file is kept again when that file is refused, for as many
+  tries as it takes. Play is `disabled:opacity-50` while the waveform is drawn.
 - **What the Player owns, the Timeline asks for through the store (T-120, T-121).** The Player registers a `PlayerTransport` (`readTime`, the
   element's exact `currentTime`; `togglePlay`, its own play / pause) with `registerTransport` while it is mounted. The Timeline's Space
   calls `togglePlay`, and its arrows, `,` / `.` and I / O read `playheadNow(state)`: the element's time, else the store's `currentTime`, which is
@@ -1258,8 +1259,8 @@ If you write the same markup a third time, extract it.
   allowlist, and fails on any property name that contains a dot. A schema judges a write; a `config.json` that parses but breaks it stops
   the launch (the ceiling is recorded at the schema).
 - **A text overlay's font is a key into a table, never printed (T-114).** The editor stores one of
-  `OVERLAY_FONTS` (`@shared/textOverlay`); `overlayFontPath` (filters.ts) maps it to a literal
-  `C\:/Windows/Fonts/<file>.ttf`, and a name that is not an own key - an older project, a
+  `OVERLAY_FONTS` (`@shared/textOverlay`); `overlayFontPath` (filters.ts) maps it to a file in the
+  system's font folder (`systemFontGraphPath`: `%SystemRoot%\Fonts`, else `%windir%`, else `C:\Windows`, T-196), and a name that is not an own key - an older project, a
   hand-edited one, `constructor` - is Arial. The stored string is never interpolated. The
   table is typed over the union, so a font added to the list without a file fails the
   typecheck; the Font box was a dead control for as long as the filter printed `arial.ttf`.

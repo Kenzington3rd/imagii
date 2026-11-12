@@ -347,9 +347,9 @@ function graphSeconds(sourceSec: number, clipStartSec: number, speed: number): n
  * in the same block fails if ffmpeg-static ever gains the filter, which is
  * what forces the gate to be lifted instead of left to rot.
  *
- * The hardcoded C:/Windows font paths below are the second half of the same
- * Windows-only assumption (known-and-accepted in LESSONS_LEARNED): bundle a
- * font before any cross-platform build.
+ * The font paths below are the second half of the same Windows-only assumption
+ * (known-and-accepted in LESSONS_LEARNED): bundle a font before any cross-platform
+ * build. They name the system's Windows folder (`systemFontGraphPath`, T-196).
  */
 /**
  * The font file for each typeface the editor offers (T-114). `drawtext` takes a FILE, never a
@@ -368,12 +368,28 @@ const OVERLAY_FONT_FILES: Readonly<Record<OverlayFont, string>> = {
   'Comic Sans MS': 'comic.ttf'
 }
 
+/**
+ * T-196 (2): the graph text for one file in the system's font folder - `%SystemRoot%\Fonts`, else `%windir%`, else `C:\Windows` -
+ * read when the graph is built, so a Windows on another drive finds its fonts. It is printed inside the quoted
+ * `fontfile='...'` option, so a root holding a space, comma, bracket, semicolon or `=` needs nothing. The graph is read twice (the
+ * filtergraph, then the option list): a drive colon takes one backslash for the second read, and an apostrophe leaves the quote, writes
+ * `\\\'` (a backslash for the second read, the apostrophe) and reopens it - `'\\\''`. Both measured against real ffmpeg (Layer 5);
+ * backslashes become `/` first. With no variable set this is the
+ * literal `C\:/Windows/Fonts/<file>` this file used to print, byte for byte.
+ */
+export function systemFontGraphPath(file: string): string {
+  const root = process.env.SystemRoot || process.env.windir || 'C:\\Windows'
+  return `${root}\\Fonts\\${file}`
+    .replace(/\\/g, '/')
+    .replace(/[':]/g, (c) => (c === "'" ? "'\\\\\\''" : '\\:'))
+}
+
 function overlayFontPath(font: unknown): string {
   // `hasOwnProperty`, not `in` or a bare index: "constructor" and "__proto__" are not fonts.
   const known =
     typeof font === 'string' && Object.prototype.hasOwnProperty.call(OVERLAY_FONT_FILES, font)
   const file = known ? OVERLAY_FONT_FILES[font as OverlayFont] : OVERLAY_FONT_FILES.Arial
-  return `C\\:/Windows/Fonts/${file}`
+  return systemFontGraphPath(file)
 }
 
 function drawTextFilter(
@@ -521,7 +537,7 @@ function hypeShakeFilter(): string {
  * preset's own size, so a custom preset gets the right one.
  */
 function watermarkFilter(spec: WatermarkSpec, preset: FilterFrame): string {
-  const fontPath = 'C\\:/Windows/Fonts/arialbd.ttf'
+  const fontPath = systemFontGraphPath('arialbd.ttf')
   // T-182 (2): today's share of the height, or smaller when the handle would not fit between the side margins (a vertical frame).
   const fontSize = watermarkFontSize(spec, preset)
   const text = escapeDrawtext(spec.text)

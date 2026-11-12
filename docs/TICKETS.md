@@ -10527,7 +10527,7 @@ IMG-PREC.
   standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
   track moves and update each pin in place; the expediter runs the full suite and the real-media suite on the merged
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 145)
+- **Status:** done (round 145 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -11105,6 +11105,55 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 145 — T-196, the two counted items of sweep 83, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones
+(Track A from 82b647b, Track B from 3a25845, the ticket's second item
+added after the first was dispatched), disjoint files. Track A (item
+1): a part kept for a sound (T-174 (4), T-195 (2)) is given back to
+its file when that file opens, as before, and `giveBackAudio` now
+follows that file's waveform read without making anything wait: when
+the read is refused (`waveformRefused`), no newer apply has run and
+the slot is still empty, the part is kept again exactly as it was
+given back. So the same unreadable file tried again (the refusal's
+"try again") keeps the cleanup, cuts and second track however many
+times it is tried, until a read arrives; Save project and the autosave
+write them meanwhile (it had said "Nothing to save yet." after the
+second try, and the file made readable opened with the default chain).
+A Close or another file opened before the refusal lets the part go, as
+before; the video's give-back has no post-open refusal. Track B (item
+2): text overlays and the watermark take their font file from the
+system's Windows folder (`systemFontGraphPath`: `%SystemRoot%\Fonts`,
+else `%windir%`, else `C:\Windows`, read when the graph is built),
+printed for the quoted `fontfile` option with the escaping measured on
+real ffmpeg (a drive colon takes one backslash, an apostrophe closes
+and reopens the quote); with no variable set the graph is
+byte-identical to before. The old `C:\Windows\Fonts` literal was wrong
+on a Windows whose system drive is not C:; measured on ffmpeg 6.1.1
+with fontconfig, drawtext that cannot open its file draws a default
+face and exits 0, so there the chosen typeface was silently lost (a
+build without fontconfig fails instead). The three Layer 5 swap
+describes take the shipped string from the same helper, so a Windows
+release runner (SystemRoot set) still matches. Deviations, accepted:
+the Layer 5 red is a byte-equal frame against the graph naming the
+same face directly (exit codes cannot tell a missing font from a found
+one); the Layer 5 case builds the product's own `buildVideoFilter`
+graph and runs it on the first binary with drawtext; STYLE_GUIDE's
+T-114 bullet amended by Track B; a unit bridge holds an extraction so
+a refusal can land inside a newer apply. Survivors disclosed: the
+empty-slot check of item 1 (equivalent: the only other writer,
+`applyProject`, bumps the generation first, and the studio holds one
+source at a time). Expediter: independent mutations, both killed - the
+re-keep made with the store's chain at the refusal (the reset default)
+instead of the given-back one (three unit cases), and Track B's
+escaping applied before the slash conversion (seven unit cases and
+five Layer 5 cases). At merge the expediter added the T-196 (1)
+sentence to STYLE_GUIDE's T-132 (11) passage. Ledger: worker mutations
+6 of 7 and 12 of 12 killed, every restore identical. Gates on the
+merged tree: npm run verify twice (216 files, 7224 tests), test:media
+(571 cases: 543 run, 28 skipped), and the full Playwright suite with
+the default TMPDIR (984 tests, 67.1 min: 984 passed; a first run was
+cut off at 872 passed by a container restart and was re-run whole).
 
 Round 144 — T-195, the two counted items of sweep 82, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

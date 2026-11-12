@@ -477,7 +477,7 @@ that names the file being converted.)
   failed, a full disk) is reported with its real cause instead and keeps its work the same way, and so does a sound that opens
   and then cannot be read for its waveform (an unusual WAV format: "Re-export it as a standard PCM WAV or MP3 and try again") -
   the re-exported file, saved under the same name and opened again in Audio Studio, has its cleanup, cuts and second track,
-  and Save project and the autosave hold them meanwhile. If you open a
+  and Save project and the autosave hold them meanwhile - however many times you try the file, until it reads. If you open a
   different video while a long conversion is still running, the project's video is
   skipped — what you opened is never replaced — and a note says so.
 

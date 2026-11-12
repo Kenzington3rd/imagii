@@ -3089,3 +3089,188 @@ describe('a sound that opens and is then refused keeps its part (T-195 (2))', ()
     expect(kept()).toEqual({ sourcePath: MUSIC_PATH, chain: { ...CHAIN, gainDb: 6 } })
   })
 })
+
+/**
+ * T-196 (1) - a part kept for a file that could not be opened (T-174 (4)) is given back when that file opens, and the sound then owns the chain. Its waveform is read AFTER it opens, and main can
+ * still refuse it (T-195 (2)): the studio resets to the default chain and the sentence says "try again", so the give-back keeps the part again, as given back, until a read ARRIVES. The peaks answer
+ * is held per file so a refusal can land before or after the thing that is meant to make it not count (a Close, another file, a newer apply).
+ */
+describe('a given-back part is kept again when its file is refused (T-196 (1))', () => {
+  const VIDEO_FILE = '/home/user/Videos/stream.mp4'
+  const WAV = '/tmp/imagii-audio/aB3dE5fG7h.wav'
+  const REFUSAL = new Error("Error invoking remote method 'audio:peaks': Error: imagii couldn't read the sound in this file to draw its waveform.")
+  const peaks: Record<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }> = {}
+  const gone = new Set<string>()
+  let extraction: { resolve: (v: ExtractedSound) => void } | null = null
+
+  function bridge(): void {
+    for (const k of Object.keys(peaks)) delete peaks[k]
+    extraction = null
+    vi.stubGlobal('window', {
+      api: {
+        video: { fileUrl: (p: string) => pathToImagiiFileUrl(p) },
+        audio: {
+          ...PEAKS_BRIDGE,
+          peaks: (p: string) => new Promise((resolve, reject) => { peaks[p] = { resolve, reject } }),
+          probe: (p: string) => (gone.has(p) ? Promise.reject(new Error(`ffprobe exit 1: ${p}: No such file or directory`)) : Promise.resolve(AUDIO_PROBE)),
+          // Held when a test asks (a newer apply still waiting on its extraction), answered at once otherwise.
+          extractFromVideo: (p: string) =>
+            gone.has(p)
+              ? Promise.reject(new Error(`ffprobe exit 1: ${p}: No such file or directory`))
+              : extraction
+                ? new Promise<ExtractedSound>((resolve) => { extraction!.resolve = resolve })
+                : Promise.resolve(sound(WAV, true))
+        }
+      }
+    })
+  }
+  const part = (sourcePath: string, extra: Partial<NonNullable<ImagiiProject['audioStudio']>> = {}): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    audioStudio: { sourcePath, chain: CHAIN, ...extra }
+  })
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+  const refuse = async (p: string): Promise<void> => {
+    peaks[p]!.reject(REFUSAL)
+    await flush()
+  }
+  const arrive = async (p: string): Promise<void> => {
+    peaks[p]!.resolve({ peaks: [[0.5], [-0.5]], duration: 120 })
+    await flush()
+  }
+  /** The importer's open of a file: the source is in the studio at once, its waveform is read after. */
+  const open = async (p: string, ...rest: [string?, string?, boolean?]): Promise<void> => {
+    void useAudioStore.getState().loadSource(p, ...rest)
+    await flush()
+  }
+  /** The next capture's audio part, from a studio with nothing open. */
+  const kept = (): ImagiiProject['audioStudio'] => captureProject().audioStudio
+
+  beforeEach(async () => {
+    gone.clear()
+    bridge()
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    // Let the session forget a kept part the way a person does: open some other file, then close it.
+    await open(MUSIC_PATH)
+    await arrive(MUSIC_PATH)
+    useAudioStore.getState().clearSource()
+  })
+  afterEach(() => {
+    useAudioStore.getState().clearSource()
+    vi.restoreAllMocks()
+  })
+
+  /** The T-174 (4) road: the project names a file that is not there (kept), then the file is back. */
+  async function keptForMissing(file: string): Promise<void> {
+    gone.add(file)
+    const outcome = await applyProject(part(file))
+    expect(outcome.unavailable).toHaveLength(1)
+    gone.delete(file)
+    expect(kept()).toEqual({ sourcePath: file, chain: CHAIN })
+  }
+
+  it('the file given the part back and then refused keeps it again - any number of tries - and a read that arrives ends it', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(AUDIO_PATH)
+    expect(useAudioStore.getState().chain, 'given back at the open').toEqual(CHAIN)
+    expect(kept(), 'the open sound owns the chain, written from the source').toEqual({ sourcePath: AUDIO_PATH, chain: CHAIN })
+    await refuse(AUDIO_PATH)
+    expect(useAudioStore.getState().source, 'the studio let go of it').toBeNull()
+    expect(kept(), 'kept again: the work waits for the file').toEqual({ sourcePath: AUDIO_PATH, chain: CHAIN })
+    expect(validateProjectJsonString(JSON.stringify(captureProject()))).toMatchObject({ ok: true })
+    expect(keptPartQuestion('audio', AUDIO_PATH, 'mic.wav'), 'the same file is not asked about').toBeNull()
+    // a second try, refused again
+    await open(AUDIO_PATH)
+    expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    await refuse(AUDIO_PATH)
+    expect(kept()).toEqual({ sourcePath: AUDIO_PATH, chain: CHAIN })
+    // a third, whose read arrives: the chain is the sound's, and Close lets it go
+    await open(AUDIO_PATH)
+    await arrive(AUDIO_PATH)
+    expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    useAudioStore.getState().clearSource()
+    expect(kept()).toBeUndefined()
+  })
+
+  it('a part kept by a refused project open (T-195 (2)) and tried again by the same unchanged file is kept again on a second refusal', async () => {
+    await applyProject(part(AUDIO_PATH))
+    await refuse(AUDIO_PATH)
+    expect(kept()).toEqual({ sourcePath: AUDIO_PATH, chain: CHAIN })
+    await open(AUDIO_PATH)
+    await refuse(AUDIO_PATH)
+    expect(kept(), 'what the file refused twice still holds the chain').toEqual({ sourcePath: AUDIO_PATH, chain: CHAIN })
+  })
+
+  it('the sound of a video: its part is kept again, as an extraction, under the VIDEO', async () => {
+    gone.add(VIDEO_FILE)
+    await applyProject(part(VIDEO_FILE, { extractedFromVideo: true }))
+    gone.delete(VIDEO_FILE)
+    await open(WAV, VIDEO_FILE, undefined, true)
+    expect(useAudioStore.getState().chain).toEqual(CHAIN)
+    await refuse(WAV)
+    expect(kept()).toEqual({ sourcePath: VIDEO_FILE, extractedFromVideo: true, chain: CHAIN })
+  })
+
+  it('a read that arrives keeps nothing: Close afterwards leaves no audio part', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(AUDIO_PATH)
+    await arrive(AUDIO_PATH)
+    useAudioStore.getState().clearSource()
+    expect(kept()).toBeUndefined()
+  })
+
+  it('a Close before the refusal keeps nothing (the person let go of it)', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(AUDIO_PATH)
+    useAudioStore.getState().clearSource()
+    await refuse(AUDIO_PATH)
+    expect(kept()).toBeUndefined()
+  })
+
+  it('another file opened before the refusal keeps nothing: Close leaves no audio part', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(AUDIO_PATH)
+    await open(MUSIC_PATH)
+    await arrive(MUSIC_PATH)
+    await refuse(AUDIO_PATH)
+    expect(useAudioStore.getState().source?.filePath, 'the other file is still open').toBe(MUSIC_PATH)
+    expect(useAudioStore.getState().chain).not.toEqual(CHAIN)
+    useAudioStore.getState().clearSource()
+    expect(kept()).toBeUndefined()
+  })
+
+  it('a DIFFERENT file than the kept one does not get the part, and its refusal keeps nothing', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(MUSIC_PATH)
+    expect(useAudioStore.getState().chain).not.toEqual(CHAIN)
+    await refuse(MUSIC_PATH)
+    expect(kept()).toBeUndefined()
+  })
+
+  it('a newer apply that holds the slot keeps it: the refusal lands while its extraction is still running, and the old part is not put back over it', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(AUDIO_PATH)
+    extraction = { resolve: () => undefined }
+    // The newer project takes the slot (it claims it before its first wait); its sound is not in the studio yet.
+    const newer = applyProject(part(VIDEO_FILE, { extractedFromVideo: true, chain: { ...CHAIN, gainDb: 6 } }))
+    await flush()
+    await refuse(AUDIO_PATH)
+    expect(useAudioStore.getState().source).toBeNull()
+    expect(kept(), 'nothing of the refused sound: the newer open has the slot').toBeUndefined()
+    extraction.resolve(sound(WAV, true))
+    await flush()
+    await newer
+    expect(useAudioStore.getState().chain).toEqual({ ...CHAIN, gainDb: 6 })
+  })
+
+  it('a newer apply whose file is gone keeps ITS part, not the refused one\'s', async () => {
+    await keptForMissing(AUDIO_PATH)
+    await open(AUDIO_PATH)
+    gone.add(MUSIC_PATH)
+    const newer = await applyProject(part(MUSIC_PATH, { chain: { ...CHAIN, gainDb: 6 } }))
+    expect(newer.unavailable).toHaveLength(1)
+    await refuse(AUDIO_PATH)
+    expect(kept()).toEqual({ sourcePath: MUSIC_PATH, chain: { ...CHAIN, gainDb: 6 } })
+  })
+})

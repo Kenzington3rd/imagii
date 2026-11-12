@@ -449,7 +449,15 @@ function giveBackAudio(): void {
   const open = useAudioStore.getState().source
   if (!kept || !open) return
   delete keptParts.audio
-  if (soundKey(open) === kept.key) useAudioStore.setState({ chain: kept.chain })
+  if (soundKey(open) !== kept.key) return
+  useAudioStore.setState({ chain: kept.chain })
+  // T-196 (1): the sound now owns the chain, but its waveform is read after it opens (T-129) and main can still refuse the file (T-195 (2)): the studio resets to the default chain and
+  // the sentence sends the person to "try again" - so the part is kept again, as given back, for as many tries as it takes until a read arrives. Not awaited (a long file's read takes
+  // seconds); a Close or another file opened is not a refusal, a newer apply that reached the audio part has the slot, and a part kept since is not overwritten.
+  const generation = audioApplies
+  void waveformArrived(open).then((arrived) => {
+    if (!arrived && waveformRefused(open) && generation === audioApplies && keptParts.audio === undefined) keptParts.audio = kept
+  })
 }
 
 /**

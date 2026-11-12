@@ -11543,7 +11543,7 @@ describe('Match loudness follows the voice when Even volume is off (T-150 (1))',
 describe('a text overlay placed near an edge stays inside the frame (drawtext, T-151)', () => {
   const FRAME_W = 1080
   const FRAME_H = 1920
-  const SHIPPED_FONT_IN_GRAPH = 'C\\:/Windows/Fonts/arial.ttf'
+  const SHIPPED_FONT_FILE = 'arial.ttf' // its graph text is `systemFontGraphPath` (T-196): the product's own, so a Windows release run with SystemRoot set still matches
   const CAPTION = 'Subscribe for more clips!'
 
   async function systemFont(): Promise<string | null> {
@@ -11582,7 +11582,8 @@ describe('a text overlay placed near an edge stays inside the frame (drawtext, T
 
   /** The white run of the caption drawn at `x` (a 0-1 fraction): its first and last column and the frame's width, from decoded pixels. */
   async function whiteRun(x: number, tag: string, fontFile: string | null): Promise<{ first: number; last: number; width: number }> {
-    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    const { buildVideoFilter, systemFontGraphPath } = await import('../../src/main/ffmpeg/filters')
+    const SHIPPED_FONT_IN_GRAPH = systemFontGraphPath(SHIPPED_FONT_FILE)
     let graph = buildVideoFilter(
       {
         startSec: 0,
@@ -11674,7 +11675,7 @@ describe('a caption wider than the frame keeps its start (drawtext, T-152)', () 
   const FRAME_H = 1920
   const STRIP_COLS = 200
   const STRIP_ROWS = 100
-  const SHIPPED_FONT_IN_GRAPH = 'C\\:/Windows/Fonts/arial.ttf'
+  const SHIPPED_FONT_FILE = 'arial.ttf' // its graph text is `systemFontGraphPath` (T-196): the product's own, so a Windows release run with SystemRoot set still matches
   const CAPTION = 'Subscribe now for the whole stream highlights reel!'
   const MAD_BOUND = 2
 
@@ -11720,7 +11721,8 @@ describe('a caption wider than the frame keeps its start (drawtext, T-152)', () 
     tag: string,
     fontFile: string | null
   ): Promise<{ gray: Buffer; w: number; first: number; last: number }> {
-    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    const { buildVideoFilter, systemFontGraphPath } = await import('../../src/main/ffmpeg/filters')
+    const SHIPPED_FONT_IN_GRAPH = systemFontGraphPath(SHIPPED_FONT_FILE)
     let graph = buildVideoFilter(
       {
         startSec: 0,
@@ -12994,7 +12996,7 @@ describe('a surround voice keeps its level in a mix (real runAudioExport + ffmpe
  */
 describe('the watermark fits the frame (drawtext, T-182)', () => {
   const FONT_FILE = '/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf'
-  const SHIPPED_FONT_IN_GRAPH = 'C\\:/Windows/Fonts/arialbd.ttf'
+  const SHIPPED_FONT_FILE = 'arialbd.ttf' // its graph text is `systemFontGraphPath` (T-196)
   const CAPS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZABCDEFGHIJKLMN'
   const WS = 'W'.repeat(40)
   const URL = 'youtube.com/@averylongchannelname'
@@ -13018,7 +13020,8 @@ describe('the watermark fits the frame (drawtext, T-182)', () => {
 
   /** One watermark through the product's graph on a black `width` x `height` frame; the white ink's bounding box, read by `bbox`. */
   async function inkOf(text: string, position: (typeof CORNERS)[number], width: number, height: number, tag: string): Promise<Ink> {
-    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    const { buildVideoFilter, systemFontGraphPath } = await import('../../src/main/ffmpeg/filters')
+    const SHIPPED_FONT_IN_GRAPH = systemFontGraphPath(SHIPPED_FONT_FILE)
     let graph = buildVideoFilter(
       { startSec: 0, cropRect: null, textOverlays: [] },
       { ...PLATFORM_PRESETS.tiktok, width, height },
@@ -13617,4 +13620,183 @@ describe('a control character in a name is an underscore and the file is written
     )
     expect(await readdir(out), 'nothing was encoded').toEqual([])
   }, 60_000)
+})
+
+/**
+ * T-196 (2) - text overlays and the watermark open the font in the SYSTEM's Windows folder (pixels).
+ *
+ * The graph printed `C\:/Windows/Fonts/<file>`, so a Windows whose system drive is not C: failed every export carrying a text overlay or the
+ * watermark. `systemFontGraphPath` (filters.ts) now prints `%SystemRoot%\Fonts`, else `%windir%`, else `C:\Windows`, escaped for the quoted
+ * `fontfile='...'` option. The escaping is the part a string-shape unit test cannot prove, so this describe runs the product's own graph through
+ * a real drawtext with `SystemRoot` pointed at a folder whose path holds a space, an apostrophe, a colon, a comma, brackets, a semicolon, an
+ * equals sign and a percent sign (Windows folder names cannot hold the colon; its drive letter supplies one there).
+ *
+ * WHY THE EVIDENCE IS "THE FRAME IS THAT FONT'S", NOT "EXIT 0": with fontconfig built in, a `fontfile` that cannot be opened is not an error -
+ * drawtext draws in the fontconfig default and exits 0 (measured on 6.1.1: the missing file, a wrong drive and no `fontfile` at all give one
+ * identical frame). So exit 0 and "differs from the export without the text" are true on the base too. The root's Fonts folder holds two
+ * DIFFERENT faces under arial.ttf and arialbd.ttf, each different from the default; the frame the graph draws through the root must equal,
+ * byte for byte, the frame the same graph draws with that face named directly, and must differ from the default's.
+ *
+ * The product's graph is built in-process and run on the first binary with drawtext: the bundled one, else the distro's /usr/bin/ffmpeg (6.1.1,
+ * the shipped major) - `runExportJob` is pinned to the bundled binary, which on linux (7.0.2) has none. SKIPS, with its reason, where neither has it.
+ */
+describe('the font folder is the system\'s: a root with an awkward path (drawtext, T-196)', () => {
+  const W = 640
+  const H = 360
+  const POSITION = 'bottom-right' as const
+
+  let bin: string | null = null
+  let fonts: [string, string] | null = null
+
+  async function frameOf(graph: string, binary: string): Promise<{ code: number | null; sha: string; err: string }> {
+    return new Promise((resolve, reject) => {
+      const child = spawn(binary, [
+        '-v', 'error', '-y',
+        '-f', 'lavfi', '-i', `color=c=black:s=${W}x${H}:r=30:d=1`,
+        '-vf', graph,
+        '-frames:v', '1', '-pix_fmt', 'gray', '-f', 'rawvideo', '-'
+      ])
+      const hash = createHash('sha256')
+      let err = ''
+      child.stdout.on('data', (b: Buffer) => hash.update(b))
+      child.stderr.on('data', (b) => (err += String(b)))
+      child.on('error', reject)
+      child.on('close', (code) => resolve({ code, sha: hash.digest('hex'), err: err.slice(-600) }))
+    })
+  }
+
+  async function hasDrawtext(binary: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const child = spawn(binary, ['-hide_banner', '-filters'])
+      let out = ''
+      child.stdout.on('data', (b) => (out += String(b)))
+      child.on('error', () => resolve(false))
+      child.on('close', () => resolve(/\sdrawtext\s/.test(out)))
+    })
+  }
+
+  /** The graph for a text overlay (Arial, white) and/or the watermark (bottom-right), the product's own. */
+  async function graphFor(parts: { overlay: boolean; watermark: boolean }): Promise<string> {
+    const { buildVideoFilter } = await import('../../src/main/ffmpeg/filters')
+    const textOverlays = parts.overlay
+      ? [{ id: 'ov-t196', text: 'Overlay face', font: 'Arial' as const, sizePx: 48, colorHex: '#ffffff', x: 0.05, y: 0.3, startSec: 0, endSec: 1 }]
+      : []
+    const watermark: WatermarkSpec | undefined = parts.watermark ? { text: '@sample', position: POSITION, opacity: 0.85, fontSizePct: 3.5 } : undefined
+    return buildVideoFilter({ startSec: 0, cropRect: null, textOverlays }, PLATFORM_PRESETS.twitter, { width: W, height: H }, watermark)
+  }
+
+  /** Run `fn` with `SystemRoot` = root (and `windir` cleared), then put both back. */
+  async function withEnv<T>(env: { SystemRoot?: string; windir?: string }, fn: () => Promise<T>): Promise<T> {
+    const saved = { SystemRoot: process.env.SystemRoot, windir: process.env.windir }
+    delete process.env.SystemRoot
+    delete process.env.windir
+    if (env.SystemRoot !== undefined) process.env.SystemRoot = env.SystemRoot
+    if (env.windir !== undefined) process.env.windir = env.windir
+    try {
+      return await fn()
+    } finally {
+      for (const [k, v] of Object.entries(saved)) {
+        if (v === undefined) delete process.env[k]
+        else process.env[k] = v
+      }
+    }
+  }
+
+  /** The folder the graph must find its fonts under: a path every escape in the quoted option has to survive. */
+  async function awkwardRoot(tag: string): Promise<string> {
+    const colon = process.platform === 'win32' ? '' : ':'
+    const root = path.join(workDir, `t196 it's${colon}a[1];b=c,d%-${tag}`, 'Win,dows')
+    await mkdir(path.join(root, 'Fonts'), { recursive: true })
+    await copyFile(fonts![0], path.join(root, 'Fonts', 'arial.ttf'))
+    await copyFile(fonts![1], path.join(root, 'Fonts', 'arialbd.ttf'))
+    return root
+  }
+
+  /** The same graph with the product's font text swapped for a face named directly (the reference the root's frame must equal). */
+  async function referenceFrame(parts: { overlay: boolean; watermark: boolean }): Promise<string> {
+    const { systemFontGraphPath } = await import('../../src/main/ffmpeg/filters')
+    let graph = await withEnv({}, () => graphFor(parts))
+    // Directly: these two paths are ordinary, so nothing needs escaping beyond the quoted option.
+    if (parts.overlay) graph = graph.replace(await withEnv({}, async () => systemFontGraphPath('arial.ttf')), fonts![0])
+    if (parts.watermark) graph = graph.replace(await withEnv({}, async () => systemFontGraphPath('arialbd.ttf')), fonts![1])
+    const r = await frameOf(graph, bin!)
+    expect(r.code, `the reference render exits 0: ${r.err}`).toBe(0)
+    return r.sha
+  }
+
+  beforeAll(async () => {
+    for (const c of [ffmpegPath, '/usr/bin/ffmpeg']) {
+      if (c && (c === ffmpegPath || existsSync(c)) && (await hasDrawtext(c))) {
+        bin = c
+        break
+      }
+    }
+    if (!bin) return
+    const faces = [
+      '/usr/share/fonts/truetype/dejavu/DejaVuSerif-Bold.ttf',
+      '/usr/share/fonts/truetype/liberation/LiberationSerif-Regular.ttf',
+      '/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf',
+      '/usr/share/fonts/truetype/freefont/FreeMono.ttf'
+    ].filter((f) => existsSync(f))
+    if (faces.length >= 2) fonts = [faces[0]!, faces[1]!]
+  }, 60_000)
+
+  /** Why this describe cannot run here, or null when it can. */
+  function cannotRun(): string | null {
+    if (!bin) return 'neither the bundled ffmpeg nor /usr/bin/ffmpeg has a drawtext filter: run it where the distro 6.1.1 is installed'
+    if (!fonts) return 'fewer than two font files among DejaVu Serif Bold, Liberation Serif, DejaVu Sans Mono, FreeMono: drawtext has two faces to tell apart'
+    return null
+  }
+
+  it('control: with no variable, drawtext cannot open the literal C: file and draws the default face (the base\'s behaviour, and the proof the reference differs)', async (ctx) => {
+    if (cannotRun()) return ctx.skip()
+    if (process.platform === 'win32') return ctx.skip() // a Windows box has a real C:\Windows\Fonts: there is no missing file to measure
+    const graph = await withEnv({}, () => graphFor({ overlay: true, watermark: false }))
+    expect(graph, "the unset graph names the literal C: folder (today's text)").toContain("fontfile='C\\:/Windows/Fonts/arial.ttf'")
+    const r = await frameOf(graph, bin!)
+    expect(r.code, r.err).toBe(0)
+    const noFontfile = await frameOf(graph.replace(/fontfile='[^']*':/, ''), bin!)
+    expect(r.sha, 'the missing file draws exactly what a graph with no fontfile draws: the default face').toBe(noFontfile.sha)
+    expect(await referenceFrame({ overlay: true, watermark: false }), 'the face the root supplies is NOT the default one').not.toBe(r.sha)
+  }, 120_000)
+
+  it("a text overlay opens arial.ttf from a SystemRoot with a space, apostrophe, colon, comma, brackets, = and %: exit 0 and that face's frame", async (ctx) => {
+    if (cannotRun()) return ctx.skip()
+    const root = await awkwardRoot('overlay')
+    const graph = await withEnv({ SystemRoot: root }, () => graphFor({ overlay: true, watermark: false }))
+    const r = await frameOf(graph, bin!)
+    expect(r.code, `ffmpeg accepted the graph (${graph.slice(0, 160)}): ${r.err}`).toBe(0)
+    expect(r.sha, 'and it is byte for byte what that face draws when it is named directly').toBe(await referenceFrame({ overlay: true, watermark: false }))
+    const without = await frameOf(await graphFor({ overlay: false, watermark: false }), bin!)
+    expect(r.sha, 'and it differs from the same export without the text').not.toBe(without.sha)
+  }, 120_000)
+
+  it("the watermark opens arialbd.ttf from the same root: exit 0 and that face's frame", async (ctx) => {
+    if (cannotRun()) return ctx.skip()
+    const root = await awkwardRoot('watermark')
+    const graph = await withEnv({ SystemRoot: root }, () => graphFor({ overlay: false, watermark: true }))
+    const r = await frameOf(graph, bin!)
+    expect(r.code, `ffmpeg accepted the graph (${graph.slice(0, 160)}): ${r.err}`).toBe(0)
+    expect(r.sha, 'and it is byte for byte what that face draws when it is named directly').toBe(await referenceFrame({ overlay: false, watermark: true }))
+  }, 120_000)
+
+  it('both together (one export carrying a text overlay and the watermark): each in its own face, from the one root', async (ctx) => {
+    if (cannotRun()) return ctx.skip()
+    const root = await awkwardRoot('both')
+    const graph = await withEnv({ SystemRoot: root }, () => graphFor({ overlay: true, watermark: true }))
+    const r = await frameOf(graph, bin!)
+    expect(r.code, `ffmpeg accepted the graph: ${r.err}`).toBe(0)
+    expect(r.sha, "the one frame carries the overlay's face and the watermark's").toBe(await referenceFrame({ overlay: true, watermark: true }))
+    const without = await frameOf(await graphFor({ overlay: false, watermark: false }), bin!)
+    expect(r.sha, 'and differs from the same export without them').not.toBe(without.sha)
+  }, 120_000)
+
+  it('windir alone is enough: the same root through %windir%', async (ctx) => {
+    if (cannotRun()) return ctx.skip()
+    const root = await awkwardRoot('windir')
+    const graph = await withEnv({ windir: root }, () => graphFor({ overlay: false, watermark: true }))
+    const r = await frameOf(graph, bin!)
+    expect(r.code, r.err).toBe(0)
+    expect(r.sha).toBe(await referenceFrame({ overlay: false, watermark: true }))
+  }, 120_000)
 })

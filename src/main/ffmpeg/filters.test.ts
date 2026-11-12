@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import {
   __testing__,
   buildAudioSpeedFilter,
@@ -15,6 +15,11 @@ import type { Clip, TextOverlay } from '../../shared/clip'
 import { watermarkFontSize, watermarkTextWidth } from '../../shared/watermark'
 
 const { escapeDrawtext, safeOverlaySize, safeOverlayColor } = __testing__
+
+// T-196 (2): the font folder is the system's, so a Windows run (SystemRoot set) would move every `C:/Windows` pin below. They describe the
+// default, so the file starts from neither variable; the T-196 describe at the end sets them itself and puts the run's values back.
+delete process.env.SystemRoot
+delete process.env.windir
 
 /**
  * Regression tests for the drawtext escape helper. Round 6 caught that
@@ -1365,5 +1370,93 @@ describe('the watermark fits the frame (T-182 (2))', () => {
     expect(sizeOf(escaped)).not.toBe(sizeOf(typed))
     expect(watermarkTextWidth(typed, sizeOf(typed)) + 16).toBeLessThanOrEqual(1040)
     expect(optionsOn(PLATFORM_PRESETS.tiktok, typed).fontsize).toBe(String(sizeOf(typed)))
+  })
+})
+
+/**
+ * T-196 (2) - text overlays and the watermark find the SYSTEM's font folder, not C:\\Windows.
+ *
+ * Both printed `C\\:/Windows/Fonts/<file>`, so a Windows whose system drive is not C: failed every export carrying either. The folder is now
+ * `%SystemRoot%\\Fonts`, else `%windir%`, else `C:\\Windows`, read when the graph is built and escaped for the quoted `fontfile='...'`
+ * option (a drive colon one backslash, an apostrophe a close-escape-reopen of the quote - measured on real ffmpeg by the Layer 5 describe at the end of media.spec.ts). With
+ * neither variable set the text is today's, byte for byte (the pins above).
+ */
+describe('the font folder is the system\'s (T-196 (2))', () => {
+  const saved = { SystemRoot: process.env.SystemRoot, windir: process.env.windir }
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+  const setEnv = (root: { SystemRoot?: string; windir?: string }): void => {
+    delete process.env.SystemRoot
+    delete process.env.windir
+    if (root.SystemRoot !== undefined) process.env.SystemRoot = root.SystemRoot
+    if (root.windir !== undefined) process.env.windir = root.windir
+  }
+  const frame = { width: 1280, height: 720 }
+  const overlayGraph = (font: unknown): string =>
+    buildVideoFilter(
+      {
+        startSec: 0,
+        cropRect: null,
+        textOverlays: [{ id: 'ov', text: 'Hi', font: font as string, sizePx: 48, colorHex: '#ffffff', x: 0.1, y: 0.2, startSec: 0, endSec: 5 }]
+      },
+      PLATFORM_PRESETS.twitter,
+      frame
+    )
+  const markGraph = (): string =>
+    buildVideoFilter(
+      { startSec: 0, cropRect: null, textOverlays: [] },
+      PLATFORM_PRESETS.twitter,
+      frame,
+      { text: '@sample', position: 'bottom-right', opacity: 0.85, fontSizePct: 3.5 }
+    )
+  const fontfileOf = (graph: string): string | undefined => /fontfile='([^']*)'/.exec(graph)?.[1]
+
+  it('SystemRoot = D:\\Windows: the overlay and the watermark name D:\'s Fonts folder, the colon escaped', () => {
+    setEnv({ SystemRoot: 'D:\\Windows' })
+    expect(fontfileOf(overlayGraph('Arial'))).toBe('D\\:/Windows/Fonts/arial.ttf')
+    expect(fontfileOf(overlayGraph('Impact'))).toBe('D\\:/Windows/Fonts/impact.ttf')
+    expect(fontfileOf(markGraph())).toBe('D\\:/Windows/Fonts/arialbd.ttf')
+  })
+
+  it('an unknown key is still Arial, in the system folder', () => {
+    setEnv({ SystemRoot: 'D:\\Windows' })
+    expect(fontfileOf(overlayGraph('constructor'))).toBe('D\\:/Windows/Fonts/arial.ttf')
+  })
+
+  it('only windir set: that folder', () => {
+    setEnv({ windir: 'E:\\WINNT' })
+    expect(fontfileOf(overlayGraph('Georgia'))).toBe('E\\:/WINNT/Fonts/georgia.ttf')
+    expect(fontfileOf(markGraph())).toBe('E\\:/WINNT/Fonts/arialbd.ttf')
+  })
+
+  it('SystemRoot wins over windir; an EMPTY SystemRoot falls through to windir', () => {
+    setEnv({ SystemRoot: 'D:\\Windows', windir: 'E:\\WINNT' })
+    expect(fontfileOf(markGraph())).toBe('D\\:/Windows/Fonts/arialbd.ttf')
+    setEnv({ SystemRoot: '', windir: 'E:\\WINNT' })
+    expect(fontfileOf(markGraph())).toBe('E\\:/WINNT/Fonts/arialbd.ttf')
+  })
+
+  it('neither set: today\'s C: text, byte for byte', () => {
+    setEnv({})
+    expect(fontfileOf(overlayGraph('Arial'))).toBe('C\\:/Windows/Fonts/arial.ttf')
+    expect(fontfileOf(markGraph())).toBe('C\\:/Windows/Fonts/arialbd.ttf')
+    setEnv({ SystemRoot: '', windir: '' })
+    expect(fontfileOf(markGraph())).toBe('C\\:/Windows/Fonts/arialbd.ttf')
+  })
+
+  it('a root holding an apostrophe, a colon, a space, a comma and brackets is escaped for the quoted option (the pin; Layer 5 runs it)', () => {
+    setEnv({ SystemRoot: "/tmp/x y'z:w/Win,dows[1];a=b" })
+    const expected = "/tmp/x y'\\\\\\''z\\:w/Win,dows[1];a=b/Fonts/arial.ttf"
+    expect(overlayGraph('Arial')).toContain(`fontfile='${expected}':text=`)
+    expect(markGraph()).toContain(`fontfile='${expected.replace('arial.ttf', 'arialbd.ttf')}':text=`)
+  })
+
+  it('backslashes in a Windows root become forward slashes (a drive colon aside)', () => {
+    setEnv({ SystemRoot: 'D:\\Win dows\\' })
+    expect(fontfileOf(overlayGraph('Arial'))).toBe('D\\:/Win dows//Fonts/arial.ttf')
   })
 })

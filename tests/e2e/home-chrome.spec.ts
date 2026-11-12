@@ -5496,3 +5496,163 @@ test.describe('round 144 Track B (T-195 (2)): a sound that opens and is then ref
     }
   })
 })
+
+// ── round 145 (T-196 (1)): a kept chain is kept until its file is READ ───────────────────────────────────────────────────────────────────────────────────────────
+//
+// T-195 (2) keeps the chain of a sound that opens and is refused, and the sentence says "try again". The give-back (T-174 (4)) applied the kept part to the same file when it opened and let the slot go
+// at once - before that file's waveform was read - so the SECOND try, refused again, had nothing to keep: Save project said "Nothing to save yet.", and the file made standard and opened had both
+// switches off. The give-back now keeps its record and puts it back when that file's read is refused. The pins: the same unchanged file tried again (Save project, then the checks once it is a standard
+// WAV), the T-174 (4) road (missing at open, then put back unreadable), and the control (a read that arrives: Close lets the chain go).
+test.describe('round 145 (T-196 (1)): a kept chain is kept until its file is read', () => {
+  const REFUSED =
+    "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as a standard PCM WAV or MP3 and try again."
+  const CHAIN = { ...DEFAULT_CHAIN_SPEC, hum60: true, rumbleHighpass: true }
+  const HUM = 'Hum removal (60 Hz mains)'
+  const RUMBLE = 'Remove low rumble (below 80 Hz)'
+
+  /** A WAV whose format tag no decoder knows (0x9999): it probes and opens, and main's peaks job refuses it (the T-195 (2) describe's fixture). */
+  function unknownFormatWav(): Buffer {
+    const rate = 8000
+    const data = Buffer.alloc(rate * 2 * 3)
+    const head = Buffer.alloc(44)
+    head.write('RIFF', 0)
+    head.writeUInt32LE(36 + data.length, 4)
+    head.write('WAVEfmt ', 8)
+    head.writeUInt32LE(16, 16)
+    head.writeUInt16LE(0x9999, 20)
+    head.writeUInt16LE(1, 22)
+    head.writeUInt32LE(rate, 24)
+    head.writeUInt32LE(rate * 2, 28)
+    head.writeUInt16LE(2, 32)
+    head.writeUInt16LE(16, 34)
+    head.write('data', 36)
+    head.writeUInt32LE(data.length, 40)
+    return Buffer.concat([head, data])
+  }
+
+  interface Fixture {
+    app: ElectronApplication
+    window: Page
+    root: string
+    odd: string
+    saved: string
+  }
+  async function launch(label: string, project: (odd: string) => Record<string, unknown>): Promise<Fixture> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const odd = path.join(root, 'source', 'unknown-format.wav')
+    const projectFile = path.join(root, 'refused.imagii.json')
+    const saved = path.join(root, 'saved.imagii.json')
+    mkdirSync(path.dirname(odd), { recursive: true })
+    writeFileSync(odd, unknownFormatWav())
+    writeFileSync(projectFile, JSON.stringify({ schemaVersion: 5, savedAt: Date.now(), appVersion: '1.0.0', ...project(odd) }), 'utf8')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await recordSlowChooser(app, { files: [projectFile], saveAs: saved })
+    return { app, window, root, odd, saved }
+  }
+  const audioPart = (odd: string): Record<string, unknown> => ({ audioStudio: { sourcePath: odd, chain: CHAIN } })
+  const cleanup_ = (f: Fixture): Promise<void> => f.app.close().catch(() => undefined).then(() => cleanup(f.root))
+  const refusals = async (window: Page): Promise<number> => (await readToastLog(window)).filter((t) => t === REFUSED).length
+  const refusalCount = async (f: Fixture, n: number): Promise<void> => {
+    await expect.poll(() => refusals(f.window), { timeout: 60_000, intervals: [250] }).toBe(n)
+  }
+  const cleanupBox = (f: Fixture): ReturnType<Page['locator']> => f.window.locator('[data-tutorial="audio-cleanup"]')
+  const play = (f: Fixture): ReturnType<Page['locator']> => f.window.locator('[data-tutorial="audio-waveform"]').getByRole('button', { name: 'Play', exact: true })
+  async function openProject(f: Fixture): Promise<void> {
+    await f.window.getByRole('button', { name: 'Open project' }).click()
+  }
+  async function dropOnAudio(f: Fixture): Promise<void> {
+    await f.window.locator('a', { hasText: 'Audio Studio' }).first().click()
+    await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    await dropOnZone(f.window, '[data-tutorial="audio-importer"] .card', f.odd, path.basename(f.odd))
+  }
+  async function saveFromHome(f: Fixture): Promise<Record<string, unknown>> {
+    await f.window.locator('a[href="#/home"]').first().click()
+    await expect(f.window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+    await f.window.getByRole('button', { name: 'Save project' }).click()
+    await expect.poll(() => existsSync(f.saved), { timeout: 15_000 }).toBe(true)
+    return JSON.parse(readFileSync(f.saved, 'utf8')) as Record<string, unknown>
+  }
+
+  test('the SAME unchanged file tried again and refused again: Save project still writes the chain (it said "Nothing to save yet." and wrote no file)', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t196-same', audioPart)
+    try {
+      await openProject(f)
+      await refusalCount(f, 1)
+      await dropOnAudio(f)
+      await refusalCount(f, 2)
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      const written = await saveFromHome(f)
+      expect((await readToastLog(f.window)).join(' | ')).not.toContain('Nothing to save yet')
+      expect(written.audioStudio).toMatchObject({ sourcePath: f.odd, chain: { hum60: true, rumbleHighpass: true } })
+    } finally {
+      await cleanup_(f)
+    }
+  })
+
+  test('the same file refused twice, then made a standard WAV and dropped: Hum removal and Remove low rumble are checked (they were unchecked)', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t196-standard', audioPart)
+    try {
+      await openProject(f)
+      await refusalCount(f, 1)
+      await dropOnAudio(f)
+      await refusalCount(f, 2)
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      await makeFixtureWav(f.odd)
+      await dropOnZone(f.window, '[data-tutorial="audio-importer"] .card', f.odd, path.basename(f.odd))
+      await expect(play(f)).toBeEnabled({ timeout: 60_000 })
+      await expect(cleanupBox(f).getByLabel(HUM)).toBeChecked()
+      await expect(cleanupBox(f).getByLabel(RUMBLE)).toBeChecked()
+    } finally {
+      await cleanup_(f)
+    }
+  })
+
+  test('the T-174 (4) road: missing at Open project, then put back unreadable and dropped - refused - Save project still writes the chain', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t196-missing', audioPart)
+    try {
+      rmSync(f.odd, { force: true })
+      await openProject(f)
+      await expect.poll(async () => (await readToastLog(f.window)).join(' | '), { timeout: 60_000, intervals: [250] }).toContain('moved or deleted')
+      writeFileSync(f.odd, unknownFormatWav())
+      await dropOnAudio(f)
+      await refusalCount(f, 1)
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      const written = await saveFromHome(f)
+      expect((await readToastLog(f.window)).join(' | ')).not.toContain('Nothing to save yet')
+      expect(written.audioStudio).toMatchObject({ sourcePath: f.odd, chain: { hum60: true, rumbleHighpass: true } })
+    } finally {
+      await cleanup_(f)
+    }
+  })
+
+  test('control: the file standard at the second open is given back and READ - after Close (its question accepted) Save project writes no audio part', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t196-control', (odd) => ({ ...canvasProject('Kept rect'), ...audioPart(odd) }))
+    try {
+      f.window.on('dialog', (dialog) => void dialog.accept())
+      await openProject(f)
+      await refusalCount(f, 1)
+      await makeFixtureWav(f.odd)
+      await dropOnAudio(f)
+      await expect(play(f)).toBeEnabled({ timeout: 60_000 })
+      await expect(cleanupBox(f).getByLabel(HUM)).toBeChecked()
+      await expect(cleanupBox(f).getByLabel(RUMBLE)).toBeChecked()
+      await f.window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+      const written = await saveFromHome(f)
+      expect(written.imageCanvas, 'the canvas is still the work the session holds').toBeDefined()
+      expect(written.audioStudio, 'a sound that was read and then closed is not kept').toBeUndefined()
+      expect(await refusals(f.window), 'the standard file was not refused').toBe(1)
+    } finally {
+      await cleanup_(f)
+    }
+  })
+})

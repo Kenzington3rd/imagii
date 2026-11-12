@@ -14,6 +14,31 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-12 - T-196 (round 145): a kept record is let go when its file is READ, not when the file is OPENED - and a fix for a retry has to survive the retry
+
+The eighty-third sweep's item 1, a new consequence of the round 144 fix (T-195 (2)).
+
+- **Bug.** A project naming an unknown-format WAV with Hum removal and Remove low rumble on opened with the refusal sentence ("... try again") and kept the chain. The person tried again: the SAME file, dropped on Audio Studio, was refused again, and now Save project said "Nothing to save yet." and wrote no file; the file made a standard WAV and opened had both switches off. Re-exported BEFORE the second try, both were kept. The same give-back lost a T-174 (4) part (kept for a file that was missing) when that file came back unreadable.
+- **Root cause.** `giveBackAudio` applies a kept part to the same file when it opens and empties the slot at once - before that file's waveform is read (T-129). T-195 (2) made the first refusal keep the part, but only `applyProject` knew how; the give-back, the road every later try takes, let the part go on the open, so the work survived exactly one try.
+- **Fix.** The give-back follows its source's read without making anything wait (`void waveformArrived(open).then(...)`) and, when the read is refused (`waveformRefused`), no newer apply has run since (`audioApplies` captured at the give-back) and the slot is empty, puts the record back exactly as it gave it back. The open sound still owns the chain, so Save project, the autosave and Close behave as they did.
+- **Test.** ProjectIO.test.ts "a given-back part is kept again when its file is refused (T-196 (1))" (3 cases red on the base; guards for a read that arrives, a Close, another file, a different file and a newer apply); home-chrome.spec.ts "round 145 (T-196 (1))" (3 red on the base: the same file tried again then Save project, then the checks after the file is made standard, and the missing-then-unreadable road; control: a read that arrives, then Close, writes no audio part).
+- **Lesson.** **A fix that keeps work across a retry has to be tested through the retry, and every place that lets the record go has to ask the same question the first fix asked.** T-195 (2) was verified with one refusal and one re-export; the person's next move after "try again" is to try again, and the second try went through a different door that nobody had asked. When a record is released "once the thing is known good", list every release site and ask what "known good" means at each - here the open (not good yet), the read (good), a Close (the person's), and for a video nothing after the open can refuse, so its give-back is correct as it stands.
+
+---
+
+## 2026-11-12 - T-196 (round 145), Track B: a font that cannot be opened is not an error, so "exit 0" proves nothing about the path, and a path printed into a filter is read twice
+
+The eighty-third sweep's item 2.
+
+- **Bug.** Text overlays and the watermark printed `C\:/Windows/Fonts/<file>` into the graph, so a Windows whose system drive is not C: could not open the font for any export carrying either. The standing "Known-and-accepted" entry accepted the literal "while the app ships Windows-only" and did not name a Windows on another drive.
+- **Root cause.** The folder was a literal in two places (`overlayFontPath`, `watermarkFilter`) and the entry's wording stopped at "Windows-only".
+- **Fix.** `systemFontGraphPath(file)` in filters.ts builds the text: the root is `SystemRoot`, else `windir`, else `C:\Windows`, read when the graph is built, then `\Fonts\<file>`, backslashes made `/`. Both callers use it; the font table and the Arial fallback are unchanged; with no variable set the text is today's, byte for byte. The standing entry is amended in place.
+- **What measuring on real ffmpeg (6.1.1, the shipped major) taught.** (1) ffmpeg reads a filter's arguments twice: the filtergraph parser (quotes protect everything, a backslash inside them is literal), then the option list (a backslash escapes). A drive colon therefore needs one backslash (`C\:`); a space, comma, bracket, semicolon, `=` and `%` need nothing inside the quotes; an apostrophe needs the quote closed, a backslash for the second read and the apostrophe, and the quote reopened (`'\\\''`). The first guess (two backslashes before the apostrophe) passed a probe on a one-letter folder name and failed on a real one: the probe had passed because of the next point. (2) With fontconfig built in, a `fontfile` drawtext cannot open is NOT an error: it draws in the default face and exits 0 (a missing file, a wrong drive and no `fontfile` at all give one identical frame). "Exit 0" and "the frame differs from the export without the text" are therefore both true on the unfixed code, and the ticket's own red ("drawtext cannot open it") is not observable that way. The Layer 5 case puts two DIFFERENT faces under arial.ttf and arialbd.ttf in a root whose path holds a space, apostrophe, colon, comma, brackets, `;`, `=` and `%`, and asserts the frame equals, byte for byte, the frame the same graph draws with that face named directly.
+- **Test.** filters.test.ts "the font folder is the system's (T-196 (2))" (D: from SystemRoot, windir alone, SystemRoot over windir and an empty one falling through, neither set = C: byte for byte, the escaped root pinned, backslashes); media.spec.ts "the font folder is the system's: a root with an awkward path (drawtext, T-196)" (a control that the missing file draws the default face, the overlay, the watermark, both together, windir alone). The three Layer 5 swaps that replace the shipped font string with a local one now take that string from `systemFontGraphPath`, so a Windows release run with `SystemRoot` set (often `C:\WINDOWS`) still matches; filters.test.ts clears both variables at its top so its C: pins describe the default on any machine. Red on the unchanged tree: 6 unit and 4 Layer 5 (the control and the "neither set" pin are green there by construction). Mutations, each killed: the root back to the literal C:, the apostrophe's escape removed, the watermark left on the literal, the overlay left on the literal, the colon's escape removed, `windir` dropped.
+- **Lesson.** **A tolerant consumer hides a wrong path: prove a path by what the output carries (the frame is THAT file's), not by the exit code.** And a value printed into a quoted filter option is read once per level of the parser: measure each character on the real binary on a name that holds the awkward characters TOGETHER, because a one-character probe can pass for the wrong reason.
+
+---
+
 ## 2026-11-12 - T-195 (round 144), Track A: a control that reveals siblings goes FIRST in its row, so the control just pressed is never the thing that moves
 
 The eighty-second sweep's item 1 and the class grep it asked for.
@@ -9206,9 +9231,14 @@ to send*, never *whether ffmpeg accepts it*.
   needs a rendered pixel measurement, not coordinate-space reasoning.
 
 ### Known-and-accepted (not bugs, recorded deliberately)
-- drawtext/watermark hardcode `C:/Windows/Fonts/arial.ttf` — fine while
-  the app ships Windows-only (`electron-builder --win portable`); bundle
-  a font before any cross-platform build.
+- drawtext/watermark name the Windows font folder (`.../Fonts/arial.ttf`,
+  `arialbd.ttf`) — fine while the app ships Windows-only
+  (`electron-builder --win portable`); bundle a font before any
+  cross-platform build. **[AMENDED 2026-11-12, T-196 (2), round 145: it no
+  longer hardcodes the C: drive.** The folder is `%SystemRoot%\Fonts`, else
+  `%windir%`, else `C:\Windows` (`systemFontGraphPath`, filters.ts), read when
+  the graph is built, so a Windows on another drive finds its fonts. The
+  acceptance still holds for anything that is not Windows.]
 - `sandbox: false` in BrowserWindow — flipping it requires a CJS preload
   (electron-vite currently emits ESM) and a real regression pass;
   recommended as its own follow-up experiment, not a drive-by.
