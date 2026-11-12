@@ -10146,7 +10146,10 @@ IMG-PREC.
      unmounts, so the press records "this control had focus" in module scope (Record's T-189 press-recorded flag, but
      it must survive the swap), and the new content's mount effect consumes it, moving focus only while focus is on
      `<body>` or null. A drop, a mouse press with nothing focused, a project opened from Home and an autosave Restore
-     move nothing.
+     move nothing. **The last layer too** (found by the Track A worker): removing a canvas's last layer - its ✕, the
+     Delete key, Ctrl+Z - swaps the editor back to the empty state with the focused control inside it, and focus falls
+     to the page. The editor root's detach records it (a stable callback ref: React detaches a ref before it removes
+     the node, so the focused control is still known) and the empty state's "Import image" takes the focus.
   5. **[LOW] A double-click on a layer's Move up or Move down leaves the order as it was, with two Undo steps**
      (image-studio/LayerPanel.tsx:119-140: neither arrow has `isRepeatPress`, where Duplicate and Remove do, :145,
      :159). The first press swaps the two rows; the swapped-in layer's same arrow is now under the pointer (the row's
@@ -10162,7 +10165,10 @@ IMG-PREC.
   (red: the body); a real double-click on a middle layer's Move up moves it one row and adds one Undo step (red on the
   base: the order is unchanged and two steps are added), and the same for Move down. E2E (video-core.spec.ts NEW
   describe) - Choose file… with Enter lands focus on the Player's Play (red: the body); Close with Enter lands it on
-  Choose file… (red: the body). Docs: IC rows revised in place (round
+  Choose file… (red: the body); in the audio and video describes, a Choose file… whose file fails to load and then a drop
+  moves nothing (pins the importers' `finally` drop). E2E (image.spec.ts) - the only layer's ✕ pressed with Enter and
+  Delete from a toolbar tool each land focus on "Import image" (red: the body); ✕ on one of two layers and a click with
+  nothing focused move nothing. Docs: IC rows revised in place (round
   89's found-not-fixed line, round 138's list-row ruling, T-154 (3)'s Layers row) plus a "Dispositions - round 141,
   Track A" section (both class greps); STYLE_GUIDE's swap rule names the new sites and the module-scope flag; LESSONS at the TOP; TESTING
   paragraph.
