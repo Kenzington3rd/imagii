@@ -1,19 +1,19 @@
-import { useEffect, useState } from 'react'
-import toast from 'react-hot-toast'
+import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import type { AudioJobProgress, AudioOutputFormat } from '@shared/audio'
-import { AUDIO_FORMAT_LABELS, AUDIO_PASS_LABELS } from '@shared/audio'
+import type { AudioOutputFormat } from '@shared/audio'
+import { AUDIO_FORMAT_LABELS, audioPassLabel, audioPassPlan } from '@shared/audio'
 import { assertDefined } from '@shared/assert'
-import { useAudioStore } from './state/audioStore'
+import { landedBesideNote } from '@shared/landedPath'
+import { soundKey, useAudioStore } from './state/audioStore'
+import { cancelAudioExport, useAudioExport } from './state/audioExport'
+import { audioJobRow } from './AudioJobRunning'
+import { basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
-
-interface JobState {
-  jobId: string
-  pass: 'measure' | 'render' | 'mux'
-  percent: number
-  outputPath?: string
-}
+import { toastSaved } from '../../lib/savedToast'
+import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
 
 const FORMATS: AudioOutputFormat[] = ['mp3', 'wav', 'flac', 'aac']
 
@@ -23,84 +23,118 @@ export function ExportDialog(): JSX.Element | null {
   const [format, setFormat] = useState<AudioOutputFormat>('mp3')
   const [bitrate, setBitrate] = useState('192k')
   const [muxBack, setMuxBack] = useState(true)
-  const [job, setJob] = useState<JobState | null>(null)
-  const [running, setRunning] = useState(false)
-
-  useEffect(() => {
-    const off = window.api.audio.onProgress((p: AudioJobProgress) => {
-      setJob((prev) => (prev && prev.jobId === p.jobId ? { ...prev, ...p } : prev))
-    })
-    return off
-  }, [])
+  // T-135 (1): the export's row and running flag are a module store, not this dialog's state - leaving Audio Studio unmounts the dialog, and it came
+  // back idle (Export enabled, no Cancel) over an export main was still rendering. The row is drawn for the file it was made from (or while it runs).
+  const exportJob = useAudioExport((s) => s.job)
+  const running = useAudioExport((s) => s.running)
+  const exportKey = useAudioExport((s) => s.sourceKey)
+  const exportName = useAudioExport((s) => s.sourceName)
+  const job = exportJob !== null && (running || (source !== null && exportKey === soundKey(source))) ? exportJob : null
+  // T-147 (2): "Export — voice.wav", the card's own words (`audioJobRow`), for a running export that belongs to ANOTHER sound than the one open here.
+  // T-149 (fold): while this name is drawn, the pass label beside it sizes to its text (the fixed `w-56` slot only keeps the bar in one place when there is no name):
+  // at 1024 px the name was cut to ~146 px beside a 224 px slot holding ~70 px of text.
+  // T-197 (2): the row names a pass as in progress only while the export runs. A finished row (an `outputPath`, no `error`) shows the file it wrote - the export
+  // queue's finished rows (T-112) - and its bar is named the same; a stopped row (an `error`) keeps the step it stopped in, without the running ellipsis. The ONE label
+  // feeds the visible slot and the bar, so they cannot drift.
+  const finishedPath = job !== null && !job.error && job.outputPath ? job.outputPath : null
+  const rowLabel = job === null ? '' : finishedPath !== null ? basename(finishedPath) : audioPassLabel(job.pass, job.plan, Boolean(job.error))
+  const otherSoundLabel = running && (source === null || exportKey !== soundKey(source)) ? (audioJobRow({ running, job: exportJob, sourceName: exportName })?.label ?? null) : null
+  // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
+  // `busy` state is set only after the awaits in the start (the save dialog), so a double-click ran a second start
+  // in that gap: two save dialogs, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
+  // one's chooser is on screen). Declared with the other hooks, ahead of any early return.
+  const startingRef = useRef(false)
+  // T-124 (20): the re-attached video is a finished file Video Studio can open - the same next step Record's take and Reframe's
+  // 9:16 file offer, through the same ask-before-replace bridge.
+  const editInVideoStudio = useEditInVideoStudio("Couldn't open the cleaned video in Video Studio.")
 
   if (!source) return null
 
   async function startExport(): Promise<void> {
-    if (!source) return
-    const saveFormat = source.fromVideo && muxBack ? 'mp4' : format
-    let outputPath: string | null
+    if (startingRef.current) return
+    startingRef.current = true
     try {
-      const defaultName = await window.api.audio.suggestOutputName(
-        source.fromVideo?.videoPath ?? source.filePath,
-        saveFormat
-      )
-      outputPath = await window.api.audio.pickOutputFile({ defaultName, format: saveFormat })
-    } catch (err) {
-      // Before the first await this was outside any catch: a rejection here
-      // left the button looking fine and the user with no word at all.
-      reportFailure(err, { failed: 'Export failed.' })
-      return
-    }
-    if (!outputPath) return
-
-    const jobId = nanoid(10)
-    // The first phase is the measuring pass when loudness is on (the render
-    // can only start once it is done) — naming "Rendering…" first would say
-    // the wrong thing for as long as the measure takes.
-    setJob({ jobId, pass: chain.loudnorm ? 'measure' : 'render', percent: 0 })
-    setRunning(true)
-    try {
-      if (source.fromVideo && muxBack) {
-        await window.api.audio.mux({
-          jobId,
-          videoPath: source.fromVideo.videoPath,
-          sourcePath: source.filePath,
-          outputPath,
-          chain
-        })
-        toast.success('Cleaned audio attached to the video')
-      } else {
-        await window.api.audio.export({
-          jobId,
-          sourcePath: source.filePath,
-          outputPath,
-          chain,
-          format,
-          bitrate: format === 'mp3' || format === 'aac' ? bitrate : undefined
-        })
-        toast.success('Cleaned audio exported')
+      if (!source) return
+      const saveFormat = source.fromVideo && muxBack ? 'mp4' : format
+      let outputPath: string | null
+      try {
+        // T-125 (7, 22): the name is the person's file's, never the scratch's: the ORIGINAL of a converted import (the video's working copy
+        // is `stream-aB3dE5fG.mp4`), a video as it is, or the AIFF / WMA a sound was taken from, before the scratch WAV it is played from.
+        const defaultName = await window.api.audio.suggestOutputName(soundKey(source), saveFormat)
+        outputPath = await window.api.audio.pickOutputFile({ defaultName, format: saveFormat })
+      } catch (err) {
+        // Before the first await this was outside any catch: a rejection here
+        // left the button looking fine and the user with no word at all.
+        reportFailure(err, { failed: 'Export failed.' })
+        return
       }
-      setJob((prev) => (prev ? { ...prev, percent: 100, outputPath } : prev))
-    } catch (err) {
-      // T-84: a Cancel arrives here too — the killed ffmpeg rejects this
-      // call — carrying the sentinel, so the neutral line is raised from ONE
-      // place (cancelExport below only asks main to stop).
-      reportFailure(err, { failed: 'Export failed.', canceled: 'Audio export canceled.' })
-    } finally {
-      setRunning(false)
-    }
-  }
+      if (!outputPath) return
 
-  // B10 fix (round 16): audio export+mux passes can run for minutes on a
-  // long source. Round 15 wired Cancel into video export / ClipKit /
-  // RecordStudio but the audio dialog was missed. Backend cancelAudioJob
-  // already exists.
-  async function cancelExport(): Promise<void> {
-    if (!job) return
-    try {
-      await window.api.audio.cancel(job.jobId)
-    } catch {
-      /* the export call rejecting on the kill is the signal; nothing to add */
+      const jobId = nanoid(10)
+      // The first phase is the measuring pass when loudness is on (the render
+      // can only start once it is done) — naming "Rendering…" first would say
+      // the wrong thing for as long as the measure takes.
+      const plan = audioPassPlan({
+        loudnorm: chain.loudnorm,
+        reattach: Boolean(source.fromVideo && muxBack),
+        matchLoudness: Boolean(chain.secondaryTrack?.matchLoudness)
+      })
+      if (!useAudioExport.getState().begin({ jobId, pass: plan[0] ?? 'render', plan, percent: 0 }, soundKey(source), source.fileName)) return
+      // The progress listener is this export's own, for as long as it runs (the store holds the row, so it works with this dialog gone).
+      const offProgress = window.api.audio.onProgress((p) => useAudioExport.getState().progress(p))
+      try {
+        // T-140 (1): the file that EXISTS is the one main answers. When the chosen file is open in another app the render is kept beside it
+        // ("name (2)"), and the toast, "Show in folder" and "Edit in Video Studio" are all about that file, with the sentence that says why.
+        let saved = outputPath
+        if (source.fromVideo && muxBack) {
+          const result = await window.api.audio.mux({
+            jobId,
+            videoPath: source.fromVideo.videoPath,
+            sourcePath: source.filePath,
+            outputPath,
+            chain
+          })
+          saved = result.outputPath
+          const note = landedBesideNote(outputPath, saved, 'export')
+          // Only THIS output: an audio-only export has no video for Video Studio to open.
+          toastSaved(note ? `Cleaned audio attached to the video. ${note}` : 'Cleaned audio attached to the video', saved, {
+            label: 'Edit in Video Studio',
+            onClick: () => {
+              void editInVideoStudio(saved)
+            }
+          })
+        } else {
+          const result = await window.api.audio.export({
+            jobId,
+            sourcePath: source.filePath,
+            outputPath,
+            chain,
+            format,
+            bitrate: format === 'mp3' || format === 'aac' ? bitrate : undefined
+          })
+          saved = result.outputPath
+          const note = landedBesideNote(outputPath, saved, 'export')
+          // T-147 (2): ALWAYS the saved toast (T-146's rule for Video Studio's export): the dialog's row, and its Show in folder, are drawn only inside the OPEN sound's
+          // Export panel, so an export that ends after the sound was closed or replaced left no way to the file. No "Edit in Video Studio": there is no video.
+          toastSaved(note ? `Cleaned audio exported. ${note}` : 'Cleaned audio exported', saved)
+        }
+        useAudioExport.getState().done(saved)
+      } catch (err) {
+        // T-84: a Cancel arrives here too — the killed ffmpeg rejects this
+        // call — carrying the sentinel, so the neutral line is raised from ONE
+        // place (`cancelAudioExport` only asks main to stop).
+        const { cancelled, message } = reportFailure(err, {
+          failed: 'Export failed.',
+          canceled: 'Audio export canceled.'
+        })
+        // T-100: the toast fades in a few seconds; the row says what became of it.
+        useAudioExport.getState().fail({ error: message, canceled: cancelled })
+      } finally {
+        offProgress()
+        useAudioExport.getState().finish()
+      }
+    } finally {
+      startingRef.current = false
     }
   }
 
@@ -109,21 +143,36 @@ export function ExportDialog(): JSX.Element | null {
       <PanelHeader icon="download">Export</PanelHeader>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
-        <label className="flex items-center gap-1.5">
-          <span className="text-ink-muted text-xs">Format</span>
-          <select
-            className="bg-bg-base rounded px-2 py-1 disabled:opacity-50"
-            value={format}
-            onChange={(e) => setFormat(e.target.value as AudioOutputFormat)}
-            disabled={Boolean(source.fromVideo && muxBack)}
-          >
-            {FORMATS.map((f) => (
-              <option key={f} value={f}>
-                {AUDIO_FORMAT_LABELS[f]}
-              </option>
-            ))}
-          </select>
-        </label>
+        {/* T-195 (1): FIRST in the row. Format and Bitrate hide while this is ticked, so ahead of it unticking mounted them in front of it and moved it right under the
+            pointer: a double-click's second press landed on the Format select. Behind it, what unticking reveals goes to its right and the pressed control never moves. */}
+        {source.fromVideo ? (
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={muxBack}
+              onChange={(e) => setMuxBack(e.target.checked)}
+            />
+            Re-attach to video (output .mp4)
+          </label>
+        ) : null}
+        {/* T-165 (3): an .mp4 re-attach has no audio format to pick (the sound goes in as AAC), so Format hides under the condition Bitrate does; the `format` state is
+            untouched, so unticking brings it back at the person's pick. */}
+        {!(source.fromVideo && muxBack) ? (
+          <label className="flex items-center gap-1.5">
+            <span className="text-ink-muted text-xs">Format</span>
+            <select
+              className="bg-bg-base rounded px-2 py-1"
+              value={format}
+              onChange={(e) => setFormat(e.target.value as AudioOutputFormat)}
+            >
+              {FORMATS.map((f) => (
+                <option key={f} value={f}>
+                  {AUDIO_FORMAT_LABELS[f]}
+                </option>
+              ))}
+            </select>
+          </label>
+        ) : null}
         {(format === 'mp3' || format === 'aac') &&
         !(source.fromVideo && muxBack) ? (
           <label className="flex items-center gap-1.5">
@@ -138,16 +187,6 @@ export function ExportDialog(): JSX.Element | null {
               <option value="256k">256 kbps</option>
               <option value="320k">320 kbps</option>
             </select>
-          </label>
-        ) : null}
-        {source.fromVideo ? (
-          <label className="flex items-center gap-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={muxBack}
-              onChange={(e) => setMuxBack(e.target.checked)}
-            />
-            Re-attach to video (output .mp4)
           </label>
         ) : null}
         {source.fromVideo && muxBack && chain.cutRegions.length > 0 ? (
@@ -165,28 +204,42 @@ export function ExportDialog(): JSX.Element | null {
           {running ? 'Exporting…' : 'Export'}
         </button>
         {running && job ? (
-          <button
-            type="button"
-            className="px-3 py-1.5 text-sm rounded bg-bg-hover hover:bg-bg-elevated text-ink-base"
-            onClick={cancelExport}
-          >
-            Cancel
-          </button>
+          <RunningCancel title="Cancel export" onClick={() => void cancelAudioExport()} />
         ) : null}
       </div>
 
       {job ? (
         <div className="flex items-center gap-3 text-sm">
-          <span className="text-xs text-ink-muted w-36">{AUDIO_PASS_LABELS[job.pass]}</span>
-          <div className="flex-1 h-1.5 bg-bg-hover rounded-full overflow-hidden">
-            <div
-              className="h-full bg-accent"
-              style={{ width: `${Math.round(job.percent)}%` }}
-            />
-          </div>
-          <span className="font-mono text-xs text-ink-muted w-10 text-right">
+          {/* T-147 (2): the row is drawn while an export runs even under ANOTHER sound (the store holds it), so it says which file it is for - `AudioJobRunning`'s
+              name, the same `min-w-0 flex-1 truncate` span with its whole self as the title. Under the sound the export is FOR, the panel is that sound's: no name. */}
+          {otherSoundLabel ? (
+            <span className="min-w-0 flex-1 truncate text-xs" title={otherSoundLabel}>
+              {otherSoundLabel}
+            </span>
+          ) : null}
+          {/* T-128: a cut file name carries the whole path as its title. */}
+          <span className={`text-xs text-ink-muted shrink-0 truncate ${otherSoundLabel ? '' : 'w-56'}`} title={finishedPath ?? undefined}>{rowLabel}</span>
+          {/* T-112: a bar is a progressbar to a screen reader, named by the pass it is in
+              ("Step 2 of 2 — rendering") like the Captions and Reframe rows. */}
+          <ProgressTrack
+            label={rowLabel}
+            percent={job.percent}
+            tone={job.error ? (job.canceled ? 'canceled' : 'failed') : 'active'}
+          />
+          <span className="font-mono text-xs text-ink-muted w-10 shrink-0 whitespace-nowrap text-right">
             {Math.round(job.percent)}%
           </span>
+          {/* T-100: the words for a bar that stopped — a red or gray bar alone
+              never said whether the file was lost to a fault or to the user's
+              own Cancel. Same two words, same rule, as the video queue. */}
+          {job.error ? (
+            <span
+              className={`text-xs font-medium ${job.canceled ? 'text-ink-muted' : 'text-danger'}`}
+              title={job.error}
+            >
+              {job.canceled ? 'Canceled' : 'Failed'}
+            </span>
+          ) : null}
           {job.outputPath ? (
             <button
               className="text-xs text-accent hover:underline"

@@ -176,17 +176,27 @@ describe('reconcileDeviceId — a pick survives only while the device does', () 
   })
 })
 
-describe('noDeviceHint — names the real recovery', () => {
-  it('microphone: plug in or allow access in Windows privacy settings, then Refresh sources', () => {
+describe('noDeviceHint — names the real recoveries', () => {
+  it('microphone: plug in, close the app that has it, or allow access in Windows privacy settings, then Refresh sources', () => {
     expect(noDeviceHint('microphone')).toBe(
-      'No microphone found. Plug one in, or allow microphone access in Windows privacy settings, then click Refresh sources.'
+      'No microphone found. Plug one in, close any other app using it, or allow microphone access in Windows privacy settings, then click Refresh sources. To record without one, uncheck Record microphone.'
     )
   })
 
   it('camera: the same sentence for a camera', () => {
     expect(noDeviceHint('camera')).toBe(
-      'No camera found. Plug one in, or allow camera access in Windows privacy settings, then click Refresh sources.'
+      'No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources.'
     )
+  })
+
+  it('names the third recovery the probe cannot tell apart from the other two: a device another app is holding (T-122)', () => {
+    // A camera OBS has open rejects the probe exactly as an absent or a blocked one does (`probe` in devices.ts
+    // says all three mean "not available to record from" and that the hint "names the recoveries"), so a hint
+    // that names two sends the streamer to Windows privacy settings for a camera that is simply busy. The
+    // Start path's own sentence for NotReadableError already says it ("Close any app using it").
+    for (const kind of ['microphone', 'camera'] as const) {
+      expect(noDeviceHint(kind)).toMatch(/close any other app using it/)
+    }
   })
 
   it('does not send the user to "grant permission" without saying where', () => {
@@ -194,5 +204,18 @@ describe('noDeviceHint — names the real recovery', () => {
       expect(noDeviceHint(kind)).toMatch(/Windows privacy settings/)
       expect(noDeviceHint(kind)).not.toMatch(/after granting permission/)
     }
+  })
+})
+
+describe('noDeviceHint - the microphone has a remedy of its own (T-171 (5))', () => {
+  it('the microphone hint ends with the way to record without one', () => {
+    expect(noDeviceHint('microphone').endsWith(' To record without one, uncheck Record microphone.')).toBe(true)
+  })
+
+  it('the camera hint is unchanged: a missing camera already records screen-only, so it names no check box', () => {
+    expect(noDeviceHint('camera')).toBe(
+      'No camera found. Plug one in, close any other app using it, or allow camera access in Windows privacy settings, then click Refresh sources.'
+    )
+    expect(noDeviceHint('camera')).not.toMatch(/uncheck/)
   })
 })

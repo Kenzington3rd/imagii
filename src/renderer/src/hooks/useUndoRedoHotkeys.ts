@@ -1,15 +1,20 @@
 import { useEffect } from 'react'
-import { isModalOpen } from '../components/Modal'
+import { anyDialogClaim } from './useFocusTrap'
+import { inputTypeOf, isTextEntryTarget, shortcutKey } from '../lib/keyOwnership'
 
 /** The subset of a KeyboardEvent the undo/redo decision needs. */
 export interface UndoRedoKey {
   key: string
+  /** The key's position (`KeyboardEvent.code`): a non-Latin layout's `key` is not "z" (T-185 (1)). */
+  code: string
   ctrlKey: boolean
   metaKey: boolean
   shiftKey: boolean
   /** `event.target`'s tagName — typing must never trigger studio undo. */
   tagName: string
-  /** Is a `<Modal>` open? A dialog is a claim over the window (T-68). */
+  /** The target's `type` when it is an `<input>`: a checkbox or a slider is not a field anyone types in (T-123 (2)). */
+  inputType?: string | null
+  /** Is a dialog open, a `<Modal>` or the tutorial coachmark (`anyDialogClaim`)? A dialog is a claim over the window (T-68, T-75). */
   modalOpen: boolean
 }
 
@@ -28,11 +33,14 @@ export function undoRedoIntent(e: UndoRedoKey): 'undo' | 'redo' | null {
   // closes; the same hole let Delete remove a layer behind the Variants
   // dialog. Both are the window-level handler answering for a window it no
   // longer owns.
-  if (e.tagName === 'INPUT' || e.tagName === 'TEXTAREA') return null
+  // T-123 (2): a text field - not "any INPUT". A checkbox that was just ticked or a slider that was just dragged stays
+  // focused, and it has no undo of its own: Ctrl+Z over it is the studio's.
+  if (isTextEntryTarget(e.tagName, e.inputType)) return null
   if (e.modalOpen) return null
   const ctrl = e.ctrlKey || e.metaKey
   if (!ctrl) return null
-  const key = e.key.toLowerCase()
+  // T-185 (1): the letter by `shortcutKey`, so Ctrl+Z undoes on a Russian or Greek layout too (`key` "я", `code` KeyZ).
+  const key = shortcutKey(e)
   if (key === 'z' && !e.shiftKey) return 'undo'
   if (key === 'y' || (key === 'z' && e.shiftKey)) return 'redo'
   return null
@@ -47,11 +55,13 @@ export function useUndoRedoHotkeys(undo: () => void, redo: () => void): void {
     function onKey(e: KeyboardEvent): void {
       const intent = undoRedoIntent({
         key: e.key,
+        code: e.code,
         ctrlKey: e.ctrlKey,
         metaKey: e.metaKey,
         shiftKey: e.shiftKey,
         tagName: (e.target as HTMLElement | null)?.tagName ?? '',
-        modalOpen: isModalOpen()
+        inputType: inputTypeOf(e.target),
+        modalOpen: anyDialogClaim()
       })
       if (!intent) return
       e.preventDefault()

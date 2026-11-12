@@ -50,7 +50,7 @@ export const imageTutorial: TutorialDef = {
     {
       id: 'done',
       title: "You're ready",
-      body: 'The ? button in the header replays this tour any time. It only points at what is on screen, so it covers more once your canvas has a layer.',
+      body: 'The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on. The tour only points at what is on screen, so it covers more once your canvas has a layer.',
       placement: 'center'
     }
   ]

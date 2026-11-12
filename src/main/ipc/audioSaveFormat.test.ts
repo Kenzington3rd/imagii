@@ -39,7 +39,7 @@ const { registerAudioIpc } = await import('./audio')
 async function call(channel: string, ...args: unknown[]): Promise<unknown> {
   const h = handlers.get(channel)
   if (!h) throw new Error(`${channel} was not registered`)
-  return h({ sender: { send: vi.fn() } }, ...args)
+  return h({ sender: { isDestroyed: () => false, send: vi.fn() } }, ...args)
 }
 
 const SRC = `${tmpdir()}/my voice.wav`
@@ -99,5 +99,14 @@ describe('audio:pickOutputFile', () => {
     showSaveDialog.mockClear()
     await expect(call('audio:pickOutputFile', { format: '../../x' })).rejects.toThrow(/format/)
     expect(showSaveDialog).not.toHaveBeenCalled()
+  })
+})
+
+// T-183 (2): the suggestion is `<base>-cleaned.<ext>`; a long source name is cut and the tail stays.
+describe('audio:suggestOutputName of a long source name (T-183 (2))', () => {
+  it('keeps -cleaned and the extension, at most 255 bytes', async () => {
+    const name = String(await call('audio:suggestOutputName', `${tmpdir()}/${'a'.repeat(250)}.wav`, 'mp3'))
+    expect(name).toMatch(/^a{200,}-cleaned\.mp3$/)
+    expect(Buffer.byteLength(name, 'utf8')).toBeLessThanOrEqual(255)
   })
 })

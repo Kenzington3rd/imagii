@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { expandFilenameTemplate, sanitizeFilename } from './filename'
+import { describe, it, expect, vi, afterEach } from 'vitest'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
+import path from 'node:path'
+import { FORBIDDEN_NAME_CHARS, expandFilenameTemplate, fitFileName, nameWithTail, safeNamePart, sanitizeFilename, localDate, localTime, localStamp } from './filename'
 
 describe('sanitizeFilename', () => {
   it('passes through alphanumeric, dash, underscore unchanged', () => {
@@ -24,6 +26,61 @@ describe('sanitizeFilename', () => {
     expect(sanitizeFilename('')).toBe('clip')
     expect(sanitizeFilename('!!!')).toBe('clip')
     expect(sanitizeFilename('🎉🎉🎉')).toBe('clip')
+  })
+
+  // T-121: the class was ASCII `\w`. "Épico clutch" came out `pico_clutch` and a Korean clip name came out as
+  // the fallback `clip`, so two clips named in Hangul shared one name and the kit's files collided.
+  describe('letters and numbers of any script survive', () => {
+    it('keeps an accented capital: "Épico clutch" is Épico_clutch, not pico_clutch', () => {
+      expect(sanitizeFilename('Épico clutch')).toBe('Épico_clutch')
+      expect(sanitizeFilename('ñandú-fast_run')).toBe('ñandú-fast_run')
+      expect(sanitizeFilename('Straße 2')).toBe('Straße_2')
+    })
+
+    it('keeps a Korean name, not the fallback', () => {
+      expect(sanitizeFilename('클립 이름')).toBe('클립_이름')
+      expect(sanitizeFilename('한국어')).toBe('한국어')
+    })
+
+    it('keeps Japanese, Chinese, Cyrillic, Arabic and Hebrew names', () => {
+      expect(sanitizeFilename('クリップ名')).toBe('クリップ名')
+      expect(sanitizeFilename('精彩时刻 第2集')).toBe('精彩时刻_第2集')
+      expect(sanitizeFilename('Клип дня')).toBe('Клип_дня')
+      expect(sanitizeFilename('نادي الفيديو')).toBe('نادي_الفيديو')
+      expect(sanitizeFilename('שלום עולם')).toBe('שלום_עולם')
+    })
+
+    it('two different Hangul names are two different file names (they used to collide on "clip")', () => {
+      expect(sanitizeFilename('첫 번째')).not.toBe(sanitizeFilename('두 번째'))
+    })
+
+    it('a combining mark stays on the letter it modifies: a decomposed é, a Thai or Hindi word', () => {
+      expect(sanitizeFilename('E\u0301pico clutch')).toBe('E\u0301pico_clutch')
+      expect(sanitizeFilename('สวัสดี ชาวโลก')).toBe('สวัสดี_ชาวโลก')
+      expect(sanitizeFilename('हिन्दी क्लिप')).toBe('हिन्दी_क्लिप')
+    })
+
+    it('an emoji still goes, and its variation selector does not survive as an invisible name', () => {
+      expect(sanitizeFilename('\u2764\uFE0F')).toBe('clip')
+      expect(sanitizeFilename('\u2764\uFE0F love')).toBe('love')
+      expect(sanitizeFilename('Big W!! 🎉')).toBe('Big_W')
+    })
+
+    it('a mark follows a letter, a number, an underscore or a dash - the docstring says so (T-122), because that is what the class does', () => {
+      // `a_️b` keeps its U+FE0F: the mark rides on the `_` (and on a `-`). Harmless, so the class is not tightened;
+      // the sentence that claimed a mark stays "only on the letter or number it modifies" overclaimed.
+      expect(sanitizeFilename('a_️b')).toBe('a_️b')
+      expect(sanitizeFilename('a-️b')).toBe('a-️b')
+      // ...and it still does not ride on the thing an emoji IS: that goes, and so does the selector after it.
+      expect(sanitizeFilename('a❤️b')).toBe('a_b')
+    })
+
+    it('path separators, dots and reserved characters are still never kept, in any script', () => {
+      expect(sanitizeFilename('한국어/..\\x')).toBe('한국어_x')
+      expect(sanitizeFilename('..\\..\\Épico')).toBe('Épico')
+      expect(sanitizeFilename('a:b*c?d"e<f>g|h')).toBe('a_b_c_d_e_f_g_h')
+      expect(sanitizeFilename('clip.mp4')).toBe('clip_mp4')
+    })
   })
 
   it('handles non-string input defensively', () => {
@@ -63,5 +120,483 @@ describe('expandFilenameTemplate', () => {
       ext: 'mp4'
     })
     expect(out).toMatch(/^bad_name_here\.mp4$/)
+  })
+})
+
+// T-122 (2): `{handle}` was the last ASCII sanitizer. `[^A-Za-z0-9_]` emptied a handle written in any other script
+// ("@토끼" -> ""), the exact class T-121 (7) closed for clip names, and there was no `{handle}` case at all.
+describe('the {handle} token keeps a handle written in any script (T-122)', () => {
+  const handleName = (handle: string | undefined): string =>
+    expandFilenameTemplate('{handle}', { source: 'vod', handle, ext: 'mp4' })
+
+  it('ASCII behaves as before: the @ and everything else outside letters, numbers and _ goes', () => {
+    expect(handleName('@MyHandle_9')).toBe('MyHandle_9.mp4')
+    expect(handleName('my.handle')).toBe('myhandle.mp4')
+    expect(handleName('my-handle x')).toBe('myhandlex.mp4')
+  })
+
+  it('keeps a Korean handle: "@토끼" is 토끼, not the empty string (and so not the "export" fallback)', () => {
+    expect(handleName('@토끼')).toBe('토끼.mp4')
+    expect(expandFilenameTemplate('{source}_{handle}', { source: 'vod', handle: '@토끼', ext: 'mp4' })).toBe('vod_토끼.mp4')
+  })
+
+  it('keeps Japanese, Chinese, Cyrillic, Arabic, Hebrew and accented Latin handles', () => {
+    expect(handleName('@うさぎ')).toBe('うさぎ.mp4')
+    expect(handleName('@兔子')).toBe('兔子.mp4')
+    expect(handleName('@Кролик')).toBe('Кролик.mp4')
+    expect(handleName('@أرنب')).toBe('أرنب.mp4')
+    expect(handleName('@ארנב')).toBe('ארנב.mp4')
+    expect(handleName('@Épico_9')).toBe('Épico_9.mp4')
+  })
+
+  it('a combining mark stays on its letter: a decomposed accent, a Thai or Hindi handle', () => {
+    expect(handleName('@Épico')).toBe('Épico.mp4')
+    expect(handleName('@สวัสดี')).toBe('สวัสดี.mp4')
+    expect(handleName('@हिन्दी')).toBe('हिन्दी.mp4')
+  })
+
+  it('an emoji goes, and its variation selector does not survive as an invisible name (the T-121 (7) case)', () => {
+    expect(handleName('@Streamer❤️')).toBe('Streamer.mp4')
+    // nothing but an emoji is nothing: the template falls back as it does for any empty result.
+    expect(handleName('❤️')).toBe('export.mp4')
+  })
+
+  it('path separators, dots and reserved characters are never kept, in any script', () => {
+    expect(handleName('../토끼/x:y')).toBe('토끼xy.mp4')
+    expect(handleName('a\\b*c?d"e<f>g|h')).toBe('abcdefgh.mp4')
+    expect(handleName('..')).toBe('export.mp4')
+  })
+
+  it('no handle is still no handle', () => {
+    expect(handleName(undefined)).toBe('export.mp4')
+    expect(handleName('')).toBe('export.mp4')
+    expect(expandFilenameTemplate('{source}_{handle}', { source: 'vod', ext: 'mp4' })).toBe('vod_.mp4')
+  })
+})
+
+// ── T-117 (3): a date in a file or folder name is the date ON THE PERSON'S CLOCK ────────────────────
+// The export panel's {date} and {time} were local; the Clip Kit folder (`<name>-kit-<date>`, main) and
+// Record's default file name (`recording-<stamp>`, renderer) came from `toISOString()`, which is UTC.
+// An evening streamer in Pacific time (UTC-7) got a kit dated tomorrow, and a take named for the day
+// after it was made. All three now read the same three helpers.
+
+/** Run `fn` with the process clock set to `tz` (Node re-reads TZ on assignment), then put it back. */
+function inTimeZone<T>(tz: string, fn: () => T): T {
+  const was = process.env.TZ
+  process.env.TZ = tz
+  try {
+    return fn()
+  } finally {
+    if (was === undefined) delete process.env.TZ
+    else process.env.TZ = was
+  }
+}
+
+/** A Date whose LOCAL fields say one thing and whose UTC fields say another, in any process time zone. */
+function dateWithOffset(local: [number, number, number, number, number, number], utcIso: string): Date {
+  const d = new Date(utcIso)
+  const [y, mo, day, h, mi, s] = local
+  Object.assign(d, {
+    getFullYear: () => y,
+    getMonth: () => mo - 1,
+    getDate: () => day,
+    getHours: () => h,
+    getMinutes: () => mi,
+    getSeconds: () => s
+  })
+  return d
+}
+
+describe('local date and time stamps (T-117)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('read the local fields, not the UTC ones (a Date that says 21:23 on the 10th here and the 11th in UTC)', () => {
+    const evening = dateWithOffset([2026, 10, 10, 21, 23, 2], '2026-10-11T04:23:02.000Z')
+    expect(evening.toISOString().slice(0, 10), 'the fixture really is "tomorrow" in UTC').toBe('2026-10-11')
+    expect(localDate(evening)).toBe('2026-10-10')
+    expect(localTime(evening)).toBe('21-23')
+    expect(localStamp(evening)).toBe('2026-10-10T21-23-02')
+  })
+
+  it('and the other way round: a clock east of UTC is ahead of the ISO string', () => {
+    const morning = dateWithOffset([2026, 10, 11, 9, 30, 5], '2026-10-10T20:30:05.000Z')
+    expect(localDate(morning)).toBe('2026-10-11')
+    expect(localStamp(morning)).toBe('2026-10-11T09-30-05')
+  })
+
+  it.each([
+    ['America/Los_Angeles', '2026-10-11T04:23:02Z', '2026-10-10', '21-23', '2026-10-10T21-23-02'],
+    ['Pacific/Auckland', '2026-10-10T20:30:05Z', '2026-10-11', '09-30', '2026-10-11T09-30-05'],
+    ['UTC', '2026-10-11T04:23:02Z', '2026-10-11', '04-23', '2026-10-11T04-23-02']
+  ])('in %s, the real clock at %s is %s %s', (tz, iso, date, time, stamp) => {
+    inTimeZone(tz, () => {
+      const at = new Date(iso)
+      expect(localDate(at)).toBe(date)
+      expect(localTime(at)).toBe(time)
+      expect(localStamp(at)).toBe(stamp)
+    })
+  })
+
+  it('with no argument they read now, through the fake clock (what makeKitDir and Record call)', () => {
+    inTimeZone('America/Los_Angeles', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-10-11T04:23:02Z'))
+      expect(localDate()).toBe('2026-10-10')
+      expect(localStamp()).toBe('2026-10-10T21-23-02')
+    })
+  })
+
+  it('pad single digits, and a stamp is safe in a Windows file name (no colon, no dot, no space)', () => {
+    const early = dateWithOffset([2026, 1, 2, 3, 4, 5], '2026-01-02T03:04:05.000Z')
+    expect(localDate(early)).toBe('2026-01-02')
+    expect(localTime(early)).toBe('03-04')
+    expect(localStamp(early)).toBe('2026-01-02T03-04-05')
+    for (const v of [localDate(early), localTime(early), localStamp(early), localStamp()]) {
+      expect(v).toMatch(/^[0-9T-]+$/)
+    }
+  })
+
+  it('the export panel\'s {date} and {time} are the same two helpers - one convention, not three', () => {
+    inTimeZone('America/Los_Angeles', () => {
+      vi.useFakeTimers()
+      vi.setSystemTime(new Date('2026-10-11T04:23:02Z'))
+      expect(expandFilenameTemplate('{date}_{time}', { source: 's', ext: 'mp4' })).toBe('2026-10-10_21-23.mp4')
+    })
+  })
+})
+
+describe('nothing under src names a file or folder from the UTC ISO string (T-117)', () => {
+  // The two places that did were the kit folder and the recording's name. A third is how it comes back.
+  const SRC = path.resolve(__dirname, '..')
+  const UTC_STAMP = /\.toISOString\(\)/
+
+  function sources(dir: string): string[] {
+    return readdirSync(dir).flatMap((name) => {
+      const full = path.join(dir, name)
+      if (statSync(full).isDirectory()) return sources(full)
+      return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [full] : []
+    })
+  }
+
+  it('no non-test source calls toISOString()', () => {
+    const files = sources(SRC)
+    expect(files.length, 'the scan found the sources').toBeGreaterThan(100)
+    const offenders = files
+      .filter((f) => UTC_STAMP.test(readFileSync(f, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')))
+      .map((f) => path.relative(SRC, f))
+    expect(offenders, 'a name or folder stamped from toISOString() is UTC - use localDate / localStamp (shared/filename.ts)').toEqual([])
+  })
+
+  it('the scan discriminates', () => {
+    expect(UTC_STAMP.test('new Date().toISOString().slice(0, 10)')).toBe(true)
+    expect(UTC_STAMP.test('localDate()')).toBe(false)
+  })
+})
+
+// T-183 (2): the name a person gave plus what imagii adds must still be a file name the disk can hold.
+describe('fitFileName - a stem cut to leave room for its suffix (T-183 (2))', () => {
+  const bytes = (s: string): number => Buffer.byteLength(s, 'utf8')
+  /** A lone surrogate does not survive UTF-8 (it comes back as U+FFFD), so a round trip that changes nothing proves no code point was split. */
+  const wholeCodePoints = (s: string): boolean => Buffer.from(s, 'utf8').toString('utf8') === s
+  const ASTRAL = String.fromCodePoint(0x1f600) // 4 bytes in UTF-8, 2 UTF-16 units
+
+  it('keeps a stem that already fits, exactly as it was (even one that ends in a dot or a space)', () => {
+    expect(fitFileName('clip', '.mp4', 'utf8')).toBe('clip')
+    expect(fitFileName('clip.', '.mp4', 'utf8')).toBe('clip.')
+    expect(fitFileName('x'.repeat(251), '.mp4', 'utf8')).toBe('x'.repeat(251))
+  })
+
+  it('cuts a 300-character ASCII stem so that stem + suffix is exactly 255 bytes', () => {
+    const out = fitFileName('a'.repeat(300), '.mp4', 'utf8')
+    expect(out).toBe('a'.repeat(251))
+    expect(bytes(`${out}.mp4`)).toBe(255)
+    // The suffix is counted: a longer tail leaves a shorter stem.
+    expect(bytes(`${fitFileName('a'.repeat(300), ' (2).mp4', 'utf8')} (2).mp4`)).toBe(255)
+    expect(bytes(`${fitFileName('a'.repeat(300), '.0123abcd.partial.mp4', 'utf8')}.0123abcd.partial.mp4`)).toBe(255)
+  })
+
+  it('counts UTF-8 BYTES, not characters: 200 two-byte letters do not fit and are cut to whole letters', () => {
+    const stem = '\u00e9'.repeat(200) // 400 bytes, 200 UTF-16 units
+    const out = fitFileName(stem, '.mp4', 'utf8')
+    expect(bytes(`${out}.mp4`)).toBeLessThanOrEqual(255)
+    expect(out).toBe('\u00e9'.repeat(125)) // 250 bytes + 4 = 254; a 126th letter would be 256
+    expect(wholeCodePoints(out)).toBe(true)
+    // Three-byte characters (CJK) the same way.
+    const cjk = fitFileName('\u6f22'.repeat(100), '.mp4', 'utf8')
+    expect(cjk).toBe('\u6f22'.repeat(83))
+    expect(bytes(`${cjk}.mp4`)).toBeLessThanOrEqual(255)
+  })
+
+  it('never splits a surrogate pair: an astral glyph that does not fit is dropped whole', () => {
+    // 249 ASCII + glyphs: the first glyph needs 4 bytes, room is 251 - 249 = 2, so none fit and none is half-written.
+    const out = fitFileName('x'.repeat(249) + ASTRAL.repeat(5), '.mp4', 'utf8')
+    expect(out).toBe('x'.repeat(249))
+    expect(wholeCodePoints(out)).toBe(true)
+    // One that does fit stays whole: 247 + 4 = 251.
+    const kept = fitFileName('x'.repeat(247) + ASTRAL.repeat(5), '.mp4', 'utf8')
+    expect(kept).toBe('x'.repeat(247) + ASTRAL)
+    expect(wholeCodePoints(kept)).toBe(true)
+    expect(bytes(`${kept}.mp4`)).toBe(255)
+    // A stem of nothing but glyphs: 62 of them (248 bytes) fit in 251.
+    const all = fitFileName(ASTRAL.repeat(100), '.mp4', 'utf8')
+    expect([...all].length).toBe(62)
+    expect(wholeCodePoints(all)).toBe(true)
+  })
+
+  it('trims the spaces and dots a cut leaves at the end (Windows drops them, so the file would land under another name)', () => {
+    expect(fitFileName('x'.repeat(249) + ' .' + 'y'.repeat(20), '.mp4', 'utf8')).toBe('x'.repeat(249))
+    expect(fitFileName('x'.repeat(246) + ' . . ' + 'y'.repeat(20), '.mp4', 'utf8')).toBe('x'.repeat(246))
+    expect(fitFileName('x'.repeat(250) + '. ' + 'y'.repeat(20), '.mp4', 'utf8')).toBe('x'.repeat(250))
+  })
+
+  it('takes the limit as an argument, and a suffix with no room leaves nothing of the stem', () => {
+    expect(fitFileName('abcdef', '.x', 'utf8', 5)).toBe('abc')
+    expect(fitFileName('abcdef', '.mp4', 'utf8', 4)).toBe('')
+    expect(fitFileName('abc', '.mp4', 'utf8', 1)).toBe('')
+  })
+})
+
+describe('nameWithTail - the base is cut, the descriptive tail is kept (T-183 (2))', () => {
+  const bytes = (s: string): number => Buffer.byteLength(s, 'utf8')
+
+  it('a base that fits is `<base><tail>`, exactly', () => {
+    expect(nameWithTail('stream', '_480px_15fps.gif', 'utf8')).toBe('stream_480px_15fps.gif')
+    expect(nameWithTail('x'.repeat(200), '_compilation.mp4', 'utf8')).toBe(`${'x'.repeat(200)}_compilation.mp4`)
+  })
+
+  it('a 250-character base is cut and the whole tail stays, leaving room for a " (9999)" copy', () => {
+    const tail = '_reframe-1080x1920-center.mp4'
+    const out = nameWithTail('b'.repeat(250), tail, 'utf8')
+    expect(out.endsWith(tail)).toBe(true)
+    expect(bytes(out)).toBe(255 - ' (9999)'.length)
+    // The " (2)" of it is a legal name that still has the tail before the extension.
+    const second = `${out.slice(0, -'.mp4'.length)} (9999).mp4`
+    expect(bytes(second)).toBeLessThanOrEqual(255)
+    expect(second.endsWith('_reframe-1080x1920-center (9999).mp4')).toBe(true)
+  })
+
+  it('cuts whole characters by bytes, and a trailing space or dot of the cut base is trimmed', () => {
+    const out = nameWithTail('é'.repeat(200), '-cleaned.mp3', 'utf8')
+    expect(bytes(out)).toBeLessThanOrEqual(255)
+    expect(out).toMatch(/^é+-cleaned\.mp3$/)
+    expect(nameWithTail(`${'k'.repeat(240)}. ${'m'.repeat(40)}`, '_pip.mp4', 'utf8')).toMatch(/^k{240}_pip\.mp4$/)
+  })
+})
+
+/**
+ * T-184 (2) - a name is counted in the drive's own unit, and the names the renderer builds are fitted where they are built.
+ *
+ * T-183 counted UTF-8 bytes everywhere, but the shipped build is Windows-only, where a file name holds 255 UTF-16 UNITS: a kanji, kana or Hangul character is one
+ * unit there and three bytes here, so a 78-character Japanese title lost its platform tag. `fitFileName` and `nameWithTail` take the unit; main passes the drive's
+ * (`NAME_UNIT`), and the renderer's builders pass `'utf16'`, the gate's own (`name.length <= 255`).
+ */
+describe("fitFileName / nameWithTail in 'utf16' - the unit a Windows file name is counted in (T-184 (2))", () => {
+  const KANJI = '漢'
+  const ASTRAL = String.fromCodePoint(0x1f600) // 2 UTF-16 units, 4 UTF-8 bytes
+  const units = (s: string): number => s.length
+
+  it('keeps a 200-character CJK stem whole (200 units), where UTF-8 would charge 600 bytes and cut it', () => {
+    expect(fitFileName(KANJI.repeat(200), '.mp4', 'utf16')).toBe(KANJI.repeat(200))
+    expect(fitFileName(KANJI.repeat(200), '.mp4', 'utf8')).toBe(KANJI.repeat(83))
+  })
+
+  it('cuts a 300-character stem to exactly 255 units with its suffix, in either script', () => {
+    expect(fitFileName('a'.repeat(300), '.mp4', 'utf16')).toBe('a'.repeat(251))
+    const cjk = fitFileName(KANJI.repeat(300), '_youtube.mp4', 'utf16')
+    expect(units(`${cjk}_youtube.mp4`)).toBe(255)
+    expect(cjk).toBe(KANJI.repeat(243))
+  })
+
+  it('an astral glyph costs two units and is never split: one that does not fit is dropped whole', () => {
+    // room for ".mp4" is 251: 249 + one glyph (2) = 251 fits, 250 + a glyph would be 252.
+    expect(fitFileName('x'.repeat(249) + ASTRAL.repeat(5), '.mp4', 'utf16')).toBe('x'.repeat(249) + ASTRAL)
+    expect(fitFileName('x'.repeat(250) + ASTRAL.repeat(5), '.mp4', 'utf16')).toBe('x'.repeat(250))
+    const all = fitFileName(ASTRAL.repeat(200), '.mp4', 'utf16')
+    expect([...all].length).toBe(125) // 250 units; a 126th glyph would be 252 > 251
+    expect(Buffer.from(all, 'utf8').toString('utf8')).toBe(all) // no half pair survived
+  })
+
+  it('a lone surrogate is one unit, as JS length counts it', () => {
+    expect(fitFileName('x'.repeat(250) + '\ud83d' + 'y'.repeat(10), '.mp4', 'utf16')).toBe('x'.repeat(250) + '\ud83d')
+  })
+
+  it("still trims the spaces and dots a cut leaves, and takes the limit as an argument", () => {
+    expect(fitFileName('x'.repeat(249) + ' .' + 'y'.repeat(20), '.mp4', 'utf16')).toBe('x'.repeat(249))
+    expect(fitFileName('abcdef', '.x', 'utf16', 5)).toBe('abc')
+    expect(fitFileName('abc', '.mp4', 'utf16', 1)).toBe('')
+  })
+
+  it("'utf8' is what T-183 had: 200 two-byte letters are cut at 125", () => {
+    expect(fitFileName('é'.repeat(200), '.mp4', 'utf8')).toBe('é'.repeat(125))
+    expect(fitFileName('é'.repeat(200), '.mp4', 'utf16')).toBe('é'.repeat(200))
+  })
+
+  it('nameWithTail keeps a 200-kanji base whole with its tail, and cuts a 300-kanji one to 248 units (room for " (9999)") with the tail kept', () => {
+    expect(nameWithTail(KANJI.repeat(200), '_Highlight 1_youtube.mp4', 'utf16')).toBe(`${KANJI.repeat(200)}_Highlight 1_youtube.mp4`)
+    const tail = '_reframe-1080x1920-center.mp4'
+    const out = nameWithTail(KANJI.repeat(300), tail, 'utf16')
+    expect(out.endsWith(tail)).toBe(true)
+    expect(units(out)).toBe(255 - ' (9999)'.length)
+    // The 90-Hangul Reframe title of the ticket: the whole title fits in units, so nothing of it is lost.
+    const hangul = '한'.repeat(90)
+    expect(nameWithTail(hangul, tail, 'utf16')).toBe(`${hangul}${tail}`)
+    expect(nameWithTail(hangul, tail, 'utf8').length).toBeLessThan(`${hangul}${tail}`.length)
+  })
+})
+
+describe('expandFilenameTemplate - a name is fitted where it is built (T-184 (2))', () => {
+  const ROOM = 255 - ' (9999)'.length // 248: the name, extension included, leaves room for nextFreePath's " (9999)"
+  const long = (c: string, n = 300): string => c.repeat(n)
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a 300-character source and a 300-character clip make a name of at most 248 units that still ends `_<preset>.mp4`', () => {
+    const out = expandFilenameTemplate(null, { source: long('S'), clip: long('C'), preset: 'youtube', ext: 'mp4' })
+    expect(out.length).toBeLessThanOrEqual(ROOM)
+    expect(out.endsWith('_youtube.mp4')).toBe(true)
+    // Both are over, so the source is spent first and the clip is what is cut next: the clip keeps what the source gave up.
+    expect(out).not.toContain('S')
+    expect(out).toMatch(/^_C{200,}_youtube\.mp4$/)
+  })
+
+  it('cuts the {source} before the {clip}: a long video title with an ordinary clip name keeps the clip whole', () => {
+    const out = expandFilenameTemplate(null, { source: long('S'), clip: 'Highlight 1', preset: 'tiktok', ext: 'mp4' })
+    expect(out.length).toBe(ROOM)
+    expect(out.endsWith('_Highlight 1_tiktok.mp4')).toBe(true)
+    expect(out).toMatch(/^S{200,}_Highlight 1_tiktok\.mp4$/)
+    // And a long clip with a short video name cuts the clip only once the source has nothing left to give.
+    const clipLong = expandFilenameTemplate(null, { source: 'vod', clip: long('C'), preset: 'tiktok', ext: 'mp4' })
+    expect(clipLong.length).toBe(ROOM)
+    expect(clipLong).toMatch(/^_?C{200,}_tiktok\.mp4$/)
+    expect(clipLong).not.toContain('vod')
+  })
+
+  it('never cuts the {preset}, the {date}, the {time}, the {handle}, the template text or the extension', () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date(2026, 10, 11, 9, 5, 0))
+    const out = expandFilenameTemplate('stream-{handle}-{date}-{time}-{source}-{clip}-{preset}', {
+      source: long('S'),
+      clip: long('C'),
+      preset: 'a-custom-preset-name',
+      handle: '@streamer',
+      ext: '.mp4'
+    })
+    expect(out.length).toBeLessThanOrEqual(ROOM)
+    expect(out.startsWith('stream-streamer-2026-11-11-09-05-')).toBe(true)
+    expect(out.endsWith('-a-custom-preset-name.mp4')).toBe(true)
+  })
+
+  it('a long {preset} is left whole (the source is what is cut), and a name whose fixed parts alone are over is left for the gate to refuse', () => {
+    const out = expandFilenameTemplate(null, { source: long('S'), clip: 'c', preset: 'P'.repeat(100), ext: 'mp4' })
+    expect(out.length).toBeLessThanOrEqual(ROOM)
+    expect(out.endsWith(`_${'P'.repeat(100)}.mp4`)).toBe(true)
+    const fixed = expandFilenameTemplate(`${'T'.repeat(300)}{source}`, { source: 'vod', ext: 'mp4' })
+    expect(fixed).toBe(`${'T'.repeat(300)}.mp4`) // nothing to cut: the whole {source} went, the template text did not
+  })
+
+  it('a token used twice is cut in both places, so the whole name still fits', () => {
+    const out = expandFilenameTemplate('{source}-{source}-{preset}', { source: long('S'), preset: 'x', ext: 'mp4' })
+    expect(out.length).toBeLessThanOrEqual(ROOM)
+    expect(out.length, 'and no more is cut than the overflow needs (each use gives up its share)').toBeGreaterThanOrEqual(ROOM - 1)
+    expect(out.endsWith('-x.mp4')).toBe(true)
+  })
+
+  it('counts UTF-16 units, the gate\'s own: 200 kanji and an ordinary clip are kept whole, and an astral glyph is two and never split', () => {
+    const jp = '漢'.repeat(200)
+    expect(expandFilenameTemplate(null, { source: jp, clip: 'Highlight 1', preset: 'youtube', ext: 'mp4' })).toBe(`${jp}_Highlight 1_youtube.mp4`)
+    const glyph = String.fromCodePoint(0x1f600)
+    const out = expandFilenameTemplate('{source}x', { source: glyph.repeat(200), ext: 'mp4' })
+    // 248 - 1 ("x") - 4 (".mp4") = 243 units for the title: 121 glyphs are 242, and the 122nd (a pair) would be 244, so it is dropped whole.
+    expect(out).toBe(`${glyph.repeat(121)}x.mp4`)
+    expect(out.length).toBe(ROOM - 1)
+    expect(Buffer.from(out, 'utf8').toString('utf8')).toBe(out)
+  })
+
+  it('a name that already fits is exactly what it was, including one right at the limit', () => {
+    const exact = 'a'.repeat(ROOM - '_c_p.mp4'.length)
+    expect(expandFilenameTemplate(null, { source: exact, clip: 'c', preset: 'p', ext: 'mp4' })).toBe(`${exact}_c_p.mp4`)
+    const over = expandFilenameTemplate(null, { source: `${exact}a`, clip: 'c', preset: 'p', ext: 'mp4' })
+    expect(over.length).toBe(ROOM)
+  })
+})
+
+/**
+ * T-187 (3): a control character in a name is an underscore, as the characters Windows reserves are. A text input keeps a pasted tab (only line breaks are stripped), so a clip
+ * or preset name copied from a spreadsheet carried one, and `assertPlainMp4Name` (which refuses `[\u0000-\u001f]`) refused the whole Export batch with "Export failed.".
+ * `gateAccepts` is that gate's own rule (`video.ts`): no control character, and `safeNamePart` leaves the name alone.
+ */
+describe('a control character in a name is an underscore (T-187 (3))', () => {
+  const gateAccepts = (name: string): boolean => !/[\u0000-\u001f]/.test(name) && safeNamePart(name) === name
+
+  it('safeNamePart turns a tab, U+0001, a NUL, a line break and DEL into `_`, in the middle and at the ends', () => {
+    expect(safeNamePart('Clutch\tplay')).toBe('Clutch_play')
+    expect(safeNamePart('a\u0001b')).toBe('a_b')
+    expect(safeNamePart('a\u0000b')).toBe('a_b')
+    expect(safeNamePart('a\nb\rc')).toBe('a_b_c')
+    expect(safeNamePart('a\u007fb')).toBe('a_b')
+    expect(safeNamePart('\tlead')).toBe('_lead')
+    expect(safeNamePart('trail\t')).toBe('trail_')
+    expect(safeNamePart('\t')).toBe('_')
+  })
+
+  it('DEL alone is enough to be replaced, and the first printable character (space) and the last control (U+001F) sit on either side of the class', () => {
+    expect(safeNamePart('x\u007f')).toBe('x_')
+    expect(safeNamePart('x\u001f')).toBe('x_')
+    expect(safeNamePart('x y')).toBe('x y')
+    expect(safeNamePart('x~y')).toBe('x~y')
+  })
+
+  it('every C0 control and DEL is replaced, and no printable ASCII is', () => {
+    for (let c = 0; c < 0x80; c++) {
+      const ch = String.fromCharCode(c)
+      const out = safeNamePart(`a${ch}b`)
+      const forbidden = c < 0x20 || c === 0x7f || '\\/:*?"<>|'.includes(ch)
+      expect(out, `U+${c.toString(16).padStart(4, '0')}`).toBe(forbidden ? 'a_b' : `a${ch}b`)
+    }
+  })
+
+  it('stays idempotent, and keeps the names it always kept (spaces, dots, brackets, scripts)', () => {
+    for (const raw of ['Clutch\tplay', '\u0001\u0002', ' \t x \t ', 'a\u007f\u007fb', 'CON\t', 'My Stream.flv', 'clip [2] (final)', 'Épico 漢字']) {
+      const once = safeNamePart(raw)
+      expect(safeNamePart(once), JSON.stringify(raw)).toBe(once)
+    }
+    expect(safeNamePart('My Stream.flv')).toBe('My Stream.flv')
+    expect(safeNamePart('  padded  ')).toBe('padded')
+    expect(safeNamePart('   ')).toBe('untitled')
+    expect(safeNamePart('')).toBe('untitled')
+    expect(safeNamePart('a/b\\c:d*e?f"g<h>i|j')).toBe('a_b_c_d_e_f_g_h_i_j')
+  })
+
+  it('expandFilenameTemplate with a tab in the clip, source or preset name gives a name the gate accepts', () => {
+    const out = expandFilenameTemplate(null, { source: 'My\tStream', clip: 'Clutch\tplay', preset: 'My\tpreset', ext: 'mp4' })
+    expect(out).toBe('My_Stream_Clutch_play_My_preset.mp4')
+    expect(gateAccepts(out)).toBe(true)
+    for (const bad of ['\t', '\u0001', '\u007f', '\u0000']) {
+      const name = expandFilenameTemplate(null, { source: `s${bad}`, clip: `${bad}c${bad}`, preset: `p${bad}`, ext: 'mp4' })
+      expect(gateAccepts(name), JSON.stringify(name)).toBe(true)
+    }
+  })
+
+  it("the template's own text goes through the same class: a tab typed into it is an underscore too", () => {
+    const out = expandFilenameTemplate('{clip}\t{preset}\u007fx', { source: 's', clip: 'c', preset: 'p', ext: 'mp4' })
+    expect(out).toBe('c_p_x.mp4')
+    expect(gateAccepts(out)).toBe(true)
+  })
+
+  it('the T-183 / T-184 fitting still holds with a control character in a long name (cut at the fit, never over)', () => {
+    const out = expandFilenameTemplate(null, { source: `${'S'.repeat(150)}\t${'S'.repeat(150)}`, clip: 'Highlight 1', preset: 'twitter', ext: 'mp4' })
+    expect(out.length).toBeLessThanOrEqual(255 - ' (9999)'.length)
+    expect(out.endsWith('_Highlight 1_twitter.mp4')).toBe(true)
+    expect(gateAccepts(out)).toBe(true)
+  })
+
+  it('the class itself: nine reserved characters, U+0000-U+001F and DEL, and nothing else in ASCII', () => {
+    const hit = [...Array(0x80).keys()].filter((c) => new RegExp(FORBIDDEN_NAME_CHARS.source).test(String.fromCharCode(c)))
+    const want = [...Array(0x20).keys(), 0x7f, ...[...'\\/:*?"<>|'].map((ch) => ch.charCodeAt(0))].sort((a, b) => a - b)
+    expect(hit).toEqual(want)
   })
 })

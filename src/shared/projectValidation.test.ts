@@ -1,13 +1,23 @@
 import { describe, it, expect } from 'vitest'
 import {
+  MAX_PROJECT_BYTES,
   MAX_SCHEMA_VERSION,
+  SUPPORTED_SCHEMA_VERSIONS,
   KNOWN_ROUTES,
+  hasStudioState,
   isSafeToAutosave,
   isValidTextOverlay,
+  projectSizeProblem,
   sanitizePlace,
+  serializeProject,
   validateProject,
   validateProjectJsonString
 } from './projectValidation'
+import { userFacingError } from './userFacingError'
+import { DEFAULT_CHAIN_SPEC } from './audio'
+import { DEFAULT_COLOR_GRADE } from './clip'
+import { assertOptionalClipRecipe } from './validators'
+import * as projectValidation from './projectValidation'
 import type { ImagiiProject } from './workspace'
 
 const baseProject: ImagiiProject = {
@@ -15,6 +25,26 @@ const baseProject: ImagiiProject = {
   savedAt: Date.now(),
   appVersion: '1.0.0'
 }
+
+/**
+ * T-119 (12): a clip and a chain the way the app writes them. `validateProject` asks a studio for the
+ * fields the app reads without a guard, so a fixture that stands for "a good clip" or "a good chain" is the
+ * whole shape, with the optional ones left off exactly as an older build left them off.
+ */
+const goodClip = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  id: 'c1',
+  name: 'Clip 1',
+  startSec: 0,
+  endSec: 5,
+  cropRect: null,
+  textOverlays: [],
+  selectedPresets: ['youtube'],
+  ...extra
+})
+const goodChain = (extra: Record<string, unknown> = {}): Record<string, unknown> => ({
+  ...DEFAULT_CHAIN_SPEC,
+  ...extra
+})
 
 const projectWithStudios: ImagiiProject = {
   ...baseProject,
@@ -95,7 +125,7 @@ describe('validateProject', () => {
   })
 })
 
-describe('schema migration v1 → v2 → v3', () => {
+describe('schema migration v1 → v2 → v3 → v4', () => {
   it('accepts a v1 project and migrates it up to MAX_SCHEMA_VERSION in place', () => {
     const v1 = {
       schemaVersion: 1,
@@ -159,6 +189,188 @@ describe('schema migration v1 → v2 → v3', () => {
     })
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toMatch(/supported/)
+  })
+})
+
+describe('schema 4 — the sound of a video is stored as the video (T-99)', () => {
+  const chain = {
+    denoise: 'off',
+    hum60: false,
+    rumbleHighpass: false,
+    deEss: false,
+    compressor: 'off',
+    loudnorm: false,
+    loudnormTargetLufs: -16,
+    gainDb: 0,
+    cutRegions: [],
+    secondaryTrack: null
+  }
+  const withAudio = (audioStudio: Record<string, unknown>, schemaVersion = 4): unknown => ({
+    schemaVersion,
+    savedAt: Date.now(),
+    appVersion: '1.0.0',
+    audioStudio
+  })
+
+  it('schema 4 is still read (T-107 moved the schema new saves emit up to 5)', () => {
+    expect(SUPPORTED_SCHEMA_VERSIONS).toContain(4)
+    expect(MAX_SCHEMA_VERSION).toBeGreaterThanOrEqual(4)
+  })
+
+  it('accepts the marker, with the VIDEO as the source', () => {
+    const result = validateProject(
+      withAudio({ sourcePath: 'C:/Videos/stream.mp4', extractedFromVideo: true, chain })
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.project.audioStudio?.sourcePath).toBe('C:/Videos/stream.mp4')
+      expect(result.project.audioStudio?.extractedFromVideo).toBe(true)
+    }
+  })
+
+  it('accepts a v4 plain audio file with no marker', () => {
+    expect(validateProject(withAudio({ sourcePath: 'C:/Audio/mic.wav', chain })).ok).toBe(true)
+  })
+
+  it.each([
+    ['a string', 'yes'],
+    ['a number', 1],
+    ['null', null]
+  ])('refuses a marker that is %s', (_name, value) => {
+    const result = validateProject(
+      withAudio({ sourcePath: 'C:/Videos/stream.mp4', extractedFromVideo: value, chain })
+    )
+    expect(result).toEqual({ ok: false, reason: 'audioStudio.extractedFromVideo not a boolean' })
+  })
+
+  it('holds the video of an extraction to the same path gate as every other path', () => {
+    const result = validateProject(
+      withAudio({ sourcePath: '../../etc/passwd', extractedFromVideo: true, chain })
+    )
+    expect(result).toEqual({ ok: false, reason: 'audioStudio.sourcePath unsafe or malformed' })
+  })
+
+  it('a v3 project is accepted and migrated up with its audio left exactly as written', () => {
+    // The shape every extraction was saved in until now: the (temp) WAV as the
+    // source, the video beside it.
+    const result = validateProject(
+      withAudio(
+        { sourcePath: 'C:/Temp/imagii-audio/aB3dE5fG7h.wav', fromVideoPath: 'C:/Videos/stream.mp4', chain },
+        3
+      )
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.project.schemaVersion).toBe(MAX_SCHEMA_VERSION)
+      expect(result.project.audioStudio).toEqual({
+        sourcePath: 'C:/Temp/imagii-audio/aB3dE5fG7h.wav',
+        fromVideoPath: 'C:/Videos/stream.mp4',
+        chain
+      })
+      // Migrating must not invent the marker: that would re-extract a sound
+      // whose scratch file may still be there.
+      expect(result.project.audioStudio?.extractedFromVideo).toBeUndefined()
+    }
+  })
+
+  it('refuses an unsafe fromVideoPath in a v3 file — it reaches ffmpeg on export', () => {
+    const result = validateProject(
+      withAudio({ sourcePath: 'C:/Audio/mic.wav', fromVideoPath: '..\\..\\secret.mp4', chain }, 3)
+    )
+    expect(result).toEqual({ ok: false, reason: 'audioStudio.fromVideoPath unsafe or malformed' })
+  })
+
+  it('accepts a null fromVideoPath (what a v3 plain audio file wrote)', () => {
+    expect(
+      validateProject(withAudio({ sourcePath: 'C:/Audio/mic.wav', fromVideoPath: null, chain }, 3)).ok
+    ).toBe(true)
+  })
+})
+
+/**
+ * T-107 — schema 5: `videoStudio.convertedForImport` says `sourcePath` is the
+ * ORIGINAL of a file the importer converted, so the working copy under the temp
+ * folder never lands in a project. T-99's shape, one studio over.
+ */
+describe('schema 5: a converted import is stored as its original (T-107)', () => {
+  const withVideo = (videoStudio: Record<string, unknown>, schemaVersion = 5): unknown => ({
+    schemaVersion,
+    savedAt: Date.now(),
+    appVersion: '1.0.0',
+    videoStudio
+  })
+  const studio = { clips: [], selectedClipId: null }
+
+  it('this is the schema new saves emit, and every older one is still read', () => {
+    expect(MAX_SCHEMA_VERSION).toBe(5)
+    expect([...SUPPORTED_SCHEMA_VERSIONS]).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('accepts the marker, with the ORIGINAL as the source', () => {
+    const result = validateProject(
+      withVideo({ sourcePath: 'C:/Videos/stream.flv', convertedForImport: true, ...studio })
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.project.videoStudio?.sourcePath).toBe('C:/Videos/stream.flv')
+      expect(result.project.videoStudio?.convertedForImport).toBe(true)
+    }
+  })
+
+  it('accepts a v5 natively playable video with no marker', () => {
+    expect(validateProject(withVideo({ sourcePath: 'C:/Videos/stream.mp4', ...studio })).ok).toBe(true)
+  })
+
+  it.each([
+    ['a string', 'yes'],
+    ['a number', 1],
+    ['null', null]
+  ])('refuses a marker that is %s', (_name, value) => {
+    const result = validateProject(
+      withVideo({ sourcePath: 'C:/Videos/stream.flv', convertedForImport: value, ...studio })
+    )
+    expect(result).toEqual({ ok: false, reason: 'videoStudio.convertedForImport not a boolean' })
+  })
+
+  it('holds the original to the same path gate as every other path (it reaches ffmpeg on open)', () => {
+    const result = validateProject(
+      withVideo({ sourcePath: '../../etc/passwd', convertedForImport: true, ...studio })
+    )
+    expect(result).toEqual({ ok: false, reason: 'videoStudio.sourcePath unsafe or malformed' })
+  })
+
+  it('a v4 project is accepted and migrated up with its video left exactly as written', () => {
+    // The shape every converted import was saved in until now: the (temp) working
+    // copy as the source, nothing about the original.
+    const result = validateProject(
+      withVideo(
+        { sourcePath: 'C:/Temp/imagii-import/stream-aB3dE5fG.mp4', ...studio, srtPath: null },
+        4
+      )
+    )
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      expect(result.project.schemaVersion).toBe(5)
+      expect(result.project.videoStudio).toEqual({
+        sourcePath: 'C:/Temp/imagii-import/stream-aB3dE5fG.mp4',
+        ...studio,
+        srtPath: null
+      })
+      // Migrating must not invent the marker: nothing in the file says what the
+      // original was, and a working copy that is still there should just open.
+      expect(result.project.videoStudio?.convertedForImport).toBeUndefined()
+    }
+  })
+
+  it.each([1, 2, 3])('a v%i project is migrated all the way up to 5', (version) => {
+    const result = validateProject({
+      schemaVersion: version,
+      savedAt: Date.now(),
+      appVersion: '1.0.0',
+      videoStudio: { sourcePath: 'C:/Videos/stream.mp4', ...studio }
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.project.schemaVersion).toBe(5)
   })
 })
 
@@ -263,12 +475,67 @@ describe('path-safety integration (bug round 4)', () => {
     if (!result.ok) expect(result.reason).toMatch(/secondaryTrack/)
   })
 
+  // T-111: gainDb and the ducking numbers are printed into the filter graph on
+  // export. A project file is a file a person can edit, so it is refused at open.
+  describe('the second track\'s numbers (T-111)', () => {
+    const withTrack = (fields: Record<string, unknown>): unknown => ({
+      ...baseProject,
+      audioStudio: {
+        sourcePath: 'C:/safe.wav',
+        chain: goodChain({
+          secondaryTrack: {
+            filePath: 'C:/Users/maken/Music/bed.mp3',
+            fileName: 'bed.mp3',
+            role: 'music',
+            gainDb: -6,
+            duckUnderPrimary: true,
+            ...fields
+          }
+        })
+      }
+    })
+    const duck = { thresholdDb: -26, ratio: 8, attackMs: 20, releaseMs: 400 }
+
+    it.each([
+      ['a filter-syntax string for the gain', { gainDb: '0dB,ametadata=mode=print:file=x' }, /chain\.secondaryTrack\.gainDb/],
+      ['a gain past +12 dB', { gainDb: 40 }, /gainDb/],
+      ['NaN for the gain', { gainDb: Number.NaN }, /gainDb/],
+      ['a ratio that is a string', { duckParams: { ...duck, ratio: '8:x' } }, /duckParams\.ratio/],
+      ['a release past 2000 ms', { duckParams: { ...duck, releaseMs: 90000 } }, /duckParams\.releaseMs/],
+      ['an attack of 0', { duckParams: { ...duck, attackMs: 0 } }, /duckParams\.attackMs/]
+    ])('rejects %s', (_label, fields, reason) => {
+      const result = validateProject(withTrack(fields))
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.reason).toMatch(reason)
+    })
+
+    it('accepts the slider ends and the defaults', () => {
+      for (const fields of [
+        { gainDb: -24 },
+        { gainDb: 12 },
+        { duckParams: duck },
+        { duckParams: { thresholdDb: 0, ratio: 20, attackMs: 200, releaseMs: 2000 } },
+        { duckParams: { thresholdDb: -60, ratio: 1, attackMs: 1, releaseMs: 50 } }
+      ]) {
+        expect(validateProject(withTrack(fields)).ok, JSON.stringify(fields)).toBe(true)
+      }
+    })
+
+    it('does NOT refuse a project over its loudness target: main says what to change at export', () => {
+      const result = validateProject({
+        ...baseProject,
+        audioStudio: { sourcePath: 'C:/safe.wav', chain: goodChain({ loudnormTargetLufs: -3 }) }
+      })
+      expect(result.ok).toBe(true)
+    })
+  })
+
   it('accepts a safe absolute secondaryTrack.filePath', () => {
     const result = validateProject({
       ...baseProject,
       audioStudio: {
         sourcePath: 'C:/safe.wav',
-        chain: {
+        chain: goodChain({
           secondaryTrack: {
             filePath: 'C:/Users/maken/Music/bed.mp3',
             fileName: 'bed.mp3',
@@ -276,7 +543,7 @@ describe('path-safety integration (bug round 4)', () => {
             gainDb: -6,
             duckUnderPrimary: true
           }
-        }
+        })
       }
     })
     expect(result.ok).toBe(true)
@@ -285,15 +552,17 @@ describe('path-safety integration (bug round 4)', () => {
   it('accepts a chain with secondaryTrack null (back-compat)', () => {
     const result = validateProject({
       ...baseProject,
-      audioStudio: { sourcePath: 'C:/safe.wav', chain: { secondaryTrack: null } }
+      audioStudio: { sourcePath: 'C:/safe.wav', chain: goodChain({ secondaryTrack: null }) }
     })
     expect(result.ok).toBe(true)
   })
 
   it('accepts a chain with secondaryTrack absent (back-compat)', () => {
+    const { secondaryTrack: _gone, ...withoutTrack } = goodChain()
+    void _gone
     const result = validateProject({
       ...baseProject,
-      audioStudio: { sourcePath: 'C:/safe.wav', chain: {} }
+      audioStudio: { sourcePath: 'C:/safe.wav', chain: withoutTrack }
     })
     expect(result.ok).toBe(true)
   })
@@ -321,7 +590,7 @@ describe('clip textOverlay validation (bug round 14)', () => {
       ...baseProject,
       videoStudio: {
         sourcePath: 'C:/safe.mp4',
-        clips: [{ id: 'c1', textOverlays: [overlay] }],
+        clips: [goodClip({ textOverlays: [overlay] })],
         selectedClipId: null
       }
     }
@@ -331,16 +600,32 @@ describe('clip textOverlay validation (bug round 14)', () => {
     expect(validateProject(projectWithOverlay(goodOverlay)).ok).toBe(true)
   })
 
-  it('accepts a clip with no textOverlays field (back-compat)', () => {
+  // T-121: this was "accepts a clip with no textOverlays field (back-compat)", and the T-119 docblock said the
+  // field is "read with a default". It is not: the video store (`clip.textOverlays.length`, `.map`, `.filter`,
+  // the spread in add), the overlay editor and `buildVideoFilter` all read it bare, so a restored clip without
+  // it opened a studio that threw in render. The field has been in the saved clip since the first commit, so no
+  // older file lacks it; what lacks it is a hand-edited or damaged one.
+  it('refuses a clip with no textOverlays field - the studio reads the array bare (T-121)', () => {
     const result = validateProject({
       ...baseProject,
       videoStudio: {
         sourcePath: 'C:/safe.mp4',
-        clips: [{ id: 'c1' }],
+        clips: [(({ textOverlays: _t, ...rest }) => rest)(goodClip())],
         selectedClipId: null
       }
     })
-    expect(result.ok).toBe(true)
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('videoStudio.clips[0].textOverlays not an array')
+  })
+
+  it('QA\'s clip - id, name, both times and selectedPresets, nothing else - is refused, not restored into a crash (T-121)', () => {
+    const qa = { id: 'c1', name: 'Clip 1', startSec: 0, endSec: 5, selectedPresets: ['youtube'] }
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/safe.mp4', clips: [qa], selectedClipId: null }
+    })
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('videoStudio.clips[0].textOverlays not an array')
   })
 
   it('rejects a colorHex carrying an FFmpeg injection payload', () => {
@@ -362,13 +647,37 @@ describe('clip textOverlay validation (bug round 14)', () => {
     if (!result.ok) expect(result.reason).toMatch(/textOverlays/)
   })
 
-  it('rejects an out-of-range sizePx', () => {
-    expect(validateProject(projectWithOverlay({ ...goodOverlay, sizePx: 9999 })).ok).toBe(
-      false
-    )
-    expect(validateProject(projectWithOverlay({ ...goodOverlay, sizePx: 2 })).ok).toBe(
-      false
-    )
+  // T-115: this used to read "rejects an out-of-range sizePx" for 9999 and 2. The old overlay editor had
+  // no upper clamp, so a project saved by it holds sizes the gate refuses, and the whole session was
+  // unrecoverable (the same family as the color name "white"). `validateProject` now clamps a FINITE
+  // size into the gate's range before the gate looks; the gate itself (`isValidTextOverlay`, below)
+  // is unchanged and still refuses an out-of-range size - Export and Compile run it on what they are
+  // sent; Save project and a restore migrate first. What still refuses here is a size that is not a
+  // finite number.
+  it('clamps an out-of-range finite sizePx into the gate\'s range instead of refusing the project', () => {
+    for (const [typed, clamped] of [[9999, 512], [2, 8], [512.5, 512], [0, 8], [-40, 8]] as const) {
+      const result = validateProject(projectWithOverlay({ ...goodOverlay, sizePx: typed }))
+      expect(result.ok, String(typed)).toBe(true)
+      if (!result.ok) continue
+      const clip = result.project.videoStudio?.clips[0] as { textOverlays?: Array<{ sizePx: number }> }
+      expect(clip.textOverlays?.[0]?.sizePx, String(typed)).toBe(clamped)
+    }
+  })
+
+  it('leaves an in-range sizePx exactly as it was (no rounding, no re-clamp)', () => {
+    for (const size of [8, 12.5, 48, 511.9, 512]) {
+      const result = validateProject(projectWithOverlay({ ...goodOverlay, sizePx: size }))
+      if (!result.ok) throw new Error(result.reason)
+      const clip = result.project.videoStudio?.clips[0] as { textOverlays?: Array<{ sizePx: number }> }
+      expect(clip.textOverlays?.[0]?.sizePx).toBe(size)
+    }
+  })
+
+  it('still refuses a size that is not a finite number - it is clamped only when it is one', () => {
+    for (const bad of [Number.POSITIVE_INFINITY, null, true, [], {}]) {
+      const result = validateProject(projectWithOverlay({ ...goodOverlay, sizePx: bad }))
+      expect(result.ok, JSON.stringify(bad)).toBe(false)
+    }
   })
 
   it('rejects a non-array textOverlays field', () => {
@@ -419,6 +728,191 @@ describe('clip textOverlay validation (bug round 14)', () => {
   })
 })
 
+describe('a legacy project holding a NAMED overlay color is migrated, not refused (T-114)', () => {
+  // The overlay editor's default WAS the name "white" until T-113. An autosave (or a saved
+  // project) written by that build holds `"colorHex": "white"` - and the gate takes `#RRGGBB`
+  // and nothing else, so the person's whole session was unrecoverable ("failed validation").
+  // `validateProject` maps a CSS name through the literal table BEFORE the gate looks, so the
+  // gate itself stays hex-only (the drawtext-injection pin above is untouched).
+  const legacyAutosave = (colorHex: string): string =>
+    '{\n' +
+    '  "schemaVersion": 5,\n' +
+    '  "savedAt": 1760000000000,\n' +
+    '  "appVersion": "1.5.0",\n' +
+    '  "videoStudio": {\n' +
+    '    "sourcePath": "C:/Users/mike/Videos/stream.mp4",\n' +
+    '    "clips": [\n' +
+    '      {\n' +
+    '        "id": "c1", "name": "Clip 1", "startSec": 12, "endSec": 40,\n' +
+    '        "cropRect": null, "selectedPresets": ["tiktok"], "speedMultiplier": 1,\n' +
+    '        "textOverlays": [\n' +
+    '          {\n' +
+    '            "id": "o1", "text": "Your text here", "font": "Arial", "sizePx": 48,\n' +
+    `            "colorHex": ${JSON.stringify(colorHex)}, "x": 0.1, "y": 0.85, "startSec": 12, "endSec": 40\n` +
+    '          }\n' +
+    '        ]\n' +
+    '      }\n' +
+    '    ],\n' +
+    '    "selectedClipId": "c1",\n' +
+    '    "watermark": null\n' +
+    '  }\n' +
+    '}\n'
+
+  const colorOf = (result: ReturnType<typeof validateProjectJsonString>): unknown => {
+    if (!result.ok) return `refused: ${result.reason}`
+    const clip = result.project.videoStudio?.clips[0] as { textOverlays?: Array<{ colorHex: string }> }
+    return clip.textOverlays?.[0]?.colorHex
+  }
+
+  it('the pre-fix default ("white") restores, and comes back as its hex', () => {
+    const result = validateProjectJsonString(legacyAutosave('white'))
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(colorOf(result)).toBe('#ffffff')
+  })
+
+  it('every other field of the overlay is exactly as it was written', () => {
+    const result = validateProjectJsonString(legacyAutosave('white'))
+    if (!result.ok) throw new Error(result.reason)
+    const clip = result.project.videoStudio?.clips[0] as { textOverlays?: unknown[] }
+    expect(clip.textOverlays?.[0]).toEqual({
+      id: 'o1', text: 'Your text here', font: 'Arial', sizePx: 48,
+      colorHex: '#ffffff', x: 0.1, y: 0.85, startSec: 12, endSec: 40
+    })
+  })
+
+  it.each([
+    ['Gold', '#ffd700'],
+    ['  RED ', '#ff0000'],
+    ['rebeccapurple', '#663399'],
+    ['grey', '#808080']
+  ])('a name typed as %j migrates to %s', (typed, hex) => {
+    expect(colorOf(validateProjectJsonString(legacyAutosave(typed)))).toBe(hex)
+  })
+
+  it('a hex color is left byte for byte as it was (no re-casing, no "#" added)', () => {
+    expect(colorOf(validateProjectJsonString(legacyAutosave('#FFCC00')))).toBe('#FFCC00')
+    expect(colorOf(validateProjectJsonString(legacyAutosave('AABBCC')))).toBe('AABBCC')
+  })
+
+  it.each([
+    ['a filter-graph injection behind a real name', 'white,movie=C\\:/Users/victim/.ssh/id_rsa[k];[k]'],
+    ['the ametadata-style string', '0dB,ametadata=mode=print:file=x'],
+    ['a quote that would close the option', "white':fontsize=99'"],
+    ['a name that is not in the table', 'notacolor'],
+    ['a prototype key, not a color', 'constructor'],
+    ['an empty string', '']
+  ])('still refuses %s', (_label, bad) => {
+    const result = validateProjectJsonString(legacyAutosave(bad))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/textOverlays\[0\] malformed/)
+  })
+
+  it('a color that is not a string is still refused, not coerced', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/safe.mp4',
+        clips: [{ id: 'c1', textOverlays: [{ id: 'o', text: 't', font: 'Arial', sizePx: 48, colorHex: 255, x: 0, y: 0, startSec: 0, endSec: 1 }] }],
+        selectedClipId: null
+      }
+    })
+    expect(result.ok).toBe(false)
+  })
+
+  it('isValidTextOverlay itself is still hex-only: the name is migrated before it, never accepted by it', () => {
+    expect(
+      isValidTextOverlay({ id: 'o', text: 't', font: 'Arial', sizePx: 48, colorHex: 'white', x: 0, y: 0, startSec: 0, endSec: 1 })
+    ).toBe(false)
+  })
+})
+
+describe('a legacy project holding an out-of-range overlay SIZE is migrated, not refused (T-115)', () => {
+  // The old editor clamped nothing above 8: a person who typed 800 saved 800, and the gate takes
+  // 8-512. Same family as the named color: written by a build we shipped, refused by the gate we
+  // ship now, so the whole session was unrecoverable ("failed validation"). This is the verbatim
+  // JSON such a build wrote, with the size token swapped in as raw text.
+  const legacyAutosave = (sizeToken: string, colorHex = '#ffffff'): string =>
+    '{\n' +
+    '  "schemaVersion": 5,\n' +
+    '  "savedAt": 1760000000000,\n' +
+    '  "appVersion": "1.5.0",\n' +
+    '  "videoStudio": {\n' +
+    '    "sourcePath": "C:/Users/mike/Videos/stream.mp4",\n' +
+    '    "clips": [\n' +
+    '      {\n' +
+    '        "id": "c1", "name": "Clip 1", "startSec": 12, "endSec": 40,\n' +
+    '        "cropRect": null, "selectedPresets": ["tiktok"], "speedMultiplier": 1,\n' +
+    '        "textOverlays": [\n' +
+    '          {\n' +
+    `            "id": "o1", "text": "Your text here", "font": "Arial", "sizePx": ${sizeToken},\n` +
+    `            "colorHex": ${JSON.stringify(colorHex)}, "x": 0.1, "y": 0.85, "startSec": 12, "endSec": 40\n` +
+    '          }\n' +
+    '        ]\n' +
+    '      }\n' +
+    '    ],\n' +
+    '    "selectedClipId": "c1",\n' +
+    '    "watermark": null\n' +
+    '  }\n' +
+    '}\n'
+
+  const overlayOf = (result: ReturnType<typeof validateProjectJsonString>): unknown => {
+    if (!result.ok) return `refused: ${result.reason}`
+    const clip = result.project.videoStudio?.clips[0] as { textOverlays?: unknown[] }
+    return clip.textOverlays?.[0]
+  }
+
+  it('a size of 800 restores, at the largest the gate takes (512)', () => {
+    const result = validateProjectJsonString(legacyAutosave('800'))
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(overlayOf(result)).toEqual({
+      id: 'o1', text: 'Your text here', font: 'Arial', sizePx: 512,
+      colorHex: '#ffffff', x: 0.1, y: 0.85, startSec: 12, endSec: 40
+    })
+  })
+
+  it.each([
+    ['1', 8],
+    ['7.9', 8],
+    ['513', 512],
+    ['1e6', 512],
+    ['-3', 8]
+  ])('a size written as %s restores as %d', (token, clamped) => {
+    const result = validateProjectJsonString(legacyAutosave(token))
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect((overlayOf(result) as { sizePx: number }).sizePx).toBe(clamped)
+  })
+
+  it('a project with BOTH legacy problems (the name "white" and a size of 800) restores with both fixed', () => {
+    const result = validateProjectJsonString(legacyAutosave('800', 'white'))
+    expect(result.ok, JSON.stringify(result)).toBe(true)
+    expect(overlayOf(result)).toMatchObject({ sizePx: 512, colorHex: '#ffffff' })
+  })
+
+  it.each([
+    ['a size written as a string', '"64"'],
+    ['a size that is a filter-graph payload', JSON.stringify('64; movie=C\\:/Users/victim/.ssh/id_rsa[k]')],
+    ['a size too large to be a number (JSON reads it as Infinity)', '1e999'],
+    ['a size of null', 'null'],
+    ['a size that is an object', '{"v":64}']
+  ])('still refuses %s - the gate decides, the migration only clamps numbers', (_label, token) => {
+    const result = validateProjectJsonString(legacyAutosave(token))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/textOverlays\[0\] malformed/)
+  })
+
+  it('the injection pins still stand beside a clamped size: a bad color is refused whatever the size', () => {
+    const result = validateProjectJsonString(legacyAutosave('800', 'white,movie=C\\:/Users/victim/.ssh/id_rsa[k];[k]'))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/textOverlays\[0\] malformed/)
+  })
+
+  it('isValidTextOverlay itself still refuses an out-of-range size: the clamp lives in the restore, not the gate', () => {
+    expect(
+      isValidTextOverlay({ id: 'o', text: 't', font: 'Arial', sizePx: 800, colorHex: '#ffffff', x: 0, y: 0, startSec: 0, endSec: 1 })
+    ).toBe(false)
+  })
+})
+
 describe('validateProjectJsonString', () => {
   it('accepts a valid JSON string', () => {
     const result = validateProjectJsonString(JSON.stringify(baseProject))
@@ -446,6 +940,28 @@ describe('validateProjectJsonString', () => {
     const result = validateProjectJsonString(big)
     expect(result.ok).toBe(false)
     if (!result.ok) expect(result.reason).toMatch(/too large/)
+  })
+})
+
+// T-124 (5): "the session holds no work" has ONE definition, the one the autosave gate already used: a project that
+// carries a video, a sound or a canvas with a layer. The autosave banner is gated on the same function, so what is
+// too empty to SAVE is exactly what is too empty to be worth OFFERING back over.
+describe('hasStudioState', () => {
+  it('is false for a project with no studio, whatever else it carries', () => {
+    expect(hasStudioState(baseProject)).toBe(false)
+    expect(hasStudioState({ ...baseProject, place: { route: '/video' } })).toBe(false)
+  })
+
+  it('is true for each studio alone', () => {
+    expect(hasStudioState({ ...baseProject, videoStudio: { sourcePath: '/v.mp4', clips: [], selectedClipId: null, watermark: null } })).toBe(true)
+    expect(hasStudioState({ ...baseProject, audioStudio: { sourcePath: '/a.wav', chain: DEFAULT_CHAIN_SPEC } })).toBe(true)
+    expect(hasStudioState({ ...baseProject, imageCanvas: { doc: { width: 10, height: 10, background: '#ffffff', layers: [] } } })).toBe(true)
+  })
+
+  it('agrees with the autosave gate on every shape: what it calls empty, the gate refuses with "no studio state"', () => {
+    for (const project of [baseProject, { ...baseProject, place: { route: '/image' } }, projectWithStudios]) {
+      expect(isSafeToAutosave(project).ok, JSON.stringify(Object.keys(project))).toBe(hasStudioState(project))
+    }
   })
 })
 
@@ -552,5 +1068,674 @@ describe('validateProject and the place record', () => {
       place: { route: '/video' }
     })
     expect(result.ok).toBe(false)
+  })
+})
+
+/**
+ * T-119 (12) - a studio the validator accepts is a studio the app can open.
+ *
+ * `validateProject` descended into a clip's text overlays and nothing else: `clips: [{}]`, `chain: {}` and
+ * `doc: {}` all passed, and the app then threw in render (`for (const p of clip.selectedPresets)`,
+ * `chain.gainDb.toFixed(1)`) or went on running with an autosave capture that dies the first time it reads
+ * `doc.layers.length` (the capture reads the STORE, which a restore had just filled from the empty doc). The
+ * three shapes below are the red fixtures. The rule is the fields the app reads without a guard; every
+ * optional field an older build left off stays optional, and a refusal names the field in the reason style the
+ * rest of the validator uses.
+ */
+describe('structurally empty studios are refused, named by field (T-119)', () => {
+  const withClips = (clips: unknown[]): unknown => ({
+    ...baseProject,
+    videoStudio: { sourcePath: 'C:/safe.mp4', clips, selectedClipId: null }
+  })
+  const withChain = (chain: unknown): unknown => ({
+    ...baseProject,
+    audioStudio: { sourcePath: 'C:/safe.wav', chain }
+  })
+  const withDoc = (doc: unknown): unknown => ({ ...baseProject, imageCanvas: { doc } })
+  const reasonOf = (input: unknown): string => {
+    const result = validateProject(input)
+    if (result.ok) throw new Error('the project was accepted')
+    return result.reason
+  }
+
+  describe('the video studio: clips', () => {
+    it('refuses the empty clip', () => {
+      expect(reasonOf(withClips([{}]))).toBe('videoStudio.clips[0].id missing')
+    })
+
+    it.each([
+      ['id', undefined, 'videoStudio.clips[0].id missing'],
+      ['id', '', 'videoStudio.clips[0].id missing'],
+      ['id', 7, 'videoStudio.clips[0].id missing'],
+      ['name', undefined, 'videoStudio.clips[0].name not a string'],
+      ['name', 12, 'videoStudio.clips[0].name not a string'],
+      ['startSec', undefined, 'videoStudio.clips[0].startSec not a number'],
+      ['startSec', '0', 'videoStudio.clips[0].startSec not a number'],
+      ['startSec', null, 'videoStudio.clips[0].startSec not a number'],
+      ['endSec', undefined, 'videoStudio.clips[0].endSec not a number'],
+      ['endSec', '5', 'videoStudio.clips[0].endSec not a number'],
+      ['selectedPresets', undefined, 'videoStudio.clips[0].selectedPresets not an array'],
+      ['selectedPresets', 'youtube', 'videoStudio.clips[0].selectedPresets not an array'],
+      ['selectedPresets', null, 'videoStudio.clips[0].selectedPresets not an array'],
+      ['selectedPresets', [1], 'videoStudio.clips[0].selectedPresets[0] not a string'],
+      ['textOverlays', undefined, 'videoStudio.clips[0].textOverlays not an array'],
+      ['textOverlays', null, 'videoStudio.clips[0].textOverlays not an array'],
+      ['textOverlays', {}, 'videoStudio.clips[0].textOverlays not an array']
+    ])('refuses a clip whose %s is %j', (field, value, reason) => {
+      const clip = goodClip()
+      if (value === undefined) delete clip[field]
+      else clip[field] = value
+      expect(reasonOf(withClips([clip]))).toBe(reason)
+    })
+
+    it('names the clip that is wrong, not the first one', () => {
+      expect(reasonOf(withClips([goodClip(), goodClip({ id: 'c2' }), goodClip({ id: 'c3', selectedPresets: undefined })]))).toBe(
+        'videoStudio.clips[2].selectedPresets not an array'
+      )
+    })
+
+    it('still accepts a whole clip, with and without every optional field an older build left off', () => {
+      expect(validateProject(withClips([goodClip()])).ok).toBe(true)
+      // T-121: `textOverlays` is not one of them - the studio reads it bare (see "refuses a clip with no textOverlays").
+      const bare = { id: 'c1', name: 'Clip 1', startSec: 1, endSec: 2, textOverlays: [], selectedPresets: [] }
+      expect(validateProject(withClips([bare])).ok, 'no cropRect: v1 clips').toBe(true)
+      expect(
+        validateProject(
+          withClips([goodClip({ speedMultiplier: 2, colorGrade: { brightness: 0, contrast: 1, saturation: 1, temperature: 0 }, autoZoom: true, hypeShake: false, customPresetIds: ['p1'] })])
+        ).ok
+      ).toBe(true)
+      expect(validateProject(withClips([])).ok, 'a studio with no clips is empty, not broken').toBe(true)
+    })
+
+    it('a text-overlay refusal still names the overlay (the injection pins do not move)', () => {
+      const result = validateProject(withClips([goodClip({ textOverlays: [{ text: 'x', colorHex: 'white,movie=x', sizePx: 40, x: 0, y: 0, startSec: 0, endSec: 1 }] })]))
+      expect(result.ok).toBe(false)
+      if (!result.ok) expect(result.reason).toMatch(/textOverlays\[0\] malformed/)
+    })
+  })
+
+  describe('the audio studio: chain', () => {
+    it('refuses the empty chain', () => {
+      expect(reasonOf(withChain({}))).toBe('audioStudio.chain.gainDb not a number')
+    })
+
+    it.each([
+      ['gainDb', undefined, 'audioStudio.chain.gainDb not a number'],
+      ['gainDb', '0', 'audioStudio.chain.gainDb not a number'],
+      ['gainDb', null, 'audioStudio.chain.gainDb not a number'],
+      ['loudnormTargetLufs', undefined, 'audioStudio.chain.loudnormTargetLufs not a number'],
+      ['loudnormTargetLufs', '-16', 'audioStudio.chain.loudnormTargetLufs not a number'],
+      ['cutRegions', undefined, 'audioStudio.chain.cutRegions not an array'],
+      ['cutRegions', {}, 'audioStudio.chain.cutRegions not an array'],
+      ['cutRegions', [null], 'audioStudio.chain.cutRegions[0] malformed'],
+      ['cutRegions', [{ startSec: 1 }], 'audioStudio.chain.cutRegions[0] malformed'],
+      ['cutRegions', [{ startSec: 1, endSec: 2 }, { startSec: '3', endSec: 4 }], 'audioStudio.chain.cutRegions[1] malformed']
+    ])('refuses a chain whose %s is %j', (field, value, reason) => {
+      const chain = goodChain()
+      if (value === undefined) delete chain[field]
+      else chain[field] = value
+      expect(reasonOf(withChain(chain))).toBe(reason)
+    })
+
+    it('still accepts the defaults, a chain with cuts, and a chain missing only what an older build never wrote', () => {
+      expect(validateProject(withChain(goodChain())).ok).toBe(true)
+      expect(validateProject(withChain(goodChain({ cutRegions: [{ startSec: 1, endSec: 2 }], gainDb: -3.5, loudnormTargetLufs: -14 }))).ok).toBe(true)
+      // humHz (T-90), denoiseParams and secondaryTrack are optional: absent means the old behavior.
+      const { secondaryTrack: _s, humHz: _h, denoiseParams: _d, ...old } = goodChain() as Record<string, unknown>
+      void _s
+      void _h
+      void _d
+      expect(validateProject(withChain(old)).ok).toBe(true)
+    })
+
+    it('does not move the second-track refusal: an unsafe filePath is still named first', () => {
+      expect(reasonOf(withChain({ secondaryTrack: { filePath: '../x.mp3', fileName: 'x', role: 'music', gainDb: 0, duckUnderPrimary: false } }))).toMatch(
+        /secondaryTrack\.filePath/
+      )
+    })
+  })
+
+  describe('the image canvas: doc', () => {
+    it('refuses the empty document', () => {
+      expect(reasonOf(withDoc({}))).toBe('imageCanvas.doc.layers not an array')
+    })
+
+    it.each([
+      ['missing', undefined],
+      ['null', null],
+      ['an object', {}],
+      ['a string', 'layers']
+    ])('refuses a document whose layers are %s', (_label, layers) => {
+      const doc: Record<string, unknown> = { width: 1280, height: 720, background: '#000000' }
+      if (layers !== undefined) doc.layers = layers
+      expect(reasonOf(withDoc(doc))).toBe('imageCanvas.doc.layers not an array')
+    })
+
+    it('accepts a document with layers, and one with none (an empty canvas is a canvas)', () => {
+      expect(validateProject(withDoc({ width: 1280, height: 720, background: '#000000', layers: [] })).ok).toBe(true)
+      expect(validateProject(withDoc({ width: 10, height: 10, background: '#fff', layers: [{ id: 'l1', type: 'rect', name: 'Rectangle', visible: true, locked: false, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, width: 5, height: 5, fill: '#ff5c00', stroke: '#ffffff', strokeWidth: 1, cornerRadius: 0 }] })).ok).toBe(true)
+    })
+  })
+
+  it('the three empty shapes through the file reader the autosave and Open project use', () => {
+    for (const [studio, shape, reason] of [
+      ['videoStudio', { sourcePath: null, clips: [{}], selectedClipId: null }, /clips\[0\]/],
+      ['audioStudio', { sourcePath: null, chain: {} }, /chain\.gainDb/],
+      ['imageCanvas', { doc: {} }, /doc\.layers/]
+    ] as const) {
+      const result = validateProjectJsonString(JSON.stringify({ ...baseProject, [studio]: shape }))
+      expect(result.ok, studio).toBe(false)
+      if (!result.ok) expect(result.reason, studio).toMatch(reason)
+    }
+  })
+})
+
+/**
+ * T-135 (10) - a preset id this build does not have is dropped, not refused and not kept.
+ *
+ * `selectedPresets` entries were checked only as strings. An id outside `PLATFORM_IDS` (a hand-edited project, or one saved by a newer
+ * build with a preset this one lacks) opened a studio whose Export panel then read `PLATFORM_INFO[id]` for it, and `findSafeZoneIssues`
+ * and the queue builder threw: "Export" did nothing and `void startExport()` rejected unhandled. DROPPING the id keeps an older build able
+ * to open a newer build's project (refusing the whole file for one unknown preset would not), and what survives is the clip's own list.
+ */
+describe('a preset id this build does not have is dropped when a project opens (T-135 (10))', () => {
+  const withClips = (clips: unknown[]): unknown => ({
+    ...baseProject,
+    videoStudio: { sourcePath: 'C:/safe.mp4', clips, selectedClipId: null }
+  })
+  const presetsAfter = (selectedPresets: unknown[]): unknown => {
+    const result = validateProject(withClips([goodClip({ selectedPresets })]))
+    if (!result.ok) throw new Error(`refused: ${result.reason}`)
+    return result.project.videoStudio?.clips[0]?.selectedPresets
+  }
+
+  it('drops an id no preset has and keeps the others, in their order', () => {
+    expect(presetsAfter(['youtube', 'periscope', 'reels'])).toEqual(['youtube', 'reels'])
+  })
+
+  it('a clip whose every id is unknown opens with none queued, and the project still opens', () => {
+    expect(presetsAfter(['periscope', 'vine'])).toEqual([])
+  })
+
+  it('names that are not own preset ids are dropped too (a prototype key is not a preset)', () => {
+    expect(presetsAfter(['constructor', '__proto__', 'toString', 'tiktok', ''])).toEqual(['tiktok'])
+  })
+
+  it('drops from every clip, not just the first', () => {
+    const result = validateProject(
+      withClips([goodClip({ selectedPresets: ['mystery'] }), goodClip({ id: 'c2', selectedPresets: ['youtube60', 'mystery', 'twitter'] })])
+    )
+    if (!result.ok) throw new Error(result.reason)
+    expect(result.project.videoStudio?.clips.map((c) => c.selectedPresets)).toEqual([[], ['youtube60', 'twitter']])
+  })
+
+  it('control: a project whose ids are all known loads exactly as written (every built-in id, order kept)', () => {
+    const all = ['youtube', 'youtube60', 'reels', 'tiktok', 'twitter', 'facebook']
+    expect(presetsAfter(all)).toEqual(all)
+    expect(presetsAfter([])).toEqual([])
+  })
+
+  it('an entry that is not a string is still refused, by name (malformed, not merely unknown)', () => {
+    const result = validateProject(withClips([goodClip({ selectedPresets: ['youtube', 7] })]))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toBe('videoStudio.clips[0].selectedPresets[1] not a string')
+  })
+
+  it('the custom preset ids are not touched here (the Export panel prunes them against the folder it reads)', () => {
+    const result = validateProject(withClips([goodClip({ customPresetIds: ['gone-from-disk'] })]))
+    if (!result.ok) throw new Error(result.reason)
+    expect(result.project.videoStudio?.clips[0]?.customPresetIds).toEqual(['gone-from-disk'])
+  })
+})
+
+// ── T-137 (6): ONE size rule for Save, Open and autosave ─────────────────────────────────────────────────────────────────────────────
+//
+// MAX_BYTES gated Open (the file's text) and autosave (the project's compact JSON) but `project:save` wrote PRETTY-printed JSON with no gate at
+// all: four 11 MB pictures autosaved nothing, Save wrote 56.9 MiB and said "Project saved", and Open refused it with the damaged-file sentence.
+// The rule is now one number applied to one serialization (`serializeProject`, compact), by `projectSizeProblem`, which also words the refusal.
+
+describe('one size rule for Save, Open and autosave (T-137 (6))', () => {
+  /** A valid project whose compact JSON is exactly `size` characters: a canvas holding one picture, its src padded to fit. */
+  function projectOfSize(size: number): ImagiiProject {
+    const withSrc = (src: string): ImagiiProject => ({
+      ...baseProject,
+      imageCanvas: {
+        doc: {
+          width: 1280,
+          height: 720,
+          background: '#ffffff',
+          layers: [
+            { id: 'img1', type: 'image', name: 'big.png', visible: true, locked: false, x: 60, y: 60, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, src, width: 100, height: 100 }
+          ]
+        }
+      }
+    })
+    const pad = size - serializeProject(withSrc('')).length
+    if (pad < 0) throw new Error('the fixture is bigger than the size asked for')
+    return withSrc('A'.repeat(pad))
+  }
+  const sentenceFor = (doing: 'save' | 'open' | 'autosave', size = 58_000_000): string => projectSizeProblem(size, doing) ?? ''
+
+  it('the limit is 50 MiB, and the serialization it is measured on is the compact JSON every writer uses', () => {
+    expect(MAX_PROJECT_BYTES).toBe(50 * 1024 * 1024)
+    const p = projectOfSize(1000)
+    expect(serializeProject(p)).toBe(JSON.stringify(p))
+    expect(serializeProject(p)).toHaveLength(1000)
+    expect(serializeProject(p), 'no pretty-printing: a file Save writes is measured as it is written').not.toContain('\n')
+  })
+
+  it.each([
+    ['one under the limit', MAX_PROJECT_BYTES - 1, true],
+    ['exactly the limit', MAX_PROJECT_BYTES, true],
+    ['one over the limit', MAX_PROJECT_BYTES + 1, false]
+  ])('%s: Save, Open and autosave all agree (a project Save lets through always opens)', (_label, size, allowed) => {
+    const p = projectOfSize(size)
+    const raw = serializeProject(p)
+    expect(raw).toHaveLength(size)
+    expect(projectSizeProblem(raw.length, 'save') === null, 'Save writes it').toBe(allowed)
+    expect(validateProjectJsonString(raw).ok, 'and Open opens exactly that text').toBe(allowed)
+    expect(isSafeToAutosave(p).ok, 'and autosave keeps it').toBe(allowed)
+  })
+
+  it('Open reads the size of the text it is given, not of a re-serialization: the same figure Save checked', () => {
+    const text = serializeProject(projectOfSize(MAX_PROJECT_BYTES))
+    expect(text.length).toBe(MAX_PROJECT_BYTES)
+    const result = validateProjectJsonString(text)
+    if (!result.ok) throw new Error(result.reason)
+  })
+
+  it('each refusal names the size and the limit, and what to do when there is something to do', () => {
+    expect(sentenceFor('save')).toMatch(/too large to save \(55\.4 MB; the limit is 50 MB\)/)
+    // T-138 (3): scaling a layer changes scaleX / scaleY, never its `src`, so "shrink" frees nothing and Save refused again. What does free bytes is
+    // a layer removed, or a smaller copy imported in its place.
+    expect(sentenceFor('save')).toMatch(/Remove some of the large images on the canvas, or import smaller copies of them, then save again\.$/)
+    expect(sentenceFor('autosave')).toMatch(/^Autosave is paused: this project is too large to keep \(55\.4 MB; the limit is 50 MB\)\. Remove some of the large images on the canvas, or import smaller copies of them, and it will start again\.$/)
+    for (const doing of ['save', 'autosave'] as const) expect(sentenceFor(doing), `${doing}: shrinking a layer does not shrink the project`).not.toMatch(/shrink/i)
+    expect(sentenceFor('open')).toMatch(/too large to open \(55\.4 MB; the limit is 50 MB\)/)
+    expect(sentenceFor('open'), 'not the damaged-file guess').not.toMatch(/damaged|newer version/i)
+  })
+
+  it('the size is rounded UP to a tenth, so a project one character over never reads as "50.0 MB; the limit is 50 MB"', () => {
+    expect(sentenceFor('save', MAX_PROJECT_BYTES + 1)).toContain('(50.1 MB; the limit is 50 MB)')
+    expect(sentenceFor('save', 60 * 1024 * 1024)).toContain('(60.0 MB;')
+  })
+
+  it('nothing at or under the limit is a problem, for any of the three', () => {
+    for (const doing of ['save', 'open', 'autosave'] as const) {
+      expect(projectSizeProblem(0, doing)).toBeNull()
+      expect(projectSizeProblem(MAX_PROJECT_BYTES, doing)).toBeNull()
+      expect(projectSizeProblem(MAX_PROJECT_BYTES + 1, doing)).not.toBeNull()
+    }
+  })
+
+  it('every sentence is one finished line a toast shows as written (userFacingError lets it stand through the IPC envelope)', () => {
+    for (const doing of ['save', 'open', 'autosave'] as const) {
+      const sentence = sentenceFor(doing)
+      expect(sentence.length).toBeLessThanOrEqual(240)
+      expect(sentence).not.toContain('\n')
+      expect(sentence).toMatch(/\.$/)
+      const wrapped = new Error(`Error invoking remote method 'project:${doing}': Error: ${sentence}`)
+      expect(userFacingError(wrapped, 'Fallback.').message).toBe(sentence)
+    }
+  })
+
+  it('Open refuses an oversize file in that sentence (it said "project too large (N > M bytes)", which Home turned into "damaged")', () => {
+    const result = validateProjectJsonString('x'.repeat(60 * 1024 * 1024))
+    expect(result.ok).toBe(false)
+    if (!result.ok) {
+      expect(result.reason).toMatch(/too large/)
+      expect(result.reason).toContain('60.0 MB')
+      expect(userFacingError(result.reason, "Couldn't open that project. The file may be damaged.").message).toBe(result.reason)
+    }
+  })
+
+  it('autosave refuses an oversize project in the autosave sentence, before the studio-state check', () => {
+    const result = isSafeToAutosave(projectOfSize(MAX_PROJECT_BYTES + 1))
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.reason).toMatch(/^Autosave is paused: this project is too large to keep/)
+  })
+})
+
+// ── T-137 (11): a clip's customPresetIds is a list of strings, or absent ──────────────────────────────────────────────────────────────
+//
+// The gate never looked at it, so `customPresetIds: 5` (or {a:1}, or true) validated, and the Export panel's `for (const id of clip.customPresetIds ?? [])`
+// threw in render: autosave and Restore re-crashed /video until Clear. Dropped, not refused, like the unknown platform ids beside it.
+
+describe('a clip\'s customPresetIds is required to be a list of strings, or absent (T-137 (11))', () => {
+  const clipsOf = (ids: unknown): Array<Record<string, unknown>> => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/path/to/video.mp4', clips: [goodClip(ids === undefined ? {} : { customPresetIds: ids })], selectedClipId: null, watermark: null }
+    })
+    if (!result.ok) throw new Error(result.reason)
+    return (result.project.videoStudio?.clips ?? []) as unknown as Array<Record<string, unknown>>
+  }
+
+  it.each([
+    ['a number', 5],
+    ['an object', { a: 1 }],
+    ['true', true],
+    ['a string (it would iterate as characters)', 'abc'],
+    ['null', null],
+    ['zero', 0]
+  ])('%s is not a list: the project still opens, the field is gone, and the Export panel\'s loop cannot throw', (_what, bad) => {
+    const [clip] = clipsOf(bad)
+    expect(clip?.customPresetIds).toBeUndefined()
+    expect('customPresetIds' in (clip ?? {}), 'dropped, not left as undefined-valued noise').toBe(false)
+    expect(() => {
+      for (const id of (clip?.customPresetIds as string[] | undefined) ?? []) void id
+    }).not.toThrow()
+  })
+
+  it('entries that are not strings are dropped and the strings stay, in order', () => {
+    expect(clipsOf(['a', 3, null, {}, 'b', ['c'], undefined])[0]?.customPresetIds).toEqual(['a', 'b'])
+    expect(clipsOf([1, 2])[0]?.customPresetIds).toEqual([])
+  })
+
+  it('controls: a clean list, an empty list and an absent field load exactly as written', () => {
+    expect(clipsOf(['p1', 'p2'])[0]?.customPresetIds).toEqual(['p1', 'p2'])
+    expect(clipsOf([])[0]?.customPresetIds).toEqual([])
+    expect('customPresetIds' in (clipsOf(undefined)[0] ?? {})).toBe(false)
+  })
+
+  it('every clip is checked, not just the first, and the rest of each clip is untouched', () => {
+    const result = validateProject({
+      ...baseProject,
+      videoStudio: {
+        sourcePath: 'C:/path/to/video.mp4',
+        clips: [goodClip({ customPresetIds: 5 }), goodClip({ id: 'c2', name: 'Second', customPresetIds: ['p1', 7] }), goodClip({ id: 'c3', customPresetIds: ['p2'] })],
+        selectedClipId: null,
+        watermark: null
+      }
+    })
+    if (!result.ok) throw new Error(result.reason)
+    const clips = result.project.videoStudio?.clips ?? []
+    expect(clips.map((c) => c.customPresetIds)).toEqual([undefined, ['p1'], ['p2']])
+    expect(clips[1]).toMatchObject({ id: 'c2', name: 'Second', startSec: 0, endSec: 5, selectedPresets: ['youtube'] })
+  })
+})
+
+/**
+ * T-188 (1): a Stream Graphics canvas whose layers cannot be drawn is refused, named by layer and field. T-119 held `doc.layers` to an array and never looked at its
+ * elements: `[null]`, `[{}]`, a rect with no `width` and a document with no size all validated, then threw in render on every visit (and an autosave of one re-crashed on
+ * Restore). The shapes below are the ticket's; each refusal asserts its whole reason, so a guard that fires on the wrong field does not pass.
+ */
+describe('a canvas whose layers cannot be drawn is refused, named by layer and field (T-188 (1))', () => {
+  const rect = (over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id: 'r1', type: 'rect', name: 'Rectangle', visible: true, locked: false, x: 1, y: 2, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1,
+    width: 200, height: 120, fill: '#ff5c00', stroke: '#ffffff', strokeWidth: 2, cornerRadius: 8, ...over
+  })
+  const base = (type: string, over: Record<string, unknown>): Record<string, unknown> => ({
+    id: `${type}1`, type, name: type, visible: true, locked: false, x: 0, y: 0, rotation: 0, scaleX: 1, scaleY: 1, opacity: 1, ...over
+  })
+  const image = (over: Record<string, unknown> = {}): Record<string, unknown> => base('image', { src: 'data:image/png;base64,AAAA', width: 10, height: 10, ...over })
+  const ellipse = (over: Record<string, unknown> = {}): Record<string, unknown> => base('ellipse', { radiusX: 80, radiusY: 60, fill: '#fff', stroke: '#000', strokeWidth: 2, ...over })
+  const line = (over: Record<string, unknown> = {}): Record<string, unknown> => base('line', { points: [0, 0, 10, 10], stroke: '#fff', strokeWidth: 3, closed: false, ...over })
+  const text = (over: Record<string, unknown> = {}): Record<string, unknown> => base('text', { text: 'Hi', fontSize: 32, fontFamily: 'Inter, sans-serif', fill: '#000', ...over })
+
+  const project = (layers: unknown[], doc: Record<string, unknown> = {}): unknown => ({
+    ...baseProject,
+    imageCanvas: { doc: { width: 1200, height: 800, background: '#ffffff', layers, ...doc } }
+  })
+  const reasonOf = (input: unknown): string => {
+    const r = validateProject(input)
+    if (r.ok) throw new Error('expected a refusal, got ok')
+    return r.reason
+  }
+
+  it.each([
+    ['null', [null], 'imageCanvas.doc.layers[0] not an object'],
+    ['an empty object', [{}], 'imageCanvas.doc.layers[0].id missing'],
+    ['a number', [5], 'imageCanvas.doc.layers[0] not an object'],
+    ['an array', [[]], 'imageCanvas.doc.layers[0] not an object'],
+    ['the second layer, not the first', [rect(), null], 'imageCanvas.doc.layers[1] not an object'],
+    ['an empty id', [rect({ id: '' })], 'imageCanvas.doc.layers[0].id missing'],
+    ['an id that is a number', [rect({ id: 7 })], 'imageCanvas.doc.layers[0].id missing'],
+    ['an unknown type', [rect({ type: 'star' })], 'imageCanvas.doc.layers[0].type unknown'],
+    ['a type that is an Object.prototype name', [rect({ type: 'toString' })], 'imageCanvas.doc.layers[0].type unknown'],
+    ['a name that is not a string', [rect({ name: 3 })], 'imageCanvas.doc.layers[0].name not a string'],
+    ['visible that is not a boolean', [rect({ visible: 'yes' })], 'imageCanvas.doc.layers[0].visible not a boolean'],
+    ['locked that is not a boolean', [rect({ locked: 0 })], 'imageCanvas.doc.layers[0].locked not a boolean'],
+    ['x of NaN (null in JSON)', [rect({ x: null })], 'imageCanvas.doc.layers[0].x not a number'],
+    ['y that is a string', [rect({ y: '5' })], 'imageCanvas.doc.layers[0].y not a number'],
+    ['scaleX missing', [rect({ scaleX: undefined })], 'imageCanvas.doc.layers[0].scaleX not a number'],
+    ['scaleY of Infinity', [rect({ scaleY: Infinity })], 'imageCanvas.doc.layers[0].scaleY not a number'],
+    ['opacity of Infinity', [rect({ opacity: Infinity })], 'imageCanvas.doc.layers[0].opacity not a number'],
+    ['a rotation that is present and not a number', [rect({ rotation: 'left' })], 'imageCanvas.doc.layers[0].rotation not a number'],
+    ['a rotation of null', [rect({ rotation: null })], 'imageCanvas.doc.layers[0].rotation not a number'],
+    ['a rect with no width', [rect({ width: undefined })], 'imageCanvas.doc.layers[0].width not a number'],
+    ['a rect with no height', [rect({ height: undefined })], 'imageCanvas.doc.layers[0].height not a number'],
+    ['a rect with no strokeWidth', [rect({ strokeWidth: undefined })], 'imageCanvas.doc.layers[0].strokeWidth not a number'],
+    ['a rect with no cornerRadius', [rect({ cornerRadius: undefined })], 'imageCanvas.doc.layers[0].cornerRadius not a number'],
+    ['a rect with no fill', [rect({ fill: undefined })], 'imageCanvas.doc.layers[0].fill not a string'],
+    ['a rect with a stroke that is a number', [rect({ stroke: 5 })], 'imageCanvas.doc.layers[0].stroke not a string'],
+    ['an image with no src', [image({ src: undefined })], 'imageCanvas.doc.layers[0].src not a string'],
+    ['an image with no width', [image({ width: undefined })], 'imageCanvas.doc.layers[0].width not a number'],
+    ['an image with a height of NaN', [image({ height: NaN })], 'imageCanvas.doc.layers[0].height not a number'],
+    ['an ellipse with no radiusX', [ellipse({ radiusX: undefined })], 'imageCanvas.doc.layers[0].radiusX not a number'],
+    ['an ellipse with no radiusY', [ellipse({ radiusY: undefined })], 'imageCanvas.doc.layers[0].radiusY not a number'],
+    ['an ellipse with no fill', [ellipse({ fill: undefined })], 'imageCanvas.doc.layers[0].fill not a string'],
+    ['a line whose points are not a list', [line({ points: 'abc' })], 'imageCanvas.doc.layers[0].points not a list of numbers'],
+    ['a line whose points hold a string', [line({ points: [0, 0, '10', 10] })], 'imageCanvas.doc.layers[0].points not a list of numbers'],
+    ['a line whose points hold null', [line({ points: [0, null] })], 'imageCanvas.doc.layers[0].points not a list of numbers'],
+    ['a line with no stroke', [line({ stroke: undefined })], 'imageCanvas.doc.layers[0].stroke not a string'],
+    ['a line with no strokeWidth', [line({ strokeWidth: undefined })], 'imageCanvas.doc.layers[0].strokeWidth not a number'],
+    ['a line with closed not a boolean', [line({ closed: 'no' })], 'imageCanvas.doc.layers[0].closed not a boolean'],
+    ['a text with no fontSize', [text({ fontSize: undefined })], 'imageCanvas.doc.layers[0].fontSize not a number'],
+    ['a text with no text', [text({ text: undefined })], 'imageCanvas.doc.layers[0].text not a string'],
+    ['a text with no fontFamily', [text({ fontFamily: undefined })], 'imageCanvas.doc.layers[0].fontFamily not a string'],
+    ['a text with no fill', [text({ fill: undefined })], 'imageCanvas.doc.layers[0].fill not a string']
+  ])('refuses %s', (_what, layers, reason) => {
+    expect(reasonOf(project(layers))).toBe(reason)
+  })
+
+  it.each([
+    ['no width', { width: undefined }, 'imageCanvas.doc.width not a number above 0'],
+    ['a width of 0', { width: 0 }, 'imageCanvas.doc.width not a number above 0'],
+    ['a negative width', { width: -5 }, 'imageCanvas.doc.width not a number above 0'],
+    ['a width that is a string', { width: '1200' }, 'imageCanvas.doc.width not a number above 0'],
+    ['a width of Infinity', { width: Infinity }, 'imageCanvas.doc.width not a number above 0'],
+    ['no height', { height: undefined }, 'imageCanvas.doc.height not a number above 0'],
+    ['a height of 0', { height: 0 }, 'imageCanvas.doc.height not a number above 0'],
+    ['a height of NaN', { height: NaN }, 'imageCanvas.doc.height not a number above 0'],
+    ['no background', { background: undefined }, 'imageCanvas.doc.background not a string'],
+    ['a background that is a number', { background: 0 }, 'imageCanvas.doc.background not a string']
+  ])('refuses a document with %s', (_what, doc, reason) => {
+    expect(reasonOf(project([], doc))).toBe(reason)
+  })
+
+  it('a rect with no rotation is accepted and read as rotation 0, written onto the layer (the store counts a layer with no rotation as 0)', () => {
+    const bare = (): Record<string, unknown> => {
+      const l = rect()
+      delete l.rotation
+      return l
+    }
+    const r = validateProject(project([bare()]))
+    if (!r.ok) throw new Error(r.reason)
+    const layers = r.project.imageCanvas?.doc.layers ?? []
+    expect(layers).toHaveLength(1)
+    expect(layers[0]?.rotation).toBe(0)
+    expect('rotation' in (layers[0] ?? {})).toBe(true)
+    // Through the real string path too: JSON has no undefined, so "missing" is a key that is not there.
+    const text0 = JSON.stringify(project([bare()]))
+    expect(text0.includes('rotation')).toBe(false)
+    const viaString = validateProjectJsonString(text0)
+    if (!viaString.ok) throw new Error(viaString.reason)
+    expect(viaString.project.imageCanvas?.doc.layers[0]?.rotation).toBe(0)
+  })
+
+  it('a rotation that is present is kept as written, a negative and a fractional one included', () => {
+    for (const rotation of [0, 45, -90, 12.5]) {
+      const r = validateProject(project([rect({ rotation })]))
+      if (!r.ok) throw new Error(r.reason)
+      expect(r.project.imageCanvas?.doc.layers[0]?.rotation).toBe(rotation)
+    }
+  })
+
+  it('control: one layer of every type, hint and kind left off or on, validates and loads exactly as written', () => {
+    const layers = [image({ hint: true }), rect(), ellipse(), line({ closed: true }), text({ hint: false })]
+    const input = project(layers, { kind: 'channel-art' })
+    const before = JSON.stringify(input)
+    const r = validateProject(input)
+    if (!r.ok) throw new Error(r.reason)
+    expect(JSON.stringify(r.project)).toBe(before)
+  })
+
+  it('controls: colours are NOT judged (a crafted colour draws, it does not crash: the T-110 (g) class), and neither is hint or an empty line', () => {
+    expect(validateProject(project([rect({ fill: 'not a colour', stroke: '' })])).ok).toBe(true)
+    expect(validateProject(project([text({ fill: 'javascript:alert(1)' })])).ok).toBe(true)
+    expect(validateProject(project([line({ points: [] })])).ok).toBe(true)
+    expect(validateProject(project([rect({ hint: 'sure' })])).ok).toBe(true)
+  })
+
+  it('every layer is checked, not just the first, and the first bad one is the one named', () => {
+    expect(reasonOf(project([rect(), rect({ id: 'r2' }), rect({ id: 'r3', width: 'x' }), null]))).toBe('imageCanvas.doc.layers[2].width not a number')
+  })
+
+  it('the layers array check still comes first, and the same text as before', () => {
+    expect(reasonOf({ ...baseProject, imageCanvas: { doc: {} } })).toBe('imageCanvas.doc.layers not an array')
+  })
+
+  it('the reasons reach the person as the damaged-file sentence path does: a plain string, no stack, no JSON', () => {
+    const r = validateProjectJsonString(JSON.stringify(project([null])))
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('imageCanvas.doc.layers[0] not an object')
+  })
+})
+
+/**
+ * T-189 (2): a clip's `colorGrade` is checked where the project opens, by the rule Export uses. T-119 said the grade was "read with a default"; that is true only when it is
+ * ABSENT. `clip.colorGrade ?? DEFAULT_COLOR_GRADE` keeps `{}` or `{ brightness: 0 }`, and each slider's `v.toFixed(2)` threw on the missing field, in render, on every visit
+ * (and the autosave re-crashed on Restore). The open gate (`validateProject`) and the export gate (`assertOptionalClipRecipe`) are one rule (`colorGradeProblem`); the cases
+ * below run through BOTH and require them to agree.
+ */
+describe('a clip colour grade is checked at Open by the rule Export uses (T-189 (2))', () => {
+  const FULL = { brightness: 0.1, contrast: 1.2, saturation: 0.8, temperature: -0.5 }
+  const at = 'videoStudio.clips[0].colorGrade'
+  const openWith = (colorGrade: unknown, hasKey = true): ReturnType<typeof validateProject> =>
+    validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/v.mp4', clips: [hasKey ? goodClip({ colorGrade }) : goodClip()], selectedClipId: null, watermark: null }
+    })
+  const reasonOf = (colorGrade: unknown): string => {
+    const r = openWith(colorGrade)
+    if (r.ok) throw new Error('expected a refusal, got ok')
+    return r.reason
+  }
+  const exportThrows = (colorGrade: unknown): string | null => {
+    try {
+      assertOptionalClipRecipe({ colorGrade }, 'segments[0]')
+      return null
+    } catch (e) {
+      return (e as Error).message
+    }
+  }
+
+  const REFUSED: Array<[string, unknown, string]> = [
+    ['an empty object', {}, `${at}.brightness must be in [-1, 1]`],
+    ['a string', 'x', `${at} must be a plain object`],
+    ['a number', 5, `${at} must be a plain object`],
+    ['a boolean', true, `${at} must be a plain object`],
+    ['an array', [], `${at} must be a plain object`],
+    ['a grade missing its temperature', { brightness: 0, contrast: 1, saturation: 1 }, `${at}.temperature must be in [-1, 1]`],
+    ['a grade missing its brightness', { contrast: 1, saturation: 1, temperature: 0 }, `${at}.brightness must be in [-1, 1]`],
+    ['a null brightness', { ...FULL, brightness: null }, `${at}.brightness must be in [-1, 1]`],
+    ['a null contrast', { ...FULL, contrast: null }, `${at}.contrast must be in [0, 4]`],
+    ['a null saturation', { ...FULL, saturation: null }, `${at}.saturation must be in [0, 3]`],
+    ['a null temperature', { ...FULL, temperature: null }, `${at}.temperature must be in [-1, 1]`],
+    ['a numeric string', { ...FULL, saturation: '1' }, `${at}.saturation must be in [0, 3]`],
+    ['NaN brightness', { ...FULL, brightness: NaN }, `${at}.brightness must be in [-1, 1]`],
+    ['Infinity contrast', { ...FULL, contrast: Infinity }, `${at}.contrast must be in [0, 4]`],
+    ['-Infinity temperature', { ...FULL, temperature: -Infinity }, `${at}.temperature must be in [-1, 1]`],
+    ['brightness just past 1', { ...FULL, brightness: 1.01 }, `${at}.brightness must be in [-1, 1]`],
+    ['brightness just under -1', { ...FULL, brightness: -1.01 }, `${at}.brightness must be in [-1, 1]`],
+    ['a negative contrast', { ...FULL, contrast: -0.01 }, `${at}.contrast must be in [0, 4]`],
+    ['contrast past 4', { ...FULL, contrast: 4.01 }, `${at}.contrast must be in [0, 4]`],
+    ['a negative saturation', { ...FULL, saturation: -0.01 }, `${at}.saturation must be in [0, 3]`],
+    ['saturation past 3', { ...FULL, saturation: 3.01 }, `${at}.saturation must be in [0, 3]`],
+    ['temperature past 1', { ...FULL, temperature: 1.01 }, `${at}.temperature must be in [-1, 1]`],
+    ['temperature under -1', { ...FULL, temperature: -1.01 }, `${at}.temperature must be in [-1, 1]`]
+  ]
+
+  it.each(REFUSED)('refuses %s, naming the clip and the field', (_what, grade, reason) => {
+    expect(reasonOf(grade)).toBe(reason)
+  })
+
+  const ACCEPTED: Array<[string, unknown]> = [
+    ['null (no grade)', null],
+    ['the default grade', DEFAULT_COLOR_GRADE],
+    ['a full in-range grade', FULL],
+    ['every lower bound', { brightness: -1, contrast: 0, saturation: 0, temperature: -1 }],
+    ['every upper bound', { brightness: 1, contrast: 4, saturation: 3, temperature: 1 }],
+    ['a grade with an unrelated extra key', { ...FULL, note: 'x' }]
+  ]
+
+  it.each(ACCEPTED)('accepts %s', (_what, grade) => {
+    expect(openWith(grade).ok).toBe(true)
+  })
+
+  it('accepts a clip with no colorGrade key at all (an older build left it off) and keeps it absent', () => {
+    const r = openWith(undefined, false)
+    if (!r.ok) throw new Error(r.reason)
+    expect('colorGrade' in (r.project.videoStudio?.clips[0] ?? {})).toBe(false)
+  })
+
+  it('a grade that is present and in range is kept exactly as written', () => {
+    const r = openWith(FULL)
+    if (!r.ok) throw new Error(r.reason)
+    expect(r.project.videoStudio?.clips[0]?.colorGrade).toEqual(FULL)
+  })
+
+  it('a null grade is accepted and dropped (the store reads the field with === undefined, and isPristineWholeVideoClip threw on null.brightness)', () => {
+    const r = openWith(null)
+    if (!r.ok) throw new Error(r.reason)
+    expect('colorGrade' in (r.project.videoStudio?.clips[0] ?? {})).toBe(false)
+  })
+
+  it('the open gate and the export gate are one rule: every refused and accepted grade gets the same verdict from both, and the same sentence apart from the clip prefix', () => {
+    for (const [what, grade, reason] of REFUSED) {
+      const thrown = exportThrows(grade)
+      expect(thrown, `${what}: Export refuses it too`).not.toBeNull()
+      expect(thrown, `${what}: and says the same`).toContain(reason.replace('videoStudio.clips[0].colorGrade', 'segments[0].colorGrade'))
+    }
+    for (const [what, grade] of ACCEPTED) {
+      expect(exportThrows(grade), `${what}: Export accepts it too`).toBeNull()
+    }
+    expect(exportThrows(undefined)).toBeNull()
+  })
+
+  it('the shared predicate is what both gates ask: null for an absent or fine grade, the sentence for a bad one, and it never throws', () => {
+    const { colorGradeProblem } = projectValidation
+    expect(colorGradeProblem(undefined, 'g')).toBeNull()
+    expect(colorGradeProblem(null, 'g')).toBeNull()
+    expect(colorGradeProblem(FULL, 'g')).toBeNull()
+    expect(colorGradeProblem({}, 'g')).toBe('g.brightness must be in [-1, 1]')
+    expect(colorGradeProblem('x', 'g')).toBe('g must be a plain object')
+    expect(colorGradeProblem(Object.create(null), 'g')).toBe('g.brightness must be in [-1, 1]')
+  })
+
+  it('the grade is judged with the clip: the first bad clip is named by its index', () => {
+    const r = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/v.mp4', clips: [goodClip({ colorGrade: FULL }), goodClip({ id: 'c2', colorGrade: {} })], selectedClipId: null, watermark: null }
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('videoStudio.clips[1].colorGrade.brightness must be in [-1, 1]')
+  })
+
+  it('the reason reaches the autosave path as well: validateProjectJsonString refuses the same text', () => {
+    const text = JSON.stringify({ ...baseProject, videoStudio: { sourcePath: 'C:/v.mp4', clips: [goodClip({ colorGrade: {} })], selectedClipId: null, watermark: null } })
+    const r = validateProjectJsonString(text)
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe(`${at}.brightness must be in [-1, 1]`)
+  })
+
+  it('the overlay problem is still named first, so an injection in an overlay is never reported as a grade problem', () => {
+    const r = validateProject({
+      ...baseProject,
+      videoStudio: { sourcePath: 'C:/v.mp4', clips: [goodClip({ colorGrade: {}, textOverlays: [{ text: 'x', colorHex: 'white,movie=/etc/passwd' }] })], selectedClipId: null, watermark: null }
+    })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toBe('videoStudio.clips[0].textOverlays[0] malformed')
   })
 })

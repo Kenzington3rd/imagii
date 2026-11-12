@@ -11,7 +11,7 @@ export interface SmokeResult {
 
 function runVersion(bin: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const p = spawn(bin, ['-version'])
+    const p = spawn(bin, ['-version'], { windowsHide: true })
     let out = ''
     p.stdout.on('data', (b) => (out += String(b)))
     p.stderr.on('data', (b) => (out += String(b)))

@@ -1,11 +1,10 @@
-import { useCallback, useEffect, useState } from 'react'
-import toast from 'react-hot-toast'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import type {
-  Clip,
-  ExportJobSpec,
-  ExportProgress,
-  WatermarkSpec
+import {
+  clipForExport,
+  type Clip,
+  type ExportJobSpec,
+  type WatermarkSpec
 } from '@shared/clip'
 import type { CustomPreset } from '@shared/customPresets'
 import { expandFilenameTemplate } from '@shared/filename'
@@ -13,16 +12,32 @@ import { countOf } from '@shared/plural'
 import { computeCropBox, cropFrameSize, findClippedSafeZones } from '@shared/safeZone'
 import { assertDefined } from '@shared/assert'
 import { WATERMARK_POSITIONS, buildWatermark, isWatermarkPosition } from '@shared/watermark'
-import { useVideoStore } from './store/videoStore'
+import { useVideoStore, videoKey } from './store/videoStore'
+import { useKitRun } from './store/runs'
+import {
+  cancelExportBatch,
+  remainingExportJobs,
+  requestExportCancel,
+  runExportBatch,
+  settleJobs,
+  useExportQueue,
+  type JobStatus
+} from './store/exportQueue'
 import { ALL_PLATFORM_IDS, PLATFORM_INFO, customPresetInfo, type PlatformInfo } from './presets'
 import { SuccessIndicator } from './SuccessIndicator'
 import { CustomPresetManager } from './CustomPresetManager'
 import { SafeZoneWarningModal } from './SafeZoneWarningModal'
 import { Icon } from '../../components/Icon'
-import { OutputDirLabel } from '../../components/OutputDirLabel'
+import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
+import { claimFirst } from '../../lib/claimFirst'
 import { PanelHeader } from '../../components/PanelHeader'
+import { ProgressTrack } from '../../components/ProgressTrack'
+import { RunningCancel } from '../../components/RunningCancel'
 import { Modal } from '../../components/Modal'
-import { reportFailure } from '../../lib/reportFailure'
+import { persistSetting } from '../../lib/persistSetting'
+
+/** Why Export is disabled when no platform is checked on any clip (T-112). */
+const NOTHING_QUEUED = 'Check at least one platform to export.'
 
 export interface SafeZoneRow {
   clipName: string
@@ -113,21 +128,38 @@ export function findSafeZoneIssues(
   return rows
 }
 
-interface JobStatus {
-  jobId: string
-  clipName: string
-  /** What the queue row shows — a platform's label or the user's own
-   *  preset name. Carried rather than looked up, because a custom preset
-   *  deleted mid-batch would otherwise leave the row with nothing to
-   *  render (T-50). */
-  presetLabel: string
-  percent: number
-  outputPath?: string
-  /** Why the row did not finish — the sentence the toast showed. Set on a
-   *  failure AND a cancel; `canceled` says which, and decides the word on the
-   *  row ("Failed" / "Canceled"). The row outlives the toast (T-84). */
-  error?: string
-  canceled?: boolean
+// T-135 (1): the queue's rows and the batch that fills them live in `store/exportQueue.ts` (they outlive this panel); these two are what this
+// file's tests and its callers have always imported from here.
+export { settleJobs }
+export type { JobStatus }
+
+/**
+ * The question in front of a running batch's Cancel (INIT-I, round 16: the 20-clip mistake-click) - the Export panel's and, with the video closed,
+ * `VideoJobsRunning`'s card ask this one (T-144). A component of its own with `open` held by whoever draws the Cancel, as Clip Kit's is (`Modal` does
+ * not portal: the card keeps it OUT of its live region, T-138 (4)). It counts the jobs left when it is drawn, so it never reads "Cancel 0 running jobs".
+ */
+export function ExportCancelConfirm({ open, onClose }: { open: boolean; onClose: () => void }): JSX.Element {
+  const remaining = remainingExportJobs(useExportQueue((s) => s.jobs))
+  return (
+    <Modal open={open} onClose={onClose} title="Cancel running jobs" className="max-w-sm w-full p-5">
+      <h2 className="text-lg font-semibold mb-2">Cancel running jobs</h2>
+      <p className="text-sm text-ink-base mb-4">Cancel {countOf(remaining, 'running job')}?</p>
+      <div className="flex justify-end gap-2">
+        <button className="btn-ghost px-3 py-1.5 text-sm" onClick={onClose}>
+          Keep running
+        </button>
+        <button
+          className="btn-primary px-3 py-1.5 text-sm"
+          onClick={() => {
+            onClose()
+            cancelExportBatch()
+          }}
+        >
+          Cancel jobs
+        </button>
+      </div>
+    </Modal>
+  )
 }
 
 export function ExportPanel(): JSX.Element | null {
@@ -140,8 +172,27 @@ export function ExportPanel(): JSX.Element | null {
 
   const [customPresets, setCustomPresets] = useState<CustomPreset[]>([])
   const [outDir, setOutDir] = useState<string | null>(null)
-  const [jobs, setJobs] = useState<JobStatus[]>([])
-  const [running, setRunning] = useState(false)
+  // T-135 (1): the queue is a module store, not this panel's state - a route change unmounts the panel, and a batch main is still running must still
+  // show its rows, its progress and its Cancel when the person comes back. The rows are those of the last batch; they are drawn for the video the batch
+  // was made from (or while it runs), not under another video.
+  const queueJobs = useExportQueue((s) => s.jobs)
+  const running = useExportQueue((s) => s.running)
+  // T-155 (4): Clip Kit runs its exports as a batch of its own, and main runs one batch at a time: a press while the kit works was refused
+  // after the fact and replaced the last batch's rows with Failed / Not run. Export waits for the kit, and says so.
+  const kitRunning = useKitRun((s) => s.run) !== null
+  const queueSourceKey = useExportQueue((s) => s.sourceKey)
+  // T-168 (4): the name the person knows the batch's video by, for the line that says whose the running rows are when ANOTHER video is open (Audio's
+  // `otherSoundLabel`, T-147 (2)).
+  const queueSourceName = useExportQueue((s) => s.sourceName)
+  const jobs = queueJobs.length > 0 && (running || (source !== null && queueSourceKey === videoKey(source))) ? queueJobs : []
+  // T-125 (18): one start at a time, claimed the instant the function runs. `running` is state, set only after the awaits in
+  // `startExport` (the chooser, then `runExportQueue`'s settings writes), so a fast double-click ran a second start in that gap: main's
+  // gate (T-111) refused the second batch and its catch settled the rows - Failed, Not run - while the first one ran. The ref is the
+  // guard (the video Importer's `busyRef`, the audio importer's, Record's `startingRef`), and a `finally` gives it back. Declared with
+  // the other hooks, ahead of the `if (!source) return null` below.
+  const startingRef = useRef(false)
+  // T-131 (5): the same claim for the folder chip's chooser, which goes straight to a native dialog.
+  const pickingDirRef = useRef(false)
   const [watermarkText, setWatermarkText] = useState<string>('')
   const [watermarkPosition, setWatermarkPosition] = useState<WatermarkSpec['position']>(
     'bottom-right'
@@ -149,9 +200,14 @@ export function ExportPanel(): JSX.Element | null {
   const [filenameTemplate, setFilenameTemplate] = useState('{source}_{clip}_{preset}')
   const [showPresetManager, setShowPresetManager] = useState(false)
   const [pendingSafeZoneRows, setPendingSafeZoneRows] = useState<SafeZoneRow[] | null>(null)
-  // INIT-I (round 16): show a confirm before cancelling when >=2 jobs are
+  // INIT-I (round 16): show a confirm before canceling when >=2 jobs are
   // running. The 20-clip mistake-click scenario is the motivator.
   const [showCancelConfirm, setShowCancelConfirm] = useState(false)
+  // T-131 (9): the question is about the batch that is running. When the batch ends (the last job finished, or failed) with the question
+  // still up, it read "Cancel 0 running jobs?" and "Cancel jobs" had nothing to cancel. The question goes with the batch.
+  useEffect(() => {
+    if (!running) setShowCancelConfirm(false)
+  }, [running])
 
   useEffect(() => {
     let cancelled = false
@@ -197,67 +253,89 @@ export function ExportPanel(): JSX.Element | null {
     void refreshCustomPresets()
   }, [refreshCustomPresets])
 
-  useEffect(() => {
-    const offProgress = window.api.video.onProgress((p: ExportProgress) => {
-      setJobs((prev) =>
-        prev.map((j) => (j.jobId === p.jobId ? { ...j, percent: p.percent } : j))
-      )
-    })
-    const offDone = window.api.video.onJobComplete(({ jobId, outputPath }) => {
-      setJobs((prev) =>
-        prev.map((j) =>
-          j.jobId === jobId ? { ...j, outputPath, percent: 100 } : j
-        )
-      )
-    })
-    return () => {
-      offProgress()
-      offDone()
-    }
-  }, [])
-
   if (!source) return null
 
   const selectedClip = clips.find((c) => c.id === selectedClipId)
 
   async function pickOutDir(): Promise<void> {
-    const picked = await window.api.video.pickOutputDir()
-    if (picked) setOutDir(picked)
+    // T-131 (5): one chooser at a time: a double-click on the folder chip opened two.
+    await claimFirst(pickingDirRef, async () => {
+      // T-126 (6): the chooser opens ON the folder the button shows (the four side panels' hook and Clip Kit do), not wherever the OS
+      // last was. `outDir` is null until a folder is chosen or remembered, and the chooser opens where it always did.
+      const picked = await window.api.video.pickOutputDir(outDir ?? undefined)
+      if (picked) setOutDir(picked)
+    })
   }
 
   async function startExport(): Promise<void> {
-    if (!source) return
-    if (!outDir) {
-      toast.error('Choose an output folder first')
-      return
+    if (startingRef.current) return
+    startingRef.current = true
+    try {
+      if (!source) return
+      // T-112: no folder yet opens the chooser, as GIF, Compile and Reframe do. The
+      // red toast this used to raise sent the person to press a different button to
+      // get to the same dialog. A chooser that is canceled starts nothing and says
+      // nothing: the person changed their mind.
+      let dir = outDir
+      if (!dir) {
+        dir = await window.api.video.pickOutputDir()
+        if (!dir) return
+        setOutDir(dir)
+      }
+      // Phase 3.4: check for safe-zone collisions across the user's selected
+      // platforms before kicking off the queue. If anything is flagged, defer
+      // the actual run to the modal's "Continue anyway".
+      const issues = findSafeZoneIssues(
+        clips,
+        source.probe.width,
+        source.probe.height,
+        customPresets
+      )
+      if (issues.length > 0) {
+        setPendingSafeZoneRows(issues)
+        return
+      }
+      await runExportQueue(dir)
+    } finally {
+      startingRef.current = false
     }
-    // Phase 3.4: check for safe-zone collisions across the user's selected
-    // platforms before kicking off the queue. If anything is flagged, defer
-    // the actual run to the modal's "Continue anyway".
-    const issues = findSafeZoneIssues(
-      clips,
-      source.probe.width,
-      source.probe.height,
-      customPresets
-    )
-    if (issues.length > 0) {
-      setPendingSafeZoneRows(issues)
-      return
-    }
-    await runExportQueue()
   }
 
-  async function runExportQueue(): Promise<void> {
+  /** The modal's "Export anyway": the same single start (the question closes on the first press, but two presses can land before it does). */
+  async function continueExport(dir: string): Promise<void> {
+    if (startingRef.current) return
+    startingRef.current = true
+    try {
+      await runExportQueue(dir)
+    } finally {
+      startingRef.current = false
+    }
+  }
+
+  /** `dir` is a parameter, not read from state: the folder chosen a moment ago by
+   *  `startExport` is not in this closure's state yet (the same trap ReframePanel's
+   *  M13 comment records). */
+  async function runExportQueue(dir: string): Promise<void> {
     if (!source) return
-    if (!outDir) return
     // T-85: the same constructor Clip Kit uses on the saved values, so the
     // panel and the kit cannot stamp two different looks.
     const watermark: WatermarkSpec | null = buildWatermark(watermarkText, watermarkPosition)
+    // T-119: the guide says Clip Kit stamps "the watermark you last exported with", so an export with the
+    // field blank is the last one and the watermark is forgotten: both keys go together, as they are
+    // written together. Left alone, a person who cleared the field to stop stamping still got the old handle
+    // on every kit file.
+    // T-128 (4): remembered for Clip Kit and the next visit, and nothing below depends on it: these used to be awaited bare, so a write
+    // main refused ended `startExport` here and the export never began (no toast, no rows). Fire-and-forget through the helper.
     if (watermark) {
-      await window.api.settings.set('streamerHandle', watermark.text)
-      await window.api.settings.set('watermarkPosition', watermark.position)
+      void persistSetting('streamerHandle', watermark.text)
+      void persistSetting('watermarkPosition', watermark.position)
+    } else {
+      void persistSetting('streamerHandle', undefined)
+      void persistSetting('watermarkPosition', undefined)
     }
-    if (filenameTemplate) await window.api.settings.set('filenameTemplate', filenameTemplate)
+    // T-159 (3): a blank (or whitespace-only) box means the default pattern (expandFilenameTemplate), so it is the last export and the key is
+    // forgotten, as the watermark's is (T-119): the next visit shows the default instead of the template the person cleared.
+    void persistSetting('filenameTemplate', filenameTemplate.trim() ? filenameTemplate : undefined)
     const sourceBase = source.fileName.replace(/\.[^.]+$/, '')
     const queue: ExportJobSpec[] = []
     const statuses: JobStatus[] = []
@@ -282,8 +360,9 @@ export function ExportPanel(): JSX.Element | null {
         queue.push({
           jobId,
           sourcePath: source.filePath,
-          outDir,
-          clip,
+          outDir: dir,
+          // T-113: the clip as it plays — a stored speed of 0 is 1x, not a batch refusal.
+          clip: clipForExport(clip),
           preset: target.info.id,
           customPreset: target.custom,
           watermark,
@@ -302,28 +381,9 @@ export function ExportPanel(): JSX.Element | null {
     // zero, so the queue can never arrive here empty. T-49 deleted the
     // nothing-queued toast that used to sit here — copy no path can reach is
     // copy nobody notices going wrong.
-    setJobs(statuses)
-    setRunning(true)
-    try {
-      await window.api.video.exportBatch(queue)
-      toast.success(`Exported ${countOf(queue.length, 'file')}`)
-      // INIT-E (round 15): persist the choice on success so the next batch
-      // defaults to the same folder.
-      void window.api.settings.set('export.lastOutputDir', outDir)
-    } catch (err) {
-      // T-84: one verdict for the toast AND the rows. A cancel is neutral and
-      // says what survived; a failure is plain words. Either way the rows that
-      // did not finish keep saying so after the toast fades.
-      const { cancelled, message } = reportFailure(err, {
-        failed: 'Export failed.',
-        canceled: 'Export canceled. Files already finished are in your folder.'
-      })
-      setJobs((prev) =>
-        prev.map((j) => (j.percent < 100 ? { ...j, error: message, canceled: cancelled } : j))
-      )
-    } finally {
-      setRunning(false)
-    }
+    // T-135 (1): the batch runs in the queue's store (its listeners, its toast, its settling of the rows), not in this component: the person can
+    // leave this studio while it runs, and it still ends where it should.
+    await runExportBatch({ queue, statuses, dir, sourcePath: source.filePath, sourceName: source.fileName, sourceKey: videoKey(source) })
   }
 
   // Counts custom targets too, so the button's number is the number of files
@@ -333,14 +393,12 @@ export function ExportPanel(): JSX.Element | null {
     0
   )
 
-  /** Everything the user can tick for a clip: the five platforms, then the
-   *  saved custom presets in the order the manager lists them (by name). */
+  /** Everything the user can tick for a clip: the six built-in cards (five platforms, YouTube
+   *  1080p60 beside YouTube), then the saved custom presets in the order the manager lists them (by name). */
   const gridTargets: Array<{ key: string; info: PlatformInfo; custom: CustomPreset | null }> = [
     ...ALL_PLATFORM_IDS.map((id) => ({ key: id, info: PLATFORM_INFO[id], custom: null })),
     ...customPresets.map((p) => ({ key: p.id, info: customPresetInfo(p), custom: p }))
   ]
-
-  const remainingJobCount = jobs.filter((j) => j.percent < 100 && !j.error).length
 
   return (
     <>
@@ -350,38 +408,10 @@ export function ExportPanel(): JSX.Element | null {
       onCancel={() => setPendingSafeZoneRows(null)}
       onContinue={() => {
         setPendingSafeZoneRows(null)
-        void runExportQueue()
+        if (outDir) void continueExport(outDir)
       }}
     />
-    {/* INIT-I (round 16): confirm before cancelling a multi-job batch. */}
-    <Modal
-      open={showCancelConfirm}
-      onClose={() => setShowCancelConfirm(false)}
-      title="Cancel running jobs"
-      className="max-w-sm w-full p-5"
-    >
-      <h2 className="text-lg font-semibold mb-2">Cancel running jobs</h2>
-      <p className="text-sm text-ink-base mb-4">
-        Cancel {countOf(remainingJobCount, 'running job')}?
-      </p>
-      <div className="flex justify-end gap-2">
-        <button
-          className="btn-ghost px-3 py-1.5 text-sm"
-          onClick={() => setShowCancelConfirm(false)}
-        >
-          Keep running
-        </button>
-        <button
-          className="btn-primary px-3 py-1.5 text-sm"
-          onClick={() => {
-            setShowCancelConfirm(false)
-            void window.api.video.cancelAll()
-          }}
-        >
-          Cancel jobs
-        </button>
-      </div>
-    </Modal>
+    <ExportCancelConfirm open={showCancelConfirm} onClose={() => setShowCancelConfirm(false)} />
     <div className="card p-4 flex flex-col gap-4" data-tutorial="video-export">
       <PanelHeader
         icon="download"
@@ -399,38 +429,44 @@ export function ExportPanel(): JSX.Element | null {
             </button>
             <button
               className="btn-primary px-4 py-1.5 text-sm disabled:opacity-50"
-              disabled={running || totalQueued === 0}
+              disabled={running || kitRunning || totalQueued === 0}
               onClick={startExport}
+              // T-112: a disabled button says why (the same sentence is under the
+              // platform cards, visible without hovering — the Compile card's pattern;
+              // T-194 (1): worded without "below" so it is true in both places).
+              // T-155 (4): and when it is the kit it waits for, it names the kit.
+              title={
+                kitRunning && !running
+                  ? 'Clip Kit is running. Export when it is done.'
+                  : !running && totalQueued === 0
+                    ? NOTHING_QUEUED
+                    : undefined
+              }
             >
               {/* T-94: the button says what it will produce. "Export 6" left a
                   user who had scanned a VOD for highlights to guess whether
                   that meant their five excerpts or five plus the whole video. */}
               {running ? 'Exporting…' : totalQueued === 0 ? 'Export' : `Export ${countOf(totalQueued, 'file')}`}
             </button>
-            {running ? (
-              // B8 fix (round 15) + INIT-I (round 16): a long batch had no
-              // abort path. Cancel calls cancelAll, but a misclick during a
-              // 20-clip batch was too costly — confirm before nuking >=2
-              // running jobs.
-              <button
-                className="btn-ghost px-3 py-1.5 text-sm"
-                onClick={() => {
-                  const remaining = jobs.filter((j) => j.percent < 100 && !j.error).length
-                  if (remaining >= 2) {
-                    setShowCancelConfirm(true)
-                  } else {
-                    void window.api.video.cancelAll()
-                  }
-                }}
-              >
-                Cancel
-              </button>
-            ) : null}
           </div>
         }
       >
         Export
       </PanelHeader>
+      {running ? (
+        // B8 fix (round 15) + INIT-I (round 16): a long batch had no abort path. Cancel calls cancelAll, but a misclick during a
+        // 20-clip batch was too costly - confirm before nuking >=2 running jobs.
+        // T-127 (2): and Cancel has a row of its own (Compile, GIF and Picture-in-picture got theirs in T-126 (20); this one was left out).
+        // Beside the primary it took the place the primary's right edge had a moment ago - "Export 1 file" is wider than "Exporting..." -
+        // so the second press of a double-click landed on Cancel, and with ONE job there is no confirm: "Export canceled." and no file.
+        // Where the second press lands now is the disabled primary.
+        <div className="flex justify-end">
+          <RunningCancel
+            title="Cancel export"
+            onClick={() => requestExportCancel(() => setShowCancelConfirm(true))}
+          />
+        </div>
+      ) : null}
 
       <div className="flex items-center gap-2 text-xs">
         <span className="text-ink-muted">Watermark:</span>
@@ -456,15 +492,20 @@ export function ExportPanel(): JSX.Element | null {
         </select>
       </div>
 
-      <div className="flex items-center gap-2 text-xs">
-        <span className="text-ink-muted">Filename:</span>
-        <input
-          type="text"
-          value={filenameTemplate}
-          onChange={(e) => setFilenameTemplate(e.target.value)}
-          className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
-          placeholder="{source}_{clip}_{preset}"
-        />
+      <div className="flex flex-col gap-1 text-xs">
+        <div className="flex items-center gap-2">
+          <span className="text-ink-muted">Filename:</span>
+          <input
+            type="text"
+            value={filenameTemplate}
+            onChange={(e) => setFilenameTemplate(e.target.value)}
+            className="flex-1 bg-bg-base rounded px-2 py-1 font-mono"
+            maxLength={200}
+            placeholder="{source}_{clip}_{preset}"
+          />
+        </div>
+        {/* T-131 (14): the token list is its own line under the box. Beside it, at the 1024 px window, it took the row and left the box 168 px
+            for a 189 px default template: the one input in the app that cut its own value. */}
         <span className="text-ink-dim font-mono">
           Tokens: {'{source} {clip} {preset} {date} {time} {handle}'}
         </span>
@@ -472,7 +513,7 @@ export function ExportPanel(): JSX.Element | null {
 
       {selectedClip ? (
         <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
-          {/* T-50: the five platforms, then every saved custom preset. Same
+          {/* T-50: the six built-in cards (T-130: YouTube 1080p60 joined the five), then every saved custom preset. Same
               checkbox, same geometry line, same success indicator — a saved
               preset is an export target, so it looks and behaves like one.
               The only difference is the "custom" tag that lets the eye split
@@ -516,7 +557,7 @@ export function ExportPanel(): JSX.Element | null {
                         : togglePreset(selectedClip.id, target.info.id)
                     }
                   />
-                  <span className="font-medium truncate">{target.info.label}</span>
+                  <span className="font-medium truncate" title={target.info.label}>{target.info.label}</span>
                   {target.custom ? (
                     <span className="text-xs uppercase tracking-wide text-ink-dim border border-ink-dim/40 rounded px-1 shrink-0">
                       Custom
@@ -546,52 +587,95 @@ export function ExportPanel(): JSX.Element | null {
         </div>
       ) : null}
 
+      {/* T-153: the wrapper is always mounted so unchecking the last platform ANNOUNCES why Export went dark (a live region that appears
+          with its content is not reliably read - GifPanel's pattern). While it is empty it is still a flex item with a gap on each side, so
+          `-mb-4` takes back the second one; nothing is hidden (no display:none, no visibility:hidden), it stays in the accessibility tree.
+          T-193 (2): it sits BELOW the grid, not above it. Above, it appeared when the last card was unchecked and pushed every card down by its
+          line and a gap (32 px): a double-click on the only checked card checked a different one with its second press. Below, the line arrives
+          where nothing a press on a card reaches is. */}
+      <div role="status" className={!running && totalQueued === 0 ? undefined : '-mb-4'}>
+        {!running && totalQueued === 0 ? <p className="text-xs text-warn">{NOTHING_QUEUED}</p> : null}
+      </div>
+
       {jobs.length > 0 ? (
         <div className="flex flex-col gap-2 mt-2">
+          {/* T-168 (4): a batch keeps its rows while it runs, whatever video is open now - B's Export read "Exporting…" over A's rows and a Cancel nobody could
+              attribute. The line names the video the batch is for; it is only said when it is not the open one (there the rows speak for themselves).
+              T-171 (6): the clause first and two lines, so "started on another video" and the whole file name are on screen. */}
+          {running && queueSourceKey !== videoKey(source) && queueSourceName ? (
+            <p
+              className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words"
+              title={`Started on another video: export of ${queueSourceName}.`}
+            >
+              Started on another video: export of {queueSourceName}.
+            </p>
+          ) : null}
           <PanelHeader icon="package">Queue</PanelHeader>
           {jobs.map((j) => (
-            <div key={j.jobId} className="flex items-center gap-3 text-sm">
-              <span className="flex-1 truncate">
-                {j.clipName} · {j.presetLabel}
-              </span>
-              <div className="w-40 h-1.5 bg-bg-hover rounded-full overflow-hidden">
-                <div
-                  className={`h-full ${j.error ? 'bg-danger-strong' : 'bg-accent'}`}
-                  style={{ width: `${Math.round(j.percent)}%` }}
-                />
-              </div>
-              <span
-                className="font-mono text-xs text-ink-muted w-10 text-right"
-                role="status"
-                aria-live="polite"
-              >
-                {Math.round(j.percent)}%
-              </span>
-              {/* T-84: the words for a bar that stopped. The toast fades in a
-                  few seconds; a red bar alone never said whether the file was
-                  lost to a fault or to the user's own Cancel. */}
-              {j.error ? (
-                <span
-                  className={`text-xs font-medium ${j.canceled ? 'text-ink-muted' : 'text-danger'}`}
-                  title={j.error}
-                >
-                  {j.canceled ? 'Canceled' : 'Failed'}
+            <div key={j.jobId} className="flex flex-col gap-0.5">
+              <div className="flex items-center gap-3 text-sm">
+                <span className="flex-1 min-w-0 truncate" title={`${j.clipName} · ${j.presetLabel}`}>
+                  {j.clipName} · {j.presetLabel}
+                  {/* T-112: the file this row wrote, by the name main gave it —
+                      "clip (2).mp4" when the name was taken (T-106) — so a numbered
+                      file is never a surprise in the folder. */}
+                  {j.outputPath ? (
+                    <span className="block truncate text-xs text-ink-dim font-mono" title={j.outputPath}>
+                      {basename(j.outputPath)}
+                    </span>
+                  ) : null}
                 </span>
-              ) : null}
-              {j.outputPath ? (
-                <button
-                  className="text-xs text-accent hover:underline"
-                  // M13 fix (round 15): see audio ExportDialog — closure-time
-                  // narrowing escape; assertDefined keeps the contract explicit.
-                  onClick={() =>
-                    window.api.video.revealInFolder(
-                      assertDefined(j.outputPath, 'j.outputPath')
-                    )
-                  }
-                >
-                  Show in folder
-                </button>
-              ) : null}
+                {/* T-114: a progressbar named for its job and valued - four identical bars were four
+                    unnamed divs. T-183 (1): the bar carries the value, so the percent beside it is aria-hidden (the T-144/T-146 rule:
+                    "a percent that moves several times a second would be read out each time from a polite region"; main forwards ffmpeg's
+                    progress unthrottled, so this one was up to 100 announcements a file). It is drawn as before. */}
+                {/* T-100: red is for a fault. A row the user canceled keeps its label and loses the color that said "something broke"
+                    (the track's `tone`). */}
+                <ProgressTrack
+                  className="w-40"
+                  label={`${j.clipName} · ${j.presetLabel}`}
+                  percent={j.percent}
+                  tone={j.error ? (j.canceled ? 'canceled' : 'failed') : 'active'}
+                />
+                <span className="font-mono text-xs text-ink-muted w-10 shrink-0 whitespace-nowrap text-right" aria-hidden="true">
+                  {Math.round(j.percent)}%
+                </span>
+                {/* T-84: the words for a bar that stopped. The toast fades in a
+                    few seconds; a red bar alone never said whether the file was
+                    lost to a fault or to the user's own Cancel. T-112: a row the
+                    batch never reached says "Not run", in neutral ink — a failure
+                    of the job before it, not of this one. */}
+                {j.error ? (
+                  <span
+                    className={`text-xs font-medium ${j.canceled ? 'text-ink-muted' : 'text-danger'}`}
+                    title={j.error}
+                  >
+                    {j.canceled ? 'Canceled' : 'Failed'}
+                  </span>
+                ) : j.notRun ? (
+                  <span className="text-xs font-medium text-ink-muted">Not run</span>
+                ) : null}
+                {j.outputPath ? (
+                  <button
+                    className="text-xs text-accent hover:underline"
+                    // M13 fix (round 15): see audio ExportDialog — closure-time
+                    // narrowing escape; assertDefined keeps the contract explicit.
+                    onClick={() =>
+                      window.api.video.revealInFolder(
+                        assertDefined(j.outputPath, 'j.outputPath')
+                      )
+                    }
+                  >
+                    Show in folder
+                  </button>
+                ) : null}
+              </div>
+              {/* T-112: the reason is text on the row that failed, not only a hover
+                  title — "you can still see which one, and why, after the message
+                  fades". A canceled row's reason is the cancel sentence, which the
+                  word "Canceled" already says. */}
+              {/* T-190 (5): the reason is the failure's own words, which a person searches or pastes into a message: selectable (the page is not). */}
+              {j.error && !j.canceled ? <p className="text-xs text-danger select-text">{j.error}</p> : null}
             </div>
           ))}
         </div>

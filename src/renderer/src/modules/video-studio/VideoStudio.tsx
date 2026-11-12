@@ -1,15 +1,22 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import toast from 'react-hot-toast'
 import { useNavigate } from 'react-router-dom'
-import { countOf } from '@shared/plural'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
-import { useVideoStore } from './store/videoStore'
+import { NO_SOUND_MESSAGE, useVideoStore, videoDiscardMessage, videoHasNoSound, videoKey } from './store/videoStore'
 import { useAudioStore } from '../audio-studio/state/audioStore'
+import { confirmAudioClose, confirmReplaceAfterWait } from '../audio-studio/audioClose'
+import { currentRoute, keptPartQuestion, replacedSince } from '../project/ProjectIO'
+import { toastWithActions } from '../../lib/savedToast'
+import { mayLeaveLiveTake } from '../../lib/liveTake'
+import { useCleanAudioRun } from './store/runs'
+import { useVideoProgressFeeds } from './store/useVideoProgressFeeds'
 import { Importer } from './Importer'
 import { Player } from './Player'
 import { Timeline } from './Timeline'
 import { ClipList } from './ClipList'
+import { ClipKitRunning } from './ClipKitButton'
+import { VideoJobsRunning, jobsKeepGoingSentence, readVideoRunSnapshot } from './VideoJobsRunning'
 import { ExportPanel } from './ExportPanel'
 import { TextOverlayEditor } from './TextOverlayEditor'
 import { ReframePanel } from './ReframePanel'
@@ -28,10 +35,10 @@ import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { reportFailure } from '../../lib/reportFailure'
 import { videoTutorial } from '../../tutorials/videoTutorial'
+import { dropSwapPress, recordSwapPress } from '../../lib/swapFocus'
 
 export function VideoStudio(): JSX.Element {
   const source = useVideoStore((s) => s.source)
-  const clipCount = useVideoStore((s) => s.clips.length)
   const clearSource = useVideoStore((s) => s.clearSource)
   const undo = useVideoStore((s) => s.undo)
   const redo = useVideoStore((s) => s.redo)
@@ -39,7 +46,11 @@ export function VideoStudio(): JSX.Element {
   const canRedo = useVideoStore((s) => s.canRedo())
   const loadAudioSource = useAudioStore((s) => s.loadSource)
   const navigate = useNavigate()
-  const [extractingAudio, setExtractingAudio] = useState(false)
+  // T-145: the reframe, scan and caption progress feeds belong to the studio, not to the panels a Close unmounts - the closed video's card draws them.
+  useVideoProgressFeeds()
+  // T-135 (1): the extraction is a module store, not this studio's state - Clean audio's own navigation (and any trip to Home) unmounts the studio,
+  // and it came back with the button enabled over an extraction still running, whose second press ran a second concurrent one.
+  const extractingAudio = useCleanAudioRun((s) => s.run !== null)
   // T-38: the Player publishes its <video> here as it attaches, so the output
   // preview has the element on the very next render. It used to be read off a
   // global during the render that MOUNTS the Player — always null, and the
@@ -50,56 +61,129 @@ export function VideoStudio(): JSX.Element {
   // T-86: the first-visit tour waits for a video — an empty studio is only the
   // importer, and a coachmark over it points at trim handles that are not there.
   const tutorial = useTutorial(videoTutorial, source !== null)
+  const noSound = videoHasNoSound(source)
 
   // T-15: videoStore has had full history since round 18, but the studio
   // exposed no way to reach it — trims, clip removal, and color grades were
   // un-undoable in place. Same binding as Audio Studio and Stream Graphics.
   useUndoRedoHotkeys(undo, redo)
 
-  function handleClose(): void {
+  // T-192 (3): a pick's record of "this control had focus" lives until the Player can take it; a studio that goes away first must not leave it for the next video.
+  useEffect(() => () => dropSwapPress('video-play'), [])
+
+  function handleClose(hadFocus: boolean): void {
     // UX round 18: clearSource() silently wiped every clip and its edits.
-    // Confirm first whenever there is anything to lose (source load always
-    // creates at least one clip, and clearSource also drops undo history,
-    // so this is unrecoverable).
-    if (clipCount > 0) {
-      const ok = confirm(
-        `Close this video? ${countOf(clipCount, 'clip')} and their edits will be discarded.`
-      )
-      if (!ok) return
-    }
+    // Confirm first whenever there is anything to lose, and not otherwise (T-147 (3): a video
+    // nobody touched has one pristine clip and nothing else, `videoSessionHasLoss`; clearSource also
+    // drops the undo history, so this is unrecoverable). The state is read here, when Close is
+    // pressed, not from a render's closure.
+    // T-144: Close does not stop a job that is running - it takes its panel away, and the closed-video card (`VideoJobsRunning`, `ClipKitRunning`) keeps the Cancel
+    // on screen. The question says so, so a person who closes the video does not believe they stopped it.
+    const message = videoDiscardMessage(useVideoStore.getState(), 'close', jobsKeepGoingSentence(readVideoRunSnapshot()))
+    if (message !== null && !confirm(message)) return
+    // T-192 (3): Close takes itself away with the video, and focus goes to the importer's Choose file… when Close held it (read at the press, before the confirm).
+    recordSwapPress('video-choose', hadFocus)
     clearSource()
   }
 
   async function cleanAudioFlow(): Promise<void> {
     if (!source) return
-    setExtractingAudio(true)
+    // T-129: no length gate here any more. T-124 (6) refused a video over two hours at this button (the most Audio Studio's
+    // waveform could hold when the renderer decoded it); the waveform is drawn from main's peaks now, so a 4 h VOD is cleaned
+    // like any other recording.
+    // T-112: handing this video's sound to Audio Studio REPLACES what that studio holds,
+    // and the chain, the cuts and the undo history go with it. When it holds tuned work
+    // the person is asked first, over the same list of what would be lost as Audio Studio's
+    // own Close — but nothing is being closed here, so T-113's lead-in says "Replace the audio
+    // you're editing?". (Nothing loaded, or nothing changed, asks nothing: `confirmAudioClose`
+    // answers yes.)
+    const chainAsked = useAudioStore.getState().chain
+    if (!confirmAudioClose(chainAsked, (message) => confirm(message), 'replace')) return
+    // T-175 (3): and a chain kept for a sound that could not be opened is let go when this video's sound loads. `soundKey` of the extracted sound is
+    // `videoKey(source)` (the original of a converted import, else the file): the same video's own kept chain asks nothing. Cancel extracts nothing. T-176: what opens is the video's SOUND (the video is already open), and the question says so.
+    const keptQuestion = keptPartQuestion('audio', videoKey(source), `the sound of ${source.fileName}`)
+    if (keptQuestion !== null && !confirm(keptQuestion)) return
+    if (!useCleanAudioRun.getState().begin({ videoPath: source.filePath })) return
     toast.loading('Extracting audio…', { id: 'extract-audio' })
+    // T-125 (20): what Audio Studio holds NOW, kept to compare with what it holds when the extraction ends. The question above is
+    // asked before a wait that can be minutes long, and the person is free to go to Audio Studio and open a file in it meanwhile.
+    const heldBefore = useAudioStore.getState().source
     try {
-      const wavPath = await window.api.audio.extractFromVideo(source.filePath)
-      await loadAudioSource(wavPath, source.filePath)
+      const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(source.filePath)
+      if (replacedSince(heldBefore, useAudioStore.getState().source)) {
+        // They opened something else there while this ran (`replacedSince`: ProjectIO's rule for a project open): that work stays,
+        // the result is not loaded over it, and nothing pulls them to a studio they are already in or have left.
+        toast.dismiss('extract-audio')
+        toast("Skipped this video's sound because you opened another file in Audio Studio while it was extracting", {
+          icon: <Icon name="warning" size={18} />,
+          duration: 8000
+        })
+        return
+      }
+      // T-133 (6): the same file, tuned meanwhile. `replacedSince` sees only a different source; loading resets the chain and the undo history,
+      // so work done during the wait would be replaced with no way back. The question is asked again over what is there now (not about work
+      // they already agreed to lose before the wait: `chainAsked` is the chain that question was about).
+      if (!confirmReplaceAfterWait(chainAsked, useAudioStore.getState().chain, (message) => confirm(message))) {
+        toast.dismiss('extract-audio')
+        toast("Skipped this video's sound to keep the changes you made in Audio Studio while it was extracting", {
+          icon: <Icon name="warning" size={18} />,
+          duration: 8000
+        })
+        return
+      }
+      // T-107: a converted import's working copy is scratch; the audio studio is
+      // told the original too, so a saved project can name the file the person owns.
+      await loadAudioSource(wavPath, source.filePath, source.convertedFrom, hasVideo)
       toast.dismiss('extract-audio')
-      toast.success('Opening Audio Studio')
-      navigate('/audio')
+      // T-132 (1): the extraction takes minutes for a long recording, and the person is free to go anywhere meanwhile. `navigate` still
+      // works from a studio that unmounted, so this used to take them to /audio wherever they were - from /record that unmounts
+      // RecordStudio, whose cleanup stops the tracks and cut a LIVE TAKE short. Only a person still on this studio is taken along; anyone
+      // else keeps their screen, the sound is loaded, and a toast offers the way there ("nothing teleports the user", ProjectIO).
+      const where = currentRoute()
+      if (where === '/video') {
+        toast.success('Opening Audio Studio')
+        navigate('/audio')
+      } else {
+        // On Audio Studio itself the sound has simply appeared in front of them: the toast only says whose it is.
+        toastWithActions(
+          `Extracted the sound from ${source.fileName}`,
+          where === '/audio'
+            ? []
+            : [
+                {
+                  label: 'Open Audio Studio',
+                  // T-133 (1): this toast can be over the REC screen (that is where T-132 (1) leaves a person whose take was running), and
+                  // the button navigates away from it: a live take is asked about first, as the Home link asks.
+                  onClick: () => {
+                    if (mayLeaveLiveTake()) navigate('/audio')
+                  }
+                }
+              ]
+        )
+      }
     } catch (err) {
       toast.dismiss('extract-audio')
       reportFailure(err, { failed: "Couldn't extract the audio." })
     } finally {
-      setExtractingAudio(false)
+      useCleanAudioRun.getState().end()
     }
   }
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
-      <header className="flex items-center justify-between">
-        <div>
+      {/* T-144 (2): at the 1024 px minimum a realistic VOD name (40+ characters) wrapped the title to "Video / Studio" and "Clean audio" onto two lines (DESIGN_GUIDE,
+          Layout). The title and every button are one line and keep their width (`whitespace-nowrap shrink-0`); the right group may shrink (`min-w-0`) and the NAME is the one item that
+          gives way - an ellipsis, with the full name as its title. */}
+      <header className="flex items-center justify-between gap-4">
+        <div className="shrink-0">
           <HomeLink />
-          <h1 className="text-2xl font-semibold mt-1">Video Studio</h1>
+          <h1 className="text-2xl font-semibold mt-1 whitespace-nowrap">Video Studio</h1>
         </div>
-        <div className="flex items-center gap-3 text-sm text-ink-muted">
+        <div className="flex min-w-0 items-center gap-3 text-sm text-ink-muted">
           {source ? (
             <>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 disabled={!canUndo}
                 onClick={undo}
                 title="Undo (Ctrl+Z)"
@@ -107,30 +191,46 @@ export function VideoStudio(): JSX.Element {
                 <Icon name="undo" size={15} /> Undo
               </button>
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 disabled={!canRedo}
                 onClick={redo}
                 title="Redo (Ctrl+Y)"
               >
                 <Icon name="redo" size={15} /> Redo
               </button>
+              {/* T-112: a video with no audio stream has nothing to clean; the button says
+                  so instead of extracting an empty track. */}
+              {noSound ? <span className="text-xs text-warn whitespace-nowrap shrink-0">{NO_SOUND_MESSAGE}</span> : null}
               <button
-                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5"
+                className="btn-ghost px-3 py-1.5 disabled:opacity-50 inline-flex items-center gap-1.5 whitespace-nowrap shrink-0"
                 onClick={cleanAudioFlow}
-                disabled={extractingAudio}
-                title="Extract this video's audio and open it in Audio Studio"
+                disabled={extractingAudio || noSound}
+                title={
+                  noSound
+                    ? NO_SOUND_MESSAGE
+                    : "Extract this video's audio and open it in Audio Studio"
+                }
               >
                 <Icon name="audio" size={15} /> Clean audio
               </button>
-              <span className="truncate max-w-[40ch]">{source.fileName}</span>
-              <button className="btn-ghost px-3 py-1.5" onClick={handleClose}>
+              <span className="min-w-0 truncate max-w-[40ch]" title={source.fileName}>{source.fileName}</span>
+              <button className="btn-ghost px-3 py-1.5 whitespace-nowrap shrink-0" onClick={(e) => handleClose(document.activeElement === e.currentTarget)}>
                 Close
               </button>
             </>
           ) : null}
-          <TutorialButton onClick={tutorial.start} />
+          <span className="shrink-0">
+            <TutorialButton onClick={tutorial.start} />
+          </span>
         </div>
       </header>
+
+      {/* T-137 (3): mounted whether a video is open or not, so its live region exists BEFORE the moment it has something to say (a kit still running when
+          the video is closed). It draws its card only while a kit runs and no video is open (T-136 (1)), above the importer where it always was. */}
+      <ClipKitRunning />
+      {/* T-144: and the same for the other long jobs (the export batch, Reframe, GIF, Compile, Picture-in-picture, Scan VOD, transcription and burn-in), whose panels
+          are gone with the video: one card, one row each, with the Cancel their panel has. Mounted whether a video is open or not, for the same reason. */}
+      <VideoJobsRunning />
 
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">

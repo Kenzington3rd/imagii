@@ -15,9 +15,10 @@ import {
   clearThumbCache
 } from '../search/moodboard'
 import type { MoodBoardCollection, SearchResponse, SearchResult } from '../../shared/search'
-import { validateSearchResult } from '../../shared/search'
+import { MAX_BOARD_NAME, validateSearchResult } from '../../shared/search'
 import { assertNonEmptyString } from '../../shared/validators'
-import { assert } from '../../shared/assert'
+import { assertAlways } from '../../shared/assert'
+import { SAFE_ID_RE } from '../../shared/pathSafety'
 
 // Round 17 phase-2: every moodboard handler now passes its renderer-supplied
 // inputs through the same gates the rest of the IPC surface uses. The
@@ -25,16 +26,14 @@ import { assert } from '../../shared/assert'
 // IPC boundary is where untrusted input first arrives so a hostile/buggy
 // renderer can't trigger an internal assertion message; it gets a clean
 // validation error instead.
-const SAFE_ID_RE = /^[A-Za-z0-9_-]+$/
-const MAX_BOARD_NAME = 200
 function assertSafeId(value: unknown, name: string): asserts value is string {
   assertNonEmptyString(value, name)
-  assert(SAFE_ID_RE.test(value), `${name} must match nanoid alphabet`)
-  assert(value.length <= 64, `${name} too long`)
+  assertAlways(SAFE_ID_RE.test(value), `${name} must match nanoid alphabet`)
+  assertAlways(value.length <= 64, `${name} too long`)
 }
 function assertBoardName(value: unknown, name: string): asserts value is string {
   assertNonEmptyString(value, name)
-  assert(value.length <= MAX_BOARD_NAME, `${name} exceeds ${MAX_BOARD_NAME} chars`)
+  assertAlways(value.length <= MAX_BOARD_NAME, `${name} exceeds ${MAX_BOARD_NAME} chars`)
 }
 
 /**
@@ -129,9 +128,9 @@ export function registerSearchIpc(): void {
   // argument; the items themselves are normalized by the store's own parser
   // before anything is written.
   ipcMain.handle('moodboard:restore', (_e, collections: unknown) => {
-    assert(Array.isArray(collections), 'moodboard.collections must be an array')
+    assertAlways(Array.isArray(collections), 'moodboard.collections must be an array')
     for (const entry of collections) {
-      assert(
+      assertAlways(
         typeof entry === 'object' && entry !== null,
         'moodboard.collections entry must be an object'
       )

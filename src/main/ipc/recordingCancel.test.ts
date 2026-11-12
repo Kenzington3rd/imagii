@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import { mkdtempSync, rmSync, existsSync, writeFileSync, readFileSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { mkdirSync, mkdtempSync, readdirSync, rmSync, existsSync, writeFileSync, readFileSync, statSync, utimesSync } from 'node:fs'
 import path from 'node:path'
 import { tmpdir } from 'node:os'
 
@@ -19,7 +20,7 @@ import { tmpdir } from 'node:os'
 let TMP = ''
 const handlers = new Map<string, (...args: unknown[]) => unknown>()
 
-const fakeWin = { webContents: { send: vi.fn() } }
+const fakeWin = { webContents: { isDestroyed: () => false, send: vi.fn() } }
 let saveDialogResult: { canceled: boolean; filePath?: string } = { canceled: true }
 // T-88: every options object the save dialog was opened with, so the title the
 // user reads can be asserted without an OS dialog.
@@ -48,23 +49,51 @@ vi.mock('electron', () => ({
 // Only the ffmpeg child is faked. `cancelConverts`, `ConvertCancelledError`
 // and `ConvertFailedError` stay REAL, so the `instanceof` discrimination
 // under test is the shipped one rather than a test double's shape.
-type ConvertOutcome = 'ok' | 'cancelled' | 'crash'
+// 'discarded-after-exit': the convert finished, and the Discard is recorded on the save's run between the exit and the swap (T-140 (1)); 'quit-after-exit' is
+// the same instant with the quit's sweep in place of the person (T-141 (5): the two end the save differently, and only the quit keeps the raw take).
+type ConvertOutcome = 'ok' | 'cancelled' | 'crash' | 'discarded-after-exit' | 'quit-after-exit'
 let convertOutcome: ConvertOutcome = 'ok'
+// T-120: the WebM branch's remux - what it was asked to copy where, and how it ends.
+let remuxOutcome: ConvertOutcome = 'ok'
+let remuxCalls: Array<{ input: string; output: string }> = []
+// T-115: what the handler handed the convert - the progress callback and the length of the take.
+let lastConvert: {
+  onProgress?: (p: { percent?: number }) => void
+  durationSec?: number
+} | null = null
 
 vi.mock('../ffmpeg/convert', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../ffmpeg/convert')>()
   return {
     ...actual,
+    // T-120: the WebM branch's packet copy. Like the convert, it writes SOMETHING first (a half-written
+    // output is what a kill leaves), and what it does after is the test's choice.
+    remuxWebm: async (_owner: string, input: string, webmPath: string): Promise<void> => {
+      remuxCalls.push({ input, output: webmPath })
+      writeFileSync(webmPath, remuxOutcome === 'ok' || remuxOutcome === 'discarded-after-exit' || remuxOutcome === 'quit-after-exit' ? 'remuxed-webm-bytes' : 'partial')
+      if (remuxOutcome === 'cancelled') throw new actual.ConvertCancelledError()
+      if (remuxOutcome === 'discarded-after-exit') actual.cancelConverts(_owner as import('../ffmpeg/convert').ConvertOwner)
+      if (remuxOutcome === 'quit-after-exit') actual.cancelAllConverts()
+      if (remuxOutcome === 'crash') throw new actual.ConvertFailedError(1, null, 'Invalid data found')
+    },
     convertToMp4: async (
       _owner: string,
       _input: string,
-      mp4Path: string
+      mp4Path: string,
+      onProgress?: (p: { percent?: number }) => void,
+      durationSec?: number
     ): Promise<void> => {
+      lastConvert = { onProgress, durationSec }
       // Every branch writes SOMETHING first: real ffmpeg has already put
       // bytes at the user's chosen path by the time it is killed, and that
       // stranded file is the point of the test.
-      writeFileSync(mp4Path, convertOutcome === 'ok' ? 'full-mp4-bytes' : 'partial')
+      writeFileSync(
+        mp4Path,
+        convertOutcome === 'ok' || convertOutcome === 'discarded-after-exit' || convertOutcome === 'quit-after-exit' ? 'full-mp4-bytes' : 'partial'
+      )
       if (convertOutcome === 'cancelled') throw new actual.ConvertCancelledError()
+      if (convertOutcome === 'discarded-after-exit') actual.cancelConverts(_owner as import('../ffmpeg/convert').ConvertOwner)
+      if (convertOutcome === 'quit-after-exit') actual.cancelAllConverts()
       if (convertOutcome === 'crash') {
         // The real rejection shape, so the friendly copy under test is built
         // from the same fields ffmpeg's close handler fills in.
@@ -74,9 +103,27 @@ vi.mock('../ffmpeg/convert', async (importOriginal) => {
   }
 })
 
-const { cancelRecordingConvert, registerRecordingIpc, recordingConvertFailureMessage } =
+// T-140 (1): the WebM branch's fallback is a plain copy of the take; a test can make it fail part-way (a full drive) to see what the chosen path holds then.
+let copyHook: ((real: typeof import('node:fs/promises'), src: string, dst: string) => Promise<void>) | null = null
+// T-140 (1): and the swap onto the chosen path can be refused the way Windows refuses it while the file is open in another app (Linux cannot be made to).
+let renameHook: ((real: typeof import('node:fs/promises'), from: string, to: string) => Promise<void>) | null = null
+// T-143 (1): and the touch that restarts the kept take's 6 hours can be made to fail (a take whose folder went read-only is the case it stands for).
+let utimesHook: ((real: typeof import('node:fs/promises'), file: string, atime: Date, mtime: Date) => Promise<void>) | null = null
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...real,
+    copyFile: async (src: string, dst: string) => (copyHook ? copyHook(real, src, dst) : real.copyFile(src, dst)),
+    rename: async (from: string, to: string) => (renameHook ? renameHook(real, from, to) : real.rename(from, to)),
+    utimes: async (file: string, atime: Date, mtime: Date) => (utimesHook ? utimesHook(real, file, atime, mtime) : real.utimes(file, atime, mtime))
+  }
+})
+
+const { cancelRecordingConvert, registerRecordingIpc, recordingConvertFailureMessage, recordingKeptMessage } =
   await import('./recording')
+const { userFacingError } = await import('../../shared/userFacingError')
 const { ConvertFailedError } = await import('../ffmpeg/convert')
+const { pruneStaleTempFiles, __testing__ } = await import('../tempCleanup')
 registerRecordingIpc()
 
 function invoke<T>(channel: string, ...args: unknown[]): Promise<T> {
@@ -121,6 +168,12 @@ const mainLog = vi.spyOn(console, 'error').mockImplementation(() => {})
 beforeEach(() => {
   TMP = mkdtempSync(path.join(tmpdir(), 'imagii-rec-cancel-'))
   convertOutcome = 'ok'
+  remuxOutcome = 'ok'
+  copyHook = null
+  renameHook = null
+  utimesHook = null
+  remuxCalls = []
+  lastConvert = null
   saveDialogResult = { canceled: true }
   saveDialogOptions = []
   fakeWin.webContents.send.mockClear()
@@ -132,12 +185,12 @@ afterEach(() => {
 
 describe('cancelRecordingConvert', () => {
   it('returns false when there is no in-flight conversion', () => {
-    expect(cancelRecordingConvert()).toBe(false)
+    expect(cancelRecordingConvert('take-a')).toBe(false)
   })
 
   it('is idempotent', () => {
-    expect(cancelRecordingConvert()).toBe(false)
-    expect(cancelRecordingConvert()).toBe(false)
+    expect(cancelRecordingConvert('take-a')).toBe(false)
+    expect(cancelRecordingConvert('take-a')).toBe(false)
   })
 })
 
@@ -251,6 +304,9 @@ describe('recordingConvertFailureMessage — what the user is told (T-59)', () =
     // The setting named in the copy is the one on the Record panel, so the
     // advice is followable rather than decorative.
     expect(msg).toContain('Convert to MP4 after recording')
+    // T-116: a box is checked and unchecked, never ticked (BRANDING_GUIDE, "Voice"); the label is quoted exactly.
+    expect(msg).toContain('uncheck "Convert to MP4 after recording" to keep the WebM.')
+    expect(msg).not.toMatch(/tick/i)
   })
 
   it('names the signal when the child died without an exit code', () => {
@@ -318,4 +374,544 @@ describe('the save dialog says what Cancel does (T-88)', () => {
     expect(result).toBeNull()
     expect(existsSync(tempPathFor(id))).toBe(false)
   })
+})
+
+describe('recording:finalize hands the convert the length of the take (T-115)', () => {
+  // The bar used to be `encoded seconds x 2`, because the convert was never told how long the take
+  // was. promoteTempWebm holds the recorder's own duration; the convert's percent is the encode
+  // position over it. (convertCancel.test.ts drives the percent; Layer 5 runs the real binary.)
+  async function finalizeWith(spec: Record<string, unknown>): Promise<void> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('webm chunk'))
+    saveDialogResult = { canceled: false, filePath: path.join(TMP, 'len.mp4') }
+    await invoke('recording:finalize', id, { filename: 'take.mp4', convertToMp4: true, ...spec })
+  }
+
+  it('passes spec.durationMs down as seconds', async () => {
+    await finalizeWith({ durationMs: 8000 })
+    expect(lastConvert?.durationSec).toBe(8)
+    await finalizeWith({ durationMs: 93_500 })
+    expect(lastConvert?.durationSec).toBe(93.5)
+  })
+
+  it.each([
+    ['no duration', {}],
+    ['a duration of 0', { durationMs: 0 }]
+  ])('passes none for %s, so the bar is indeterminate and nothing is invented', async (_label, spec) => {
+    await finalizeWith(spec)
+    expect(lastConvert).not.toBeNull()
+    expect(lastConvert?.durationSec).toBeUndefined()
+  })
+
+  it('forwards the convert\'s progress to the window as it came, a percent or none', async () => {
+    await finalizeWith({ durationMs: 8000 })
+    lastConvert?.onProgress?.({ percent: 25 })
+    lastConvert?.onProgress?.({})
+    expect(fakeWin.webContents.send.mock.calls).toEqual([
+      ['recording:progress', { percent: 25 }],
+      ['recording:progress', {}]
+    ])
+  })
+})
+
+describe('recording:finalize with Convert off saves a WebM whose header is repaired (T-120)', () => {
+  // A MediaRecorder webm is streamed, so its header has no duration and Video Studio's probe refuses it.
+  // The save used to be a plain copyFile of that file; it is now a packet copy into a fresh file
+  // (`remuxWebm`), with the same discard and cleanup the MP4 convert has. (Layer 5 runs the real binary
+  // on a MediaRecorder-shaped file and probes what it writes.)
+  async function recordAndSaveWebm(
+    outPath: string
+  ): Promise<{ id: string; result: unknown; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      const result = await invoke('recording:finalize', id, {
+        filename: 'take.webm',
+        durationMs: 5000,
+        convertToMp4: false
+      })
+      return { id, result, error: null }
+    } catch (err) {
+      return { id, result: undefined, error: err as Error }
+    }
+  }
+
+  it('hands the remux the temp take and the chosen path, and reports the file it wrote', async () => {
+    const outPath = path.join(TMP, 'kept.webm')
+    const { id, result, error } = await recordAndSaveWebm(outPath)
+
+    expect(error).toBeNull()
+    expect(remuxCalls).toHaveLength(1)
+    expect(remuxCalls[0]?.input).toBe(tempPathFor(id))
+    // T-140 (1): ffmpeg is handed a partial beside the chosen path (`.webm` last: the same muxer), which is swapped in once it is whole.
+    expect(remuxCalls[0]?.output).toMatch(/\/kept\.[0-9a-f]{8}\.partial\.webm$/)
+    expect(readFileSync(outPath, 'utf8')).toBe('remuxed-webm-bytes')
+    expect(result).toMatchObject({
+      outputPath: outPath,
+      format: 'webm',
+      durationMs: 5000,
+      sizeBytes: 'remuxed-webm-bytes'.length
+    })
+    // The temp take is reaped as on every other branch.
+    expect(existsSync(tempPathFor(id))).toBe(false)
+  })
+
+  it('a Discard during the remux is a discard: null, the half-written webm and the temp are gone', async () => {
+    remuxOutcome = 'cancelled'
+    const outPath = path.join(TMP, 'discarded.webm')
+    const { id, result, error } = await recordAndSaveWebm(outPath)
+
+    expect(error).toBeNull()
+    expect(result).toBeNull()
+    expect(existsSync(outPath)).toBe(false)
+    expect(existsSync(tempPathFor(id))).toBe(false)
+  })
+
+  it('a remux that fails does not lose the take: it is saved as recorded, and the failure is logged', async () => {
+    remuxOutcome = 'crash'
+    const outPath = path.join(TMP, 'fallback.webm')
+    const { id, result, error } = await recordAndSaveWebm(outPath)
+
+    expect(error).toBeNull()
+    // The partial the remux left is replaced by the temp take's own bytes.
+    expect(readFileSync(outPath, 'utf8')).toBe('streamed webm')
+    expect(result).toMatchObject({ outputPath: outPath, format: 'webm', sizeBytes: 'streamed webm'.length })
+    expect(existsSync(tempPathFor(id))).toBe(false)
+    expect(mainLog).toHaveBeenCalledTimes(1)
+    const [prefix, logged] = mainLog.mock.calls[0] as [string, Error]
+    expect(prefix).toContain('remux failed')
+    expect(logged.message).toContain('Invalid data found')
+  })
+
+  it('the MP4 branch does not remux, and the WebM branch does not convert', async () => {
+    await recordAndFinalize(path.join(TMP, 'only-convert.mp4'))
+    expect(remuxCalls).toEqual([])
+    expect(lastConvert).not.toBeNull()
+
+    lastConvert = null
+    await recordAndSaveWebm(path.join(TMP, 'only-remux.webm'))
+    expect(remuxCalls).toHaveLength(1)
+    expect(lastConvert).toBeNull()
+  })
+})
+
+// T-140 (1) - the file the person named in the Save dialog is the OLD file until a whole new one is swapped in.
+//
+// The convert, the remux and the fallback copy used to write straight to the chosen path, and a failure or a Discard unlinked it first
+// (`unlink(outputPath)`, unconditionally): a Save over an earlier take at the same name, then a Discard, a crash or a full drive, left neither file.
+// The mocks below write wherever they are handed (as ffmpeg does), so a runner that wrote the chosen path would show as a changed or missing file.
+describe('recording:finalize writes beside the chosen path and swaps a whole file in (T-140 (1))', () => {
+  const EARLIER = 'the earlier recording, at the name the person picked again'
+  const sha = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+  /** The folder the saves go to, by name: a partial would be one. */
+  const folder = (): string[] => readdirSync(TMP).filter((f) => f !== 'recordings').sort()
+
+  async function recordAndSave(outPath: string, mp4: boolean): Promise<{ id: string; result: unknown; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      const result = await invoke('recording:finalize', id, { filename: mp4 ? 'take.mp4' : 'take.webm', durationMs: 5000, convertToMp4: mp4 })
+      return { id, result, error: null }
+    } catch (err) {
+      return { id, result: undefined, error: err as Error }
+    }
+  }
+
+  describe.each([
+    ['MP4', true, 'mp4'],
+    ['WebM', false, 'webm']
+  ] as const)('the %s save', (_label, mp4, ext) => {
+    const seeded = (): { out: string; before: string } => {
+      const out = path.join(TMP, `take.${ext}`)
+      writeFileSync(out, EARLIER)
+      return { out, before: sha(out) }
+    }
+    const outcome = (o: ConvertOutcome): void => {
+      if (mp4) convertOutcome = o
+      else remuxOutcome = o
+    }
+
+    it('a Discard that kills the run leaves the earlier file byte for byte, and no partial', async () => {
+      const { out, before } = seeded()
+      outcome('cancelled')
+      const { id, result, error } = await recordAndSave(out, mp4)
+      expect(error).toBeNull()
+      expect(result, 'a discard: null').toBeNull()
+      expect(sha(out)).toBe(before)
+      expect(folder()).toEqual([`take.${ext}`])
+      expect(existsSync(tempPathFor(id)), 'the take the person threw away is gone').toBe(false)
+    })
+
+    it('a crash leaves the earlier file byte for byte, and no partial', async () => {
+      const { out, before } = seeded()
+      outcome('crash')
+      if (!mp4) {
+        // The remux crash falls back to the plain copy; make that fail too (a drive that ran out of room half-way).
+        copyHook = async (real, _src, dst) => {
+          await real.writeFile(dst, 'half of the take')
+          throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC' })
+        }
+      }
+      const { error } = await recordAndSave(out, mp4)
+      expect(error, 'a real failure still fails').toBeInstanceOf(Error)
+      expect(sha(out)).toBe(before)
+      expect(folder()).toEqual([`take.${ext}`])
+    })
+
+    it('a run that finishes replaces it with the whole new file, and leaves no partial', async () => {
+      const { out } = seeded()
+      outcome('ok')
+      const { error, result } = await recordAndSave(out, mp4)
+      expect(error).toBeNull()
+      expect(readFileSync(out, 'utf8'), 'the new file, the old bytes gone').toBe(mp4 ? 'full-mp4-bytes' : 'remuxed-webm-bytes')
+      expect(result).toMatchObject({ outputPath: out, format: ext })
+      expect(folder()).toEqual([`take.${ext}`])
+    })
+
+    it('a Discard recorded after the run exited 0 and before the swap wins: the earlier file stays, the finished file is dropped, and the raw take goes too - the person asked for that (T-141 (5))', async () => {
+      const { out, before } = seeded()
+      outcome('discarded-after-exit')
+      const { id, result, error } = await recordAndSave(out, mp4)
+      expect(error).toBeNull()
+      expect(result).toBeNull()
+      expect(sha(out)).toBe(before)
+      expect(folder()).toEqual([`take.${ext}`])
+      // T-140 (1) kept the take here: the run's latch said "cancelled" and not who asked, and the raw take is the only copy. The cause is knowable (the latch is
+      // told whether a name or the sweep marked the run), and a Discard that lands after the exit is a Discard all the same: the toast says "Recording
+      // discarded" and USER_GUIDE says Discard throws the take away, so a webm that survived for the launch sweep to reap six hours later was a leak.
+      expect(existsSync(tempPathFor(id)), 'Discard recording means the take is gone, whichever side of the exit it lands on').toBe(false)
+    })
+
+    it('the QUIT recorded at the same instant keeps the raw take: it is the only copy, and the person asked to close a window (T-128 (5), T-141 (5))', async () => {
+      const { out, before } = seeded()
+      outcome('quit-after-exit')
+      const { id, result, error } = await recordAndSave(out, mp4)
+      expect(error).toBeNull()
+      expect(result, 'the save ended as a discard-shaped null, not an error').toBeNull()
+      expect(sha(out), 'the earlier file is byte for byte what it was').toBe(before)
+      expect(folder(), 'and no partial is left').toEqual([`take.${ext}`])
+      expect(readFileSync(tempPathFor(id), 'utf8'), 'the raw take survives for the launch sweep').toBe('streamed webm')
+    })
+  })
+
+  it('the WebM fallback: a remux that fails is replaced by a copy of the take, written beside and swapped in - the earlier file is never unlinked first', async () => {
+    const out = path.join(TMP, 'fallback.webm')
+    writeFileSync(out, EARLIER)
+    const before = sha(out)
+    remuxOutcome = 'crash'
+    let atCopy: { chosen: string; folder: string[] } | null = null
+    copyHook = async (real, src, dst) => {
+      // The moment the copy starts: the chosen path still holds the earlier file, and the copy is going to a partial beside it.
+      atCopy = { chosen: sha(out), folder: folder() }
+      expect(dst).toMatch(/\/fallback\.[0-9a-f]{8}\.partial\.webm$/)
+      await real.copyFile(src, dst)
+    }
+    const { error } = await recordAndSave(out, false)
+    expect(error).toBeNull()
+    expect((atCopy as unknown as { chosen: string }).chosen, 'untouched when the copy began').toBe(before)
+    expect(readFileSync(out, 'utf8'), 'and now the take as recorded').toBe('streamed webm')
+    expect(folder()).toEqual(['fallback.webm'])
+  })
+
+  it('a swap the disk refuses is not blamed on the convert: its own sentence goes up (the disk\'s error rides along as the cause), the folder at the path is untouched, and no partial is left', async () => {
+    const out = path.join(TMP, 'is-a-folder.mp4')
+    mkdirSync(out)
+    writeFileSync(path.join(out, 'inside.txt'), 'somebody\'s')
+    convertOutcome = 'ok'
+    const { error } = await recordAndSave(out, true)
+    expect(error).toBeInstanceOf(Error)
+    expect(error?.message, 'not "Converting the recording to MP4 failed"').not.toContain('Converting the recording')
+    // T-141 (5): the disk's error is the cause (for the console and the tests), not the message: the message says the take is kept.
+    expect((error?.cause as NodeJS.ErrnoException).syscall).toBe('rename')
+    expect(readFileSync(path.join(out, 'inside.txt'), 'utf8')).toBe('somebody\'s')
+    expect(folder()).toEqual(['is-a-folder.mp4'])
+  })
+})
+
+// T-140 (1): the person saves over a take that is still open in a player. Windows refuses the swap onto a file held without FILE_SHARE_DELETE for as long
+// as it is held; before T-140 the convert opened the chosen path itself and failed within a second, now the take has been converted and a refusal here would
+// throw the whole save away. It is saved BESIDE the file that cannot be replaced, and the result says where, so the studio's toast and its two buttons
+// (Show in folder, Edit in Video Studio) are about the file that exists.
+describe('recording:finalize when the file that was named is open in another app (T-140 (1))', () => {
+  const EARLIER = 'the earlier recording, open in a player'
+  const sha = (file: string): string => createHash('sha256').update(readFileSync(file)).digest('hex')
+  const folder = (): string[] => readdirSync(TMP).filter((f) => f !== 'recordings').sort()
+  const lockOnto = (target: string, refusals = Number.POSITIVE_INFINITY): void => {
+    let refused = 0
+    renameHook = async (real, from, to) => {
+      if (to === target && refused < refusals) {
+        refused += 1
+        throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', syscall: 'rename' })
+      }
+      return real.rename(from, to)
+    }
+  }
+  async function save(outPath: string, mp4: boolean): Promise<{ id: string; result: Record<string, unknown> | null; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      const result = await invoke<Record<string, unknown> | null>('recording:finalize', id, { filename: mp4 ? 'take.mp4' : 'take.webm', durationMs: 5000, convertToMp4: mp4 })
+      return { id, result, error: null }
+    } catch (err) {
+      return { id, result: null, error: err as Error }
+    }
+  }
+
+  describe.each([
+    ['the MP4 convert', true, 'mp4', 'full-mp4-bytes'],
+    ['the WebM remux', false, 'webm', 'remuxed-webm-bytes'],
+    ['the WebM fallback copy (the remux failed)', false, 'webm', 'streamed webm']
+  ] as const)('%s', (label, mp4, ext, written) => {
+    const arrange = (): { out: string; before: string } => {
+      const out = path.join(TMP, `take.${ext}`)
+      writeFileSync(out, EARLIER)
+      if (label.includes('fallback')) remuxOutcome = 'crash'
+      return { out, before: sha(out) }
+    }
+
+    it('lands beside it as "take (2)", answers that path and the one that was chosen, and the earlier file is byte for byte what it was', async () => {
+      const { out, before } = arrange()
+      lockOnto(out)
+      const { id, result, error } = await save(out, mp4)
+      expect(error).toBeNull()
+      const beside = path.join(TMP, `take (2).${ext}`)
+      expect(result).toMatchObject({ outputPath: beside, requestedPath: out, format: ext })
+      expect(result?.sizeBytes, 'the size of the file that exists').toBe(Buffer.byteLength(written))
+      expect(sha(out)).toBe(before)
+      expect(readFileSync(beside, 'utf8')).toBe(written)
+      expect(folder(), 'no partial').toEqual([`take (2).${ext}`, `take.${ext}`])
+      expect(existsSync(tempPathFor(id)), 'the raw take is reaped: the save succeeded').toBe(false)
+    })
+
+    it('a refusal that lifts lands on the chosen path, with no second copy and no "requestedPath" to explain', async () => {
+      const { out } = arrange()
+      lockOnto(out, 2)
+      const { error, result } = await save(out, mp4)
+      expect(error).toBeNull()
+      expect(result).toMatchObject({ outputPath: out })
+      expect(result).not.toHaveProperty('requestedPath')
+      expect(readFileSync(out, 'utf8')).toBe(written)
+      expect(folder()).toEqual([`take.${ext}`])
+    })
+  })
+
+  it('a name nothing is at is not "open in another app": a swap the disk refuses there still fails, in the disk\'s words, and saves nothing', async () => {
+    const out = path.join(TMP, 'brand-new.mp4')
+    // Refused for exactly the budget (six tries), then let through: a redirect would land the take and this row would see it.
+    lockOnto(out, 6)
+    const { error, result } = await save(out, true)
+    expect(result).toBeNull()
+    expect((error?.cause as NodeJS.ErrnoException).code, 'the disk\'s refusal is the cause').toBe('EPERM')
+    expect((error?.cause as NodeJS.ErrnoException).syscall).toBe('rename')
+    expect(folder(), 'no "brand-new (2)", no partial').toEqual([])
+  })
+})
+
+// T-141 (5), the non-counted part (T-110 (u), narrowed): the convert (or the remux, or the fallback copy) was WHOLE and the swap onto the chosen name was refused
+// for good - a lock that outlasts the retries on a name nothing is at, a folder that went away, a drive that turned read-only. The raw take in userData is then the
+// ONLY copy of a finished recording, and `promoteTempWebm`'s finally deleted it: two reviewers executed it. The take is kept and the sentence says where it is and
+// for how long. A convert that FAILED still says "Nothing was saved" and still deletes the take (that sentence is true of it), and so does a copy that failed.
+describe('a swap the disk keeps refusing keeps the raw take and says so (T-141 (5))', () => {
+  const folder = (): string[] => readdirSync(TMP).filter((f) => f !== 'recordings').sort()
+  const refuseEverything = (): void => {
+    renameHook = async (_real, from, to) => {
+      throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', syscall: 'rename' })
+    }
+  }
+  async function save(outPath: string, mp4: boolean): Promise<{ id: string; result: unknown; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      const result = await invoke('recording:finalize', id, { filename: mp4 ? 'take.mp4' : 'take.webm', durationMs: 5000, convertToMp4: mp4 })
+      return { id, result, error: null }
+    } catch (err) {
+      return { id, result: undefined, error: err as Error }
+    }
+  }
+
+  it.each([
+    ['the MP4 convert', true, 'mp4', 'ok'],
+    ['the WebM remux (a whole remux whose swap is refused)', false, 'webm', 'ok'],
+    ['the WebM fallback copy (the remux failed, and the copy\'s swap is refused)', false, 'webm', 'crash']
+  ] as const)('%s: the take is kept, the sentence names the folder, and nothing is left beside the chosen name', async (_label, mp4, ext, remux) => {
+    const out = path.join(TMP, `fresh.${ext}`)
+    remuxOutcome = remux
+    let copies = 0
+    copyHook = async (real, src, dst) => {
+      copies += 1
+      await real.copyFile(src, dst)
+    }
+    refuseEverything()
+    const { id, error } = await save(out, mp4)
+    expect(error, 'the save failed (it is not a discard: nobody asked for one)').toBeInstanceOf(Error)
+    const recordings = path.join(TMP, 'recordings')
+    expect(error?.message, 'the sentence that says the take is kept, and where').toBe(recordingKeptMessage(recordings))
+    expect(error?.message).toContain(recordings)
+    expect(error?.message).toMatch(/kept your take/)
+    expect((error?.cause as NodeJS.ErrnoException).code, 'the disk\'s refusal rides along as the cause').toBe('EPERM')
+    expect((error?.cause as NodeJS.ErrnoException).syscall).toBe('rename')
+    expect(copies, 'a copy is for a remux that FAILED: a whole remux whose swap was refused would only be refused again').toBe(remux === 'crash' ? 1 : 0)
+    expect(readFileSync(tempPathFor(id), 'utf8'), 'the raw take is the only copy of the recording, and it is still there, whole').toBe('streamed webm')
+    expect(readdirSync(recordings), 'and it is the only file in the folder').toEqual([`${id}.webm`])
+    expect(folder(), 'no half-written file, no partial, nothing at the chosen name').toEqual([])
+    expect(mainLog.mock.calls.flat().join(' '), 'the disk\'s words went to the console').toContain('EPERM')
+  }, 20_000)
+
+  it('what the person reads is that sentence alone: userFacingError lets it stand, through the IPC envelope too', async () => {
+    refuseEverything()
+    const { error } = await save(path.join(TMP, 'fresh.mp4'), true)
+    const shown = recordingKeptMessage(path.join(TMP, 'recordings'))
+    expect(userFacingError(error, 'Saving the recording failed.').message).toBe(shown)
+    expect(
+      userFacingError(new Error(`Error invoking remote method 'recording:finalize': Error: ${error?.message}`), 'Saving the recording failed.').message
+    ).toBe(shown)
+    expect(shown).not.toMatch(/EPERM|Windows blocked|rename/)
+  }, 20_000)
+
+  it('the sentence stays one finished line of at most 240 characters whatever the data folder is called (a long path falls back to naming the folder in words)', () => {
+    expect(recordingKeptMessage('/data/recordings'), 'the words, exactly: what happened, where the take is, and for how long (tempCleanup reaps recordings/ after 6 h)').toBe(
+      "The recording couldn't be saved to that location, so imagii kept your take in /data/recordings. Copy it out within 6 hours; after that imagii may delete it."
+    )
+    const short = recordingKeptMessage('C:\\Users\\streamer\\AppData\\Roaming\\imagii\\recordings')
+    expect(short).toContain('C:\\Users\\streamer\\AppData\\Roaming\\imagii\\recordings')
+    const long = recordingKeptMessage(`D:\\${'a-very-long-folder-name\\'.repeat(12)}recordings`)
+    expect(long.length).toBeLessThanOrEqual(240)
+    expect(long).toMatch(/\.$/)
+    expect(long).not.toContain('\n')
+    expect(long, 'still says the take is kept').toMatch(/kept your take/)
+    expect(short.length).toBeLessThanOrEqual(240)
+  })
+
+  it('the controls: a convert that FAILED still deletes the take and says nothing was saved (that sentence is true of it)', async () => {
+    convertOutcome = 'crash'
+    const { id, error } = await save(path.join(TMP, 'crash.mp4'), true)
+    expect(error?.message).toBe(recordingConvertFailureMessage(new ConvertFailedError(1, null, '')))
+    expect(error?.message).toContain('Nothing was saved')
+    expect(existsSync(tempPathFor(id)), 'a failed convert deletes the take, as before (T-110 (u), the part that is left)').toBe(false)
+    expect(folder()).toEqual([])
+  })
+
+  it('the controls: a fallback copy that FAILED (a full drive) is not a refused swap: the disk\'s error goes up as it did, and the take goes as it did', async () => {
+    remuxOutcome = 'crash'
+    copyHook = async (real, _src, dst) => {
+      await real.writeFile(dst, 'half of the take')
+      throw Object.assign(new Error('ENOSPC: no space left on device, write'), { code: 'ENOSPC', syscall: 'write' })
+    }
+    const { id, error } = await save(path.join(TMP, 'full.webm'), false)
+    expect(error?.message).toContain('ENOSPC')
+    expect(error?.message).not.toBe(recordingKeptMessage(path.join(TMP, 'recordings')))
+    expect(existsSync(tempPathFor(id)), 'T-110 (u)\'s remainder: a copy that failed still deletes the take').toBe(false)
+    expect(folder()).toEqual([])
+  })
+})
+
+// T-142 (1): the renderer recognises the kept-take sentence by the lead main and it share (`RECORDING_KEPT_LEAD`); both forms of the sentence (the folder named,
+// and the words a path too long for one line falls back to) must open with it, or the Record screen shows the plain 8 s toast for a take only that toast could point at.
+describe('the kept-take sentence opens with the lead the renderer recognises (T-142 (1))', () => {
+  it.each([
+    ['a short folder', '/data/recordings'],
+    ['a folder too long for one finished line (the fallback in words)', `D:\\${'a-very-long-folder-name\\'.repeat(12)}recordings`]
+  ])('%s', async (_label, dir) => {
+    const { RECORDING_KEPT_LEAD, isRecordingKeptMessage } = await import('../../shared/userFacingError')
+    const sentence = recordingKeptMessage(dir)
+    expect(sentence.startsWith(`${RECORDING_KEPT_LEAD} in `)).toBe(true)
+    expect(isRecordingKeptMessage(userFacingError(new Error(sentence), 'Saving the recording failed.').message), 'and userFacingError shows it as written').toBe(true)
+  })
+})
+
+// T-143 (1): the "6 hours" in the kept-take sentence start when the person READS it. The launch sweep ages `recordings/<id>.webm` by its mtime, and nothing had
+// touched the take since the recording's last write - so the convert's whole run (tens of minutes for a long take) came out of the 6 hours the sentence promised.
+// A refused swap now sets the take's atime/mtime to now before the sentence is thrown. The convert is a mock here, so "a long convert" is the rename hook backdating
+// the take 7 h just before the refusal, which is what the real wait does to its mtime relative to the sentence.
+describe('the kept take\'s 6 hours start at the sentence, not at the end of the recording (T-143 (1))', () => {
+  const HOUR = 60 * 60 * 1000
+  let osTmp = ''
+  let savedTmpdir: string | undefined
+
+  beforeEach(() => {
+    // The sweep also scans %TEMP%/imagii-*: pointed at an empty folder of its own, it cannot touch the host's.
+    osTmp = path.join(TMP, 'os-tmp')
+    mkdirSync(osTmp, { recursive: true })
+    savedTmpdir = process.env.TMPDIR
+    process.env.TMPDIR = osTmp
+    __testing__.setUserDataDirForTest(TMP)
+  })
+  afterEach(() => {
+    __testing__.setUserDataDirForTest(null)
+    if (savedTmpdir === undefined) delete process.env.TMPDIR
+    else process.env.TMPDIR = savedTmpdir
+  })
+
+  /** A swap refused for good, after a convert that took "7 hours": the take's mtime is that old when the refusal lands. */
+  const refuseAfterALongConvert = (): void => {
+    renameHook = async (real, from, to) => {
+      const old = new Date(Date.now() - 7 * HOUR)
+      for (const f of readdirSync(path.join(TMP, 'recordings'))) await real.utimes(path.join(TMP, 'recordings', f), old, old)
+      throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: 'EPERM', syscall: 'rename' })
+    }
+  }
+  async function save(outPath: string, mp4: boolean): Promise<{ id: string; error: Error | null }> {
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    saveDialogResult = { canceled: false, filePath: outPath }
+    try {
+      await invoke('recording:finalize', id, { filename: mp4 ? 'take.mp4' : 'take.webm', durationMs: 5000, convertToMp4: mp4 })
+      return { id, error: null }
+    } catch (err) {
+      return { id, error: err as Error }
+    }
+  }
+
+  it.each([
+    ['the MP4 convert', true, 'ok'],
+    ['the WebM remux', false, 'ok'],
+    ['the WebM fallback copy (the remux failed)', false, 'crash']
+  ] as const)('%s: the take is "now" after the refusal, the sweep keeps it for 5 h 59 min and reaps it at 6 h 1 min', async (_label, mp4, remux) => {
+    remuxOutcome = remux
+    refuseAfterALongConvert()
+    const before = Date.now()
+    const { id, error } = await save(path.join(TMP, mp4 ? 'out.mp4' : 'out.webm'), mp4)
+    const after = Date.now()
+    expect(error?.message, 'the kept-take sentence, as before').toBe(recordingKeptMessage(path.join(TMP, 'recordings')))
+    const take = tempPathFor(id)
+    const mtime = statSync(take).mtimeMs
+    expect(mtime, 'the 7-hours-old take was touched: its clock starts at the sentence').toBeGreaterThanOrEqual(before - 2000)
+    expect(mtime).toBeLessThanOrEqual(after + 2000)
+    expect(statSync(take).atimeMs, 'atime too').toBeGreaterThanOrEqual(before - 2000)
+
+    const swept = await pruneStaleTempFiles(mtime + 6 * HOUR - 60_000)
+    expect(swept.removed, 'the person reads the sentence and relaunches 5 h 59 min later: the take is there').toBe(0)
+    expect(readFileSync(take, 'utf8')).toBe('streamed webm')
+    const late = await pruneStaleTempFiles(mtime + 6 * HOUR + 60_000)
+    expect(late.removed, 'and the sweep after the 6 hours the sentence promised reaps it, as the sentence says it may').toBe(1)
+    expect(existsSync(take)).toBe(false)
+  }, 20_000)
+
+  it('a touch that fails never masks the sentence: the same kept-take error is thrown, the failure goes to the console, and the take stays on disk', async () => {
+    refuseAfterALongConvert()
+    utimesHook = async () => {
+      throw Object.assign(new Error('EACCES: permission denied, utime'), { code: 'EACCES', syscall: 'utime' })
+    }
+    const { id, error } = await save(path.join(TMP, 'out.mp4'), true)
+    expect(error?.message).toBe(recordingKeptMessage(path.join(TMP, 'recordings')))
+    expect((error?.cause as NodeJS.ErrnoException).syscall, 'the cause is still the disk\'s refusal of the swap, not the failed touch').toBe('rename')
+    expect(readFileSync(tempPathFor(id), 'utf8'), 'the take is still kept').toBe('streamed webm')
+    expect(mainLog.mock.calls.flat().join(' '), 'the touch\'s failure was logged').toContain('EACCES')
+  }, 20_000)
+
+  it('the controls: a quit-kept take (T-128 (5)) is not touched - no sentence promises it a window', async () => {
+    convertOutcome = 'quit-after-exit'
+    const old = Date.now() - 7 * HOUR
+    const { id } = await invoke<{ id: string }>('recording:begin')
+    await invoke('recording:appendChunk', id, bytes('streamed webm'))
+    utimesSync(tempPathFor(id), new Date(old), new Date(old))
+    saveDialogResult = { canceled: false, filePath: path.join(TMP, 'quit.mp4') }
+    expect(await invoke('recording:finalize', id, { filename: 'quit.mp4', durationMs: 5000, convertToMp4: true }), 'a quit is not an error').toBeNull()
+    expect(readFileSync(tempPathFor(id), 'utf8'), 'the take is kept').toBe('streamed webm')
+    expect(Math.abs(statSync(tempPathFor(id)).mtimeMs - old), 'and left as the recording left it').toBeLessThan(2000)
+  }, 20_000)
 })

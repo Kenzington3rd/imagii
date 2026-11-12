@@ -92,6 +92,9 @@ function TabButton({
   return (
     <button
       onClick={() => onClick(id)}
+      // T-113: the open tab was shown by its underline alone ('true', not 'page': these are
+      // tabs of one screen, not links between pages — ClipList's rows say the same).
+      aria-current={active ? 'true' : undefined}
       className={`px-4 py-2 text-sm border-b-2 transition-colors ${
         active
           ? 'border-accent text-ink-base font-medium'

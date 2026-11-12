@@ -1,4 +1,3 @@
-import { useState } from 'react'
 import { nanoid } from 'nanoid'
 import { countOf } from '@shared/plural'
 import {
@@ -12,7 +11,7 @@ import {
 import { useCanvasStore } from './state/canvasStore'
 import { PanelHeader } from '../../components/PanelHeader'
 import { Modal } from '../../components/Modal'
-import { CHECKER_A, CHECKER_B } from '../../styles/tokens'
+import { SpecCard } from '../../components/SpecCard'
 
 interface TemplatesDialogProps {
   open: boolean
@@ -25,10 +24,6 @@ function clone<T>(obj: T): T {
 
 export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.Element | null {
   const setTemplate = useCanvasStore((s) => s.setDocument)
-  // setHover is currently used to drive future preview behavior; the value
-  // is unread for now. Keep the setter so the onMouseEnter/onMouseLeave
-  // wiring stays in place for the planned hover-preview feature.
-  const [, setHover] = useState<CanvasTemplate | null>(null)
 
   if (!open) return null
   const grouped = getTemplatesByCategory()
@@ -66,29 +61,13 @@ export function TemplatesDialog({ open, onClose }: TemplatesDialogProps): JSX.El
             </PanelHeader>
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
               {templates.map((t) => (
-                <button
+                <SpecCard
                   key={t.id}
+                  name={t.name}
+                  description={t.description}
+                  doc={t.doc}
                   onClick={() => applyTemplate(t)}
-                  onMouseEnter={() => setHover(t)}
-                  onMouseLeave={() => setHover(null)}
-                  className="card p-3 text-left hover:border-accent transition-colors"
-                >
-                  <div
-                    className="w-full rounded mb-2 overflow-hidden border border-ink-dim/30"
-                    style={{
-                      aspectRatio: `${t.doc.width} / ${t.doc.height}`,
-                      background:
-                        t.doc.background === 'transparent'
-                          ? `repeating-conic-gradient(${CHECKER_A} 0% 25%, ${CHECKER_B} 0% 50%) 0 0 / 16px 16px`
-                          : t.doc.background
-                    }}
-                  />
-                  <div className="text-sm font-medium">{t.name}</div>
-                  <div className="text-xs text-ink-muted mt-1">{t.description}</div>
-                  <div className="text-xs text-ink-dim mt-1 font-mono">
-                    {t.doc.width} × {t.doc.height}
-                  </div>
-                </button>
+                />
               ))}
             </div>
           </section>

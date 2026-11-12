@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from 'vitest'
 import { mkdir, writeFile, utimes, readdir } from 'node:fs/promises'
 import { existsSync, mkdtempSync, rmSync } from 'node:fs'
 import path from 'node:path'
@@ -8,6 +8,30 @@ import { pruneStaleTempFiles, __testing__ } from './tempCleanup'
 import { CAPTIONS_DIR_NAME, shiftedSrtPath } from '../shared/captions'
 
 const { STALE_THRESHOLD_MS, TEMP_SUBDIRS, setUserDataDirForTest } = __testing__
+
+/**
+ * T-113 (10) — this file's temp folder is its own.
+ *
+ * Every case below recursively removes the three temp families under `tmpdir()` and asserts
+ * exact counts, and vitest runs test files in parallel. `extract.test.ts` and
+ * `transcribeCancel.test.ts` write real WAVs into `tmpdir()/imagii-audio` (the extractor's
+ * folder), so a WAV they were writing could be removed between its mkdir and its use, or
+ * counted by `scanned === 0` here: a failure in ~1 of 6 runs that no re-run explained. The
+ * module under test and this file now see a private `tmpdir()`, so nothing outside this file
+ * can be inside the folders it empties. (`tests/unit/tempSandbox.test.ts` fails if this goes.)
+ */
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  const { mkdtempSync } = await import('node:fs')
+  const { join } = await import('node:path')
+  const sandbox = mkdtempSync(join(actual.tmpdir(), 'imagii-tempcleanup-sandbox-'))
+  const tmpdir = (): string => sandbox
+  return { ...actual, tmpdir, default: { ...actual, tmpdir } }
+})
+
+afterAll(() => {
+  rmSync(tmpdir(), { recursive: true, force: true })
+})
 
 /**
  * T-67: every family the function SCANS, not just the two this file writes
@@ -126,8 +150,8 @@ describe('pruneStaleTempFiles — the captions temp-copy family (T-81)', () => {
 
   it('sweeps a stale orphaned shifted copy and nothing that is the user\'s', async () => {
     const real = path.join(captionsDir, 'Stream-1700000000000.srt')
-    const staleOrphan = shiftedSrtPath(real, randomUUID())
-    const freshOrphan = shiftedSrtPath(real, randomUUID())
+    const staleOrphan = shiftedSrtPath(real, randomUUID(), 'utf8')
+    const freshOrphan = shiftedSrtPath(real, randomUUID(), 'utf8')
     const staleOther = path.join(captionsDir, 'notes.txt')
     await makeFile(captionsDir, path.basename(real), STALE) // a real transcript, however old
     await makeFile(captionsDir, path.basename(staleOrphan), STALE)
@@ -143,6 +167,22 @@ describe('pruneStaleTempFiles — the captions temp-copy family (T-81)', () => {
     // Only the two temp-copy names are candidates; the transcript and the
     // note are not counted as scanned, let alone removed.
     expect(result).toEqual({ scanned: 2, removed: 1 })
+  })
+
+  // T-183 (2): the sweep reads the SUFFIX of the name, so a copy whose transcript's name was cut to fit is still the temp it is.
+  it('sweeps a stale shifted copy whose name was fitted to the 255-byte limit, and keeps the long transcript it was made from', async () => {
+    const real = path.join(captionsDir, `${'v'.repeat(200)}-1700000000000.srt`)
+    const fitted = shiftedSrtPath(real, randomUUID(), 'utf8')
+    expect(Buffer.byteLength(path.basename(fitted), 'utf8')).toBeLessThanOrEqual(255)
+    expect(path.basename(fitted).startsWith('v'.repeat(150))).toBe(true)
+    await makeFile(captionsDir, path.basename(real), STALE)
+    await makeFile(captionsDir, path.basename(fitted), STALE)
+
+    const result = await pruneStaleTempFiles()
+
+    expect(existsSync(fitted)).toBe(false)
+    expect(existsSync(real)).toBe(true)
+    expect(result).toEqual({ scanned: 1, removed: 1 })
   })
 
   it('a userData without a captions folder is not an error', async () => {

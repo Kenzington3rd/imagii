@@ -22,6 +22,8 @@
  *   WARN on BG_ELEVATED        12.64:1  (10.4:1 on an EMBER/10 wash)
  *   OK on BG_ELEVATED          11.96:1  (8.16:1 on an OK_STRONG/20 wash)
  *   OK_STRONG on BG_BASE       10.08:1
+ *   SIGNAL_PINK on BG_BASE      7.32:1  (6.30:1 on BG_HOVER, the row it sits in)
+ *   SIGNAL_CYAN on BG_BASE     10.72:1  (9.23:1 on BG_HOVER)
  */
 
 import { assert } from '@shared/assert'
@@ -91,6 +93,24 @@ export const WARN = '#fcd34d'
 export const OK = '#6ee7b7'
 /** Ok as a mark: meter bars, status dots, borders, washes. */
 export const OK_STRONG = '#34d399'
+
+/**
+ * T-104 — the two categorical marks that are neither accent nor ember.
+ *
+ * Some marks tell two or three things apart by hue alone: the highlight
+ * finder's Audio / Chat / Hype signal bars, and the framing guides for 9:16,
+ * 1:1 and 4:5. Accent and ember are two of those hues (audio and hype; the 1:1
+ * guide — and `EMBER` is the byte-for-byte amber the bars and the 1:1
+ * guide were already drawn in, so they use the existing token); these are the
+ * other two. They were raw `#f472b6` / `#22d3ee` literals in HighlightPanel and
+ * SafeZoneOverlay, which `designTokensInSync` could not see.
+ *
+ * Neither carries meaning beyond "this series, not that one" — they are not
+ * status colors, so they stay out of the semantic tier above. The VALUES are
+ * the ones already on screen: this is a rename, not a redesign.
+ */
+export const SIGNAL_PINK = '#f472b6'
+export const SIGNAL_CYAN = '#22d3ee'
 
 /** Checkerboard tiles for transparent-image previews (two warm darks). */
 export const CHECKER_A = '#221616'

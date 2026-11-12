@@ -1,4 +1,5 @@
-import { useEffect } from 'react'
+import { useCallback, useEffect, useRef } from 'react'
+import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
 
 // INIT-F (round 15): human-readable tool labels for the header badge.
 const TOOL_LABELS: Record<string, string> = {
@@ -10,7 +11,7 @@ const TOOL_LABELS: Record<string, string> = {
 }
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
-import { isModalOpen } from '../../components/Modal'
+import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { Canvas } from './Canvas'
 import { Toolbar } from './Toolbar'
 import { LayerPanel } from './LayerPanel'
@@ -22,6 +23,7 @@ import { Tutorial } from '../../components/Tutorial'
 import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
+import { focusOwnsKey, hasChordModifier, inputTypeOf, shortcutKey } from '../../lib/keyOwnership'
 import { imageTutorial } from '../../tutorials/imageTutorial'
 
 export function ImageStudio(): JSX.Element {
@@ -44,27 +46,36 @@ export function ImageStudio(): JSX.Element {
 
   useEffect(() => {
     function onKey(e: KeyboardEvent): void {
-      // T-68: a dialog is a claim over the window. Without this, Delete
-      // removed the selected layer behind the Variants/Templates scrim and
-      // R/O/L/P switched the tool on a canvas the user could not see.
-      if (isModalOpen()) return
-      const tag = (e.target as HTMLElement).tagName
-      if (tag === 'INPUT' || tag === 'TEXTAREA') return
-      const ctrl = e.ctrlKey || e.metaKey
+      // T-68: a dialog is a claim over the window: Delete removed a layer behind the Variants scrim
+      // and R/O/L/P switched the tool on a canvas the user could not see. T-147 (T-75): ANY dialog,
+      // the tutorial coachmark included (`anyDialogClaim`, the claim stack: its scrim covers it too).
+      if (anyDialogClaim()) return
+      // T-119: a focused <select> owns the letters (type-ahead) as a text field does: the Export format and
+      // Scale selects are inline panels, not Modals, so the check above never covered them, and typing `p`
+      // to reach PNG switched the tool while Delete over one removed the selected layer.
+      // T-123 (2): "any INPUT" also stood down for a ticked Snap box or a dragged slider, which the browser
+      // leaves focused, so R and Delete went dead after either. A text field and a select own every key here; a
+      // checkbox or a range owns none of these (Space, and the arrows, are all it has), so the tool keys fire.
+      if (focusOwnsKey((e.target as HTMLElement).tagName, inputTypeOf(e.target), e.key)) return
+      // T-124 (29): a bare-letter shortcut is for the bare letter. Only `v` honored Ctrl (so Ctrl+V could paste); Ctrl+R, Ctrl+O,
+      // Ctrl+L and Ctrl+P, and the same with Alt or Cmd, switched tools. A chord belongs to the window or the browser.
+      if (hasChordModifier(e)) return
+      // T-185 (1): the tool keys by `shortcutKey`, so R picks the rectangle on a Russian layout (`key` "к", `code` KeyR) as well.
+      const key = shortcutKey(e)
       if (e.key === 'Delete' || e.key === 'Backspace') {
         if (selectedLayerId) {
           e.preventDefault()
           removeLayer(selectedLayerId)
         }
-      } else if (e.key === 'v' || e.key === 'V') {
-        if (!ctrl) setTool('select')
-      } else if (e.key === 'r' || e.key === 'R') {
+      } else if (key === 'v') {
+        setTool('select')
+      } else if (key === 'r') {
         setTool('rect')
-      } else if (e.key === 'o' || e.key === 'O') {
+      } else if (key === 'o') {
         setTool('ellipse')
-      } else if (e.key === 'l' || e.key === 'L') {
+      } else if (key === 'l') {
         setTool('line')
-      } else if (e.key === 'p' || e.key === 'P') {
+      } else if (key === 'p') {
         setTool('pencil')
       }
     }
@@ -72,8 +83,32 @@ export function ImageStudio(): JSX.Element {
     return () => window.removeEventListener('keydown', onKey)
   }, [selectedLayerId, removeLayer, setTool])
 
+  // T-192 (3): the first layer swaps the empty state's controls (a template card, "Import image", "Start with text") for the canvas, and the pressed one goes with it. When
+  // the press held focus it goes to the Select tool, the toolbar's first control (STYLE_GUIDE's swap rule; `lib/swapFocus.ts` holds the record and moves focus only while it is
+  // on <body>). Keyed on whether there are layers: a canvas that opens with some (a project, an autosave Restore) or gets them back by Redo finds no record and moves nothing.
+  const hasLayers = layers.length > 0
+  useEffect(() => {
+    if (!hasLayers) return
+    focusAfterSwap('image-select', document.querySelector<HTMLElement>('[data-tutorial="image-toolbar"] button[title^="Select"]'))
+  }, [hasLayers])
+  // ... and a press whose swap has not come (a chooser still open) is not left for a canvas that fills while the person is on another route.
+  useEffect(() => () => dropSwapPress('image-select'), [])
+
+  // T-192 (3), the other way: the LAST layer going (the Layers panel's Remove layer, Delete, Ctrl+Z) swaps the canvas back for the empty state and unmounts the control that held focus
+  // (a layer's ✕, a toolbar tool). That control is gone before any effect can ask, so the editor's root records it as it detaches: React calls a ref with null BEFORE the DOM node is
+  // removed, so `document.activeElement` still is the focused control there. The callback is STABLE (`useCallback` with no dependencies): an inline arrow is called with null on
+  // every re-render and would record falsely. The empty state's Import image button, its primary control, spends the record (`ImportPanel`). A studio that is left (the same detach) leaves it
+  // for the next ImportPanel that mounts, which spends it whether or not it has a button to focus.
+  const editorEl = useRef<HTMLElement | null>(null)
+  const editorRef = useCallback((el: HTMLDivElement | null) => {
+    if (el === null && editorEl.current !== null && editorEl.current.contains(document.activeElement)) recordSwapPress('image-import', true)
+    editorEl.current = el
+  }, [])
+
   return (
-    <div className="h-full overflow-hidden px-6 py-5 flex flex-col gap-4">
+    // T-140 (5): `overflow-auto` like the four sibling studios, the backstop: the canvas gives way first (it flexes down to its floor), and a window short enough that the
+    // rest still does not fit scrolls instead of clipping the Export bar where the wheel cannot reach it.
+    <div className="h-full overflow-auto px-6 py-5 flex flex-col gap-4">
       <header className="flex items-center justify-between flex-shrink-0">
         <div>
           <HomeLink />
@@ -105,11 +140,13 @@ export function ImageStudio(): JSX.Element {
       {layers.length === 0 ? (
         <ImportPanel />
       ) : (
-        <>
+        <div ref={editorRef} className="contents">
           <ImportPanel />
           <Toolbar />
           <div className="flex-1 grid grid-cols-1 lg:grid-cols-[1fr_clamp(260px,16%,380px)] gap-4 min-h-0">
-            <div className="flex flex-col gap-3 min-h-0">
+            {/* min-w-0: the Stage inside is a fixed-pixel box fitted to this column, and a grid item's automatic minimum is its content's width - without it a wide
+                document (the 1200x480 banner) held the 1fr track at the Stage's width and pushed the Layers card off the right edge (T-140 (5)). */}
+            <div className="flex flex-col gap-3 min-h-0 min-w-0">
               <Canvas />
               <ExportDialog />
             </div>
@@ -118,7 +155,7 @@ export function ImageStudio(): JSX.Element {
               <PropertiesPanel />
             </div>
           </div>
-        </>
+        </div>
       )}
 
       {tutorial.active ? (

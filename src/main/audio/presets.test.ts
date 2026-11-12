@@ -161,4 +161,97 @@ describe('audio presets store (round 17 phase-6 coverage)', () => {
     const m = await loadModule()
     expect(m.parseChainPreset(JSON.stringify({ id: 'a', name: 'x', chain: [1, 2] }))).toBeNull()
   })
+
+  // ── T-117 (1): the preset id is a path, so it is held to the alphabet nanoid mints ──
+  // `deletePreset` joined the renderer's id straight into `<userData>/audio-presets/<id>.json`
+  // and unlinked it. LESSONS had waved the id through "since they're not paths"; it IS one.
+  // These run on REAL files in a temp userData: the thing a traversal id aims at is a real file
+  // one folder up, and the evidence is that it is still there.
+
+  // Each id, and the file (relative to userData) that `path.join(<presets dir>, `${id}.json`)` takes it to.
+  // Every target is inside the temp userData, so a failing run can only ever damage the scratch folder.
+  const TRAVERSAL: Array<[string, string]> = [
+    ['../config', 'config.json'],
+    ['sub/../../config', 'config.json'],
+    ['../notes/keep', 'notes/keep.json']
+  ]
+
+  it.each(TRAVERSAL)('deletePreset refuses the traversal id %s and the file it aimed at survives', async (id, target) => {
+    const m = await loadModule()
+    const kept = await m.savePreset('Keeper', DEFAULT_CHAIN_SPEC)
+    const { writeFile, readFile, mkdir } = await import('node:fs/promises')
+    const victim = path.join(TMP, target)
+    await mkdir(path.dirname(victim), { recursive: true })
+    await writeFile(victim, 'USER DATA - not a preset', 'utf8')
+    // The join really does land on the victim (so a green run proves the refusal, not a miss).
+    expect(path.resolve(TMP, 'audio-presets', `${id}.json`)).toBe(victim)
+
+    const outcome = await m.deletePreset(id).then(
+      () => null,
+      (e: unknown) => e
+    )
+
+    // Survival first: before the guard existed this is the line that went red (ENOENT - the unlink had run).
+    expect(await readFile(victim, 'utf8'), 'the file the id was aimed at is untouched').toBe('USER DATA - not a preset')
+    expect(outcome, 'and the call refused, plainly').toBeInstanceOf(Error)
+    expect((outcome as Error).message).toMatch(/nanoid alphabet/)
+    expect((await m.listPresets()).map((p) => p.id), 'and the presets are all still there').toEqual([kept.id])
+  })
+
+  it.each([
+    ['empty', ''],
+    ['a space', 'has space'],
+    ['a dot (an extension smuggled into the name)', 'x.json'],
+    ['a bare ..', '..'],
+    ['a slash', 'a/b'],
+    ['a backslash', 'a\\b'],
+    ['a NUL', 'a\u0000b'],
+    ['a trailing newline', 'abc\n'],
+    ['not a string', 42],
+    ['undefined', undefined],
+    ['an object', { toString: () => 'abc' }]
+  ])('deletePreset refuses an id that is %s, deleting nothing', async (_label, id) => {
+    const m = await loadModule()
+    const kept = await m.savePreset('Keeper', DEFAULT_CHAIN_SPEC)
+    await expect(m.deletePreset(id as never)).rejects.toThrow(/nanoid alphabet/)
+    expect((await m.listPresets()).map((p) => p.id)).toEqual([kept.id])
+  })
+
+  it('deletePreset still deletes the id savePreset minted, and an unknown id in the alphabet is still a no-op', async () => {
+    const m = await loadModule()
+    const a = await m.savePreset('A', DEFAULT_CHAIN_SPEC)
+    const b = await m.savePreset('B', DEFAULT_CHAIN_SPEC)
+    await m.deletePreset(a.id)
+    expect((await m.listPresets()).map((p) => p.id)).toEqual([b.id])
+    await expect(m.deletePreset('Zz_9-nothing')).resolves.toBeUndefined()
+  })
+
+  it.each(['../config', 'a/b', 'has space', 'x.json', '..', 'abc\n'])(
+    'parseChainPreset refuses a file whose id is %j - the list never hands the renderer an id that is a path',
+    async (id) => {
+      const m = await loadModule()
+      expect(m.parseChainPreset(JSON.stringify({ id, name: 'Mine', chain: DEFAULT_CHAIN_SPEC }))).toBeNull()
+    }
+  )
+
+  it('parseChainPreset still takes every id nanoid can mint, hyphens and underscores included', async () => {
+    const m = await loadModule()
+    for (const id of ['abc', 'A_b-9', '_', '-', 'V1StGXR8_Z']) {
+      expect(m.parseChainPreset(JSON.stringify({ id, name: 'Mine', chain: DEFAULT_CHAIN_SPEC }))?.id).toBe(id)
+    }
+  })
+
+  it('listPresets skips a hand-edited file whose id is a path, so Delete can never be aimed by the list', async () => {
+    const m = await loadModule()
+    await m.savePreset('Fine', DEFAULT_CHAIN_SPEC)
+    const { writeFile, mkdir } = await import('node:fs/promises')
+    const dir = path.join(TMP, 'audio-presets')
+    await mkdir(dir, { recursive: true })
+    await writeFile(
+      path.join(dir, 'planted.json'),
+      JSON.stringify({ id: '../config', name: 'Planted', chain: DEFAULT_CHAIN_SPEC, createdAt: 1 }),
+      'utf8'
+    )
+    expect((await m.listPresets()).map((p) => p.name)).toEqual(['Fine'])
+  })
 })

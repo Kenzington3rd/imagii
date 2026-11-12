@@ -1,10 +1,14 @@
 import { useRef, useState } from 'react'
 import { nanoid } from 'nanoid'
-import { useVideoStore } from './store/videoStore'
-import { OutputDirLabel } from '../../components/OutputDirLabel'
+import { useVideoStore, videoKey } from './store/videoStore'
+import { cancelGif, useGifRun } from './store/runs'
+import { outputDurationSec } from './presets'
+import { OutputDirLabel, basename } from '../../components/OutputDirLabel'
 import { PanelHeader } from '../../components/PanelHeader'
+import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastSaved } from '../../lib/savedToast'
+import { useVideoOutputDir } from '../../hooks/useVideoOutputDir'
 
 export function GifPanel(): JSX.Element | null {
   const source = useVideoStore((s) => s.source)
@@ -13,70 +17,73 @@ export function GifPanel(): JSX.Element | null {
   const [width, setWidth] = useState(480)
   const [fps, setFps] = useState(15)
   const [speed, setSpeed] = useState(1)
-  const [busy, setBusy] = useState(false)
-  const [outDir, setOutDir] = useState<string | null>(null)
-  // Round 17 B2: jobId for the Cancel button.
-  const jobIdRef = useRef<string | null>(null)
+  // T-135 (1): the run is a module store, not this panel's state - the person can leave the studio while it works, and the panel that mounts again
+  // draws it (Exporting…, and the Cancel).
+  const busy = useGifRun((s) => s.run !== null)
+  // T-168 (fold): and what it is for - the clip (the run's own `name`), so the card does not say a bare "Exporting…" over a clip nobody can tell.
+  const runName = useGifRun((s) => s.run?.name ?? null)
+  // T-171 (4): and the video it was started on, so a GIF held on A's "Clip 1" is not read as B's.
+  const gifRun = useGifRun((s) => s.run)
+  // T-124 (21): the folder is remembered between visits, like Export's (one key for the four side panels).
+  const { outDir, pick: pickDir, resolve: resolveOutDir, remember: rememberOutDir } = useVideoOutputDir()
+  // T-126 (19): one start at a time, claimed the instant the function runs - the pattern `ExportPanel.startExport` has (T-125 (18)). The
+  // `busy` state is set only after the awaits in the start (the folder chooser), so a double-click ran a second start
+  // in that gap: two choosers, two jobs, two files. A `finally` gives the claim back; a second press is dropped in silence (the first
+  // one's chooser is on screen). Declared with the other hooks, ahead of any early return.
+  const startingRef = useRef(false)
 
   if (!source) return null
   const clip = clips.find((c) => c.id === selectedClipId)
   if (!clip) return null
 
-  const duration = clip.endSec - clip.startSec
-  const tooLong = duration > 10
-
-  async function pickDir(): Promise<void> {
-    const picked = await window.api.video.pickOutputDir()
-    if (picked) setOutDir(picked)
-  }
+  // T-105: the warning is about the GIF that will be WRITTEN, so it reads its
+  // length at the speed the panel's own select says (the T-97 shape). A 20 s
+  // range at 3x is a 7 s GIF and a 6 s range at 0.5x is a 12 s one.
+  const tooLong =
+    outputDurationSec({ startSec: clip.startSec, endSec: clip.endSec, speedMultiplier: speed }) > 10
 
   async function exportGif(): Promise<void> {
-    if (!source || !clip) return
-    let dir = outDir
-    if (!dir) {
-      dir = await window.api.video.pickOutputDir()
-      if (!dir) return
-      setOutDir(dir)
-    }
-    setBusy(true)
-    const jobId = nanoid(10)
-    jobIdRef.current = jobId
+    if (startingRef.current) return
+    startingRef.current = true
     try {
-      const result = await window.api.video.exportGif({
-        jobId,
-        sourcePath: source.filePath,
-        outDir: dir,
-        startSec: clip.startSec,
-        endSec: clip.endSec,
-        width,
-        fps,
-        speed,
-        // T-96: the GIF is made from the crop the user drew for this clip.
-        cropRect: clip.cropRect
-      })
-      toastSaved('Saved the GIF', result.outputPath)
-    } catch (err) {
-      reportFailure(err, { failed: 'GIF export failed.', canceled: 'GIF canceled.' })
+      if (!source || !clip) return
+      const dir = await resolveOutDir()
+      if (!dir) return
+      const jobId = nanoid(10)
+      if (!useGifRun.getState().begin({ jobId, name: clip.name, videoPath: videoKey(source), fileName: source.fileName })) return
+      try {
+        const result = await window.api.video.exportGif({
+          jobId,
+          sourcePath: source.filePath,
+          // T-124 (17): named for the file the person opened, not for the working copy a converted import is played from.
+          sourceName: source.fileName.replace(/\.[^.]+$/, ''),
+          // T-125 (22): and the clip's name after it, as Export does, so six highlights are six names and not "name (2)".."name (6)".
+          clipName: clip.name,
+          outDir: dir,
+          startSec: clip.startSec,
+          endSec: clip.endSec,
+          width,
+          fps,
+          speed,
+          // T-96: the GIF is made from the crop the user drew for this clip.
+          cropRect: clip.cropRect
+        })
+        // T-112: the file's own name, so "name (2).gif" (T-106) is never a surprise.
+        toastSaved(`Saved ${basename(result.outputPath)}`, result.outputPath)
+        rememberOutDir(dir)
+      } catch (err) {
+        reportFailure(err, { failed: 'GIF export failed.', canceled: 'GIF canceled.' })
+      } finally {
+        useGifRun.getState().end()
+      }
     } finally {
-      setBusy(false)
-      jobIdRef.current = null
+      startingRef.current = false
     }
-  }
-
-  async function cancel(): Promise<void> {
-    const id = jobIdRef.current
-    if (!id) return
-    await window.api.video.cancelGif(id)
   }
 
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
       <PanelHeader icon="image">Export as GIF</PanelHeader>
-      {tooLong ? (
-        <p className="text-xs text-warn">
-          GIF exports over about 10 s get huge. Trim the clip first.
-        </p>
-      ) : null}
       <div className="grid grid-cols-3 gap-2">
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-ink-muted">Width</span>
@@ -122,12 +129,31 @@ export function GifPanel(): JSX.Element | null {
           </select>
         </label>
       </div>
+      {/* T-112: the wrapper is always mounted, so changing Speed ANNOUNCES the warning —
+          a live region that appears together with its content is not reliably read.
+          T-114: and while it is empty it is still a flex item, with a 12 px gap on each side - a
+          12 px hole under the header. `-mb-3` takes back the second gap and nothing is hidden:
+          the element stays in the accessibility tree, empty, ready to speak (no display:none,
+          no visibility:hidden - either would drop it, and a region added later is not reliably
+          announced). With a warning in it the margin is gone and it is a row like any other.
+          T-193 (2) class grep: it sits BELOW the Width / Frame rate / Speed row. A Speed change raises it, and above that row it moved the Speed select (the press's
+          own control) 44 px down the moment it spoke; below, the line arrives under every select and moves only the buttons beneath it. */}
+      <div role="status" className={tooLong ? undefined : '-mb-3'}>
+        {tooLong ? (
+          <p className="text-xs text-warn">
+            GIF exports over about 10 s get huge. Trim the clip first.
+          </p>
+        ) : null}
+      </div>
       <div className="flex items-center gap-2">
-        <button className="btn-ghost px-3 py-1.5 text-xs" onClick={pickDir}>
+        {/* T-126 (13): the chip side gives (`min-w-0`, its name already ends in an ellipsis); the primary's words stay on one line. */}
+        {/* T-131 (13): the folder is not changed while a job runs - it would do nothing for the running one - and the chip is the neighbor
+            a double-click's second press can land on once the busy primary has shrunk (executed: a chooser opened mid-job on a 120 ms second press). */}
+        <button className="btn-ghost min-w-0 px-3 py-1.5 text-xs disabled:opacity-50" onClick={pickDir} disabled={busy}>
           <OutputDirLabel outDir={outDir} />
         </button>
         <button
-          className="btn-primary px-4 py-1.5 ml-auto disabled:opacity-50"
+          className="btn-primary px-4 py-1.5 ml-auto whitespace-nowrap disabled:opacity-50"
           disabled={busy}
           onClick={exportGif}
           // The GIF job has no percent feed — this button label IS the
@@ -137,17 +163,31 @@ export function GifPanel(): JSX.Element | null {
         >
           {busy ? 'Exporting…' : 'Export GIF'}
         </button>
-        {/* Round 17 B2 */}
-        {busy ? (
-          <button
-            className="btn-ghost px-2 py-1.5 text-xs text-danger hover:text-danger-soft"
-            onClick={cancel}
-            title="Cancel GIF export"
-          >
-            Cancel
-          </button>
-        ) : null}
       </div>
+      {/* T-126 (20): Cancel has a row of its own. Beside the primary it took the place the primary's right edge had a moment ago - the
+          busy label is shorter, so the second click of a double-click landed on Cancel and cancelled the job it had just started
+          (measured: the idle button spans 1093-1205, Cancel 1147-1205). Where the second press lands now is the disabled primary. */}
+      {/* Round 17 B2 */}
+      {/* T-171 (4): named only when it is not the open video (T-168 (4)'s Export rule); the row below stays as it is. */}
+      {gifRun && gifRun.videoPath !== videoKey(source) ? (
+        <p
+          className="text-xs text-ink-dim min-w-0 line-clamp-2 break-words"
+          title={`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}
+        >
+          {`Started on another video: GIF of ${gifRun.name} from ${gifRun.fileName}.`}
+        </p>
+      ) : null}
+      {busy ? (
+        <div className="flex items-center justify-end gap-2">
+          {/* T-168 (fold): the button's label is the progress line and stays its width (see above); the clip's name rides beside the Cancel. */}
+          {runName ? (
+            <p className="text-xs text-ink-dim min-w-0 truncate" title={runName}>
+              Exporting {runName}…
+            </p>
+          ) : null}
+          <RunningCancel title="Cancel GIF export" onClick={() => void cancelGif()} />
+        </div>
+      ) : null}
     </div>
   )
 }

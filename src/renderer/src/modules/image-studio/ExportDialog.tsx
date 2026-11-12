@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import toast from 'react-hot-toast'
-import { HINT_NODE_NAME } from '@shared/canvas'
+import { HINT_NODE_NAME, type CanvasDocument } from '@shared/canvas'
 import { ThumbnailVariants } from './ThumbnailVariants'
 import { Icon } from '../../components/Icon'
 import { PanelHeader } from '../../components/PanelHeader'
@@ -56,22 +56,34 @@ const YOUTUBE_THUMB = { width: 1280, height: 720 } as const
 
 /**
  * The soft note under the size readout when a thumbnail-shaped export is bigger
- * than YouTube's thumbnail size, or null. "Thumbnail-shaped" is 16:9 and not
- * transparent: a document does not know it is a thumbnail, and a transparent
- * 1920x1080 PNG is a stream overlay, not something that goes to YouTube. A
- * 16:9 scene card will see the note too; it is a statement of fact about the
+ * than YouTube's thumbnail size, or null. "Thumbnail-shaped" is 16:9, not
+ * transparent and not channel art: a document does not know it is a thumbnail, and a transparent
+ * 1920x1080 PNG is a stream overlay, not something that goes to YouTube. The channel banner is the
+ * same 2560x1440 as the 2K thumbnail template, so size cannot tell them apart: its doc says
+ * `kind: 'channel-art'` (T-172 (3)). A 16:9 scene card will see the note too; it is a statement of fact about the
  * size, not a warning that the export is wrong.
  */
 export function thumbnailSizeNote(
   width: number,
   height: number,
-  transparent: boolean
+  doc: Pick<CanvasDocument, 'background' | 'kind'>
 ): string | null {
-  if (transparent || width <= 0 || height <= 0) return null
+  if (doc.background === 'transparent' || doc.kind === 'channel-art' || width <= 0 || height <= 0) return null
   const sixteenNine = Math.abs(width / height - 16 / 9) < 0.01
   const bigger = width > YOUTUBE_THUMB.width || height > YOUTUBE_THUMB.height
   return sixteenNine && bigger
-    ? `Bigger than YouTube's thumbnail size (${YOUTUBE_THUMB.width}x${YOUTUBE_THUMB.height}).`
+    ? `Bigger than YouTube's thumbnail size (${YOUTUBE_THUMB.width}×${YOUTUBE_THUMB.height}).`
+    : null
+}
+
+/**
+ * T-147 (4): the note under the Export row when a transparent document is exported as JPG, or null. The overlay and emote templates have no background (the
+ * canvas shows a checkerboard), a JPG has no alpha channel, and the capture composites it onto black (Canvas.tsx's T-54 note): the file is not what the canvas
+ * showed, and nothing said so. PNG keeps the clear parts clear, so the note says to choose it. A filled document has nothing to lose in a JPG.
+ */
+export function jpgTransparencyNote(format: 'png' | 'jpg', transparent: boolean): string | null {
+  return format === 'jpg' && transparent
+    ? 'JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear.'
     : null
 }
 
@@ -118,7 +130,7 @@ export interface ExportStage {
  * Render the stage at DOCUMENT resolution: exactly `width * pixelRatio` by
  * `height * pixelRatio` pixels, whatever size the window happens to be.
  *
- * T-45. The on-screen stage is scaled to fit its container (Canvas.tsx:168),
+ * T-45. The on-screen stage is scaled to fit its container (Canvas.tsx:175-189),
  * so a bare `stage.toDataURL({ pixelRatio })` renders `stage.width()` — which
  * is `doc.width * fitZoom` — and every export came out the size of the
  * viewport instead of the size of the document: a 1280x720 template landed at
@@ -198,7 +210,10 @@ export function ExportDialog(): JSX.Element {
   // those sizes whatever Scale says.
   const emotePack = doc.width === 112 && doc.height === 112 && format === 'png'
   const out = outputPixels(doc.width, doc.height, scale)
-  const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc.background === 'transparent')
+  // T-160 (4): the variants are files of the card's format, quality and scale; the emote pack's fixed sizes stay the Export button's, so with Scale disabled they are 1x.
+  const variantScale = emotePack ? 1 : scale
+  const sizeNote = emotePack ? null : thumbnailSizeNote(out.width, out.height, doc)
+  const jpgNote = jpgTransparencyNote(format, doc.background === 'transparent')
 
   async function exportImage(): Promise<void> {
     setBusy(true)
@@ -264,6 +279,8 @@ export function ExportDialog(): JSX.Element {
       <select
         className="bg-bg-base rounded px-2 py-1"
         value={format}
+        // T-115: the only unnamed select in the Export card ("Scale" has its label).
+        aria-label="Export format"
         onChange={(e) => setFormat(e.target.value as FormatOption)}
       >
         <option value="png">PNG</option>
@@ -284,7 +301,7 @@ export function ExportDialog(): JSX.Element {
             aria-label="JPG export quality"
             aria-valuetext={`${Math.round(quality * 100)} percent`}
           />
-          <span className="font-mono w-10 text-right">{Math.round(quality * 100)}%</span>
+          <span className="font-mono w-10 shrink-0 whitespace-nowrap text-right">{Math.round(quality * 100)}%</span>
         </label>
       ) : null}
       <label className="flex items-center gap-1.5 text-xs">
@@ -307,8 +324,8 @@ export function ExportDialog(): JSX.Element {
           a surprise 2560x1440 thumbnail. */}
       <span className="text-xs text-ink-muted font-mono" data-testid="export-output-size">
         {emotePack
-          ? 'Output: 3 PNGs — 28x28, 56x56, 112x112'
-          : `Output: ${out.width}x${out.height}`}
+          ? 'Output: 3 PNGs — 28×28, 56×56, 112×112'
+          : `Output: ${out.width}×${out.height}`}
       </span>
       <button
         className="btn-ghost px-3 py-1 text-xs inline-flex items-center gap-1.5"
@@ -324,8 +341,16 @@ export function ExportDialog(): JSX.Element {
       >
         {busy ? 'Exporting…' : 'Export'}
       </button>
-      {sizeNote ? <p className="basis-full text-xs text-ink-muted">{sizeNote}</p> : null}
-      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} />
+      {/* T-153 (T-110 (l)): the notes sit in ONE wrapper that is always mounted, so choosing JPG ANNOUNCES the transparency note - a live region that appears together
+          with its content is not reliably read (the GIF card's shape, GifPanel.tsx). While it is empty it must take no room: in this WRAPPING card an empty `basis-full`
+          item is a line of its own, and the 8 px row gap above it is a hole under the button (GifPanel's `-mb-3` cannot take it back here: a flex line's height is never
+          negative, measured 21 px under the button where 12 is the padding). Out of the flow (`absolute`) it makes no line and no gap, and nothing is hidden: no display:none,
+          no visibility:hidden - either drops the region from the accessibility tree. With a note in it, it is a row like any other. */}
+      <div role="status" className={sizeNote || jpgNote ? 'basis-full flex flex-col gap-2' : 'absolute'}>
+        {sizeNote ? <p className="text-xs text-ink-muted">{sizeNote}</p> : null}
+        {jpgNote ? <p className="text-xs text-ink-muted">{jpgNote}</p> : null}
+      </div>
+      <ThumbnailVariants open={showVariants} onClose={() => setShowVariants(false)} format={format} quality={quality} scale={variantScale} emotePack={emotePack} />
     </div>
   )
 }

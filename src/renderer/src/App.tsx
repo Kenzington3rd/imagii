@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { Routes, Route, Navigate } from 'react-router-dom'
+import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { Welcome } from './routes/Welcome'
 import { Home } from './routes/Home'
 import { Video } from './routes/Video'
@@ -10,6 +10,8 @@ import { References } from './routes/References'
 import { AppToaster } from './components/AppToaster'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { HotkeyOverlay } from './components/HotkeyOverlay'
+import { persistSetting } from './lib/persistSetting'
+import { swallowRepeatClicks } from './lib/repeatPress'
 import { Icon } from './components/Icon'
 import { useAutosave } from './hooks/useAutosave'
 
@@ -50,6 +52,14 @@ export function App(): JSX.Element {
   // The empty-project skip is handled main-side via isSafeToAutosave.
   useAutosave({ enabled: status.phase === 'ready' })
 
+  // T-153 (3): every route change swallows the repeat click of a double-click. NavCard and HomeLink are bare `<Link>`s: the first click opens the page and the second lands at the
+  // same point IN it (Home's Stream Graphics card, double-clicked, applied the template under the pointer on the empty canvas's one-click grid). One rule at the root covers every
+  // link, button and redirect that navigates; only a click with a count above 1 inside half a second is dropped, so a keyboard route change and a fresh click are untouched.
+  const location = useLocation()
+  useEffect(() => {
+    swallowRepeatClicks()
+  }, [location.pathname])
+
   useEffect(() => {
     let cancelled = false
     window.api.settings.get<boolean>('welcomeSeen').then((welcomeSeen) => {
@@ -61,10 +71,12 @@ export function App(): JSX.Element {
     }
   }, [])
 
+  // T-180 (1): each phase computes its element and the toast surface is mounted once around whichever it is (see the return).
+  let phaseElement: JSX.Element
   if (status.phase === 'loading') {
     // M7 fix: bare "Loading…" looked like the app hung. Pair the text with a
     // small spinning sparkle so the user knows something is happening.
-    return (
+    phaseElement = (
       <div className="h-full flex items-center justify-center gap-2 text-ink-muted text-sm">
         <span className="inline-block" style={{ animation: 'imagii-spin 1.2s linear infinite' }}>
           <Icon name="sparkle" size={16} />
@@ -72,53 +84,62 @@ export function App(): JSX.Element {
         Loading…
       </div>
     )
-  }
-
-  if (status.phase === 'welcome') {
-    return (
+  } else if (status.phase === 'welcome') {
+    phaseElement = (
       <Welcome
-        onContinue={async () => {
-          await window.api.settings.set('welcomeSeen', true)
+        onContinue={() => {
+          // T-128 (4): the write must not decide whether the person gets in (a refusal left "Let's go" doing nothing).
+          void persistSetting('welcomeSeen', true)
           setStatus({ phase: 'ready' })
+          // T-139 (9): "Let's go" is replaced by Home under the pointer, and the second press of a double-click lands where the button was - on Stream Graphics' card
+          // at 1366x768 (measured), which opened that studio. Same rule as a closing dialog's (T-131 (8)): a repeat press does not reach what is under it.
+          swallowRepeatClicks()
         }}
       />
+    )
+  } else {
+    phaseElement = (
+      <ErrorBoundary resetKey={location}>
+        <Routes>
+          <Route path="/" element={<Navigate to="/home" replace />} />
+          <Route path="/home" element={<Home />} />
+          <Route path="/video" element={<Video />} />
+          <Route path="/audio" element={<Audio />} />
+          <Route path="/image" element={<Image />} />
+          <Route path="/record" element={<Record />} />
+          <Route path="/references" element={<References />} />
+          {/* Back-compat: the References studio was originally routed at
+              /ai-art before the module was repurposed. Redirect so any old
+              deep link still resolves. */}
+          <Route path="/ai-art" element={<Navigate to="/references" replace />} />
+          {/* T-35: the ErrorBoundary above can only be proven by a render that
+              actually throws, in the built app, on a route the user could be
+              on. This is that lever. */}
+          <Route path="/__crash" element={<CrashTest />} />
+          <Route path="*" element={<Navigate to="/home" replace />} />
+        </Routes>
+        {/* T-13: the overlay owns the app-wide `?` binding and is the only
+            shortcut documentation we ship — Player's hint copy has advertised
+            it since round 15. Mounted outside <Routes> so one instance serves
+            every route and reads the current one via useLocation. */}
+        <HotkeyOverlay />
+      </ErrorBoundary>
     )
   }
 
   return (
-    <ErrorBoundary>
-      <Routes>
-        <Route path="/" element={<Navigate to="/home" replace />} />
-        <Route path="/home" element={<Home />} />
-        <Route path="/video" element={<Video />} />
-        <Route path="/audio" element={<Audio />} />
-        <Route path="/image" element={<Image />} />
-        <Route path="/record" element={<Record />} />
-        <Route path="/references" element={<References />} />
-        {/* Back-compat: the References studio was originally routed at
-            /ai-art before the module was repurposed. Redirect so any old
-            deep link still resolves. */}
-        <Route path="/ai-art" element={<Navigate to="/references" replace />} />
-        {/* T-35: the ErrorBoundary below can only be proven by a render that
-            actually throws, in the built app, on a route the user could be
-            on. This is that lever. */}
-        <Route path="/__crash" element={<CrashTest />} />
-        <Route path="*" element={<Navigate to="/home" replace />} />
-      </Routes>
-      {/* T-13: the overlay owns the app-wide `?` binding and is the only
-          shortcut documentation we ship — Player's hint copy has advertised
-          it since round 15. Mounted outside <Routes> so one instance serves
-          every route and reads the current one via useLocation. */}
-      <HotkeyOverlay />
-      {/* T-31: one toast surface for the whole app, mounted beside the
-          overlay for the same reason — every route raises toasts, and the
-          five studios that each mounted their own left Home (and any future
-          route) silently swallowing "Project saved", "Restored from
-          autosave" and every error path. react-hot-toast keeps one global
-          toast store per `toasterId`, so two <Toaster>s without one both
-          draw every toast: an app-level mount and a per-studio mount cannot
-          coexist. */}
-      <AppToaster />
-    </ErrorBoundary>
+    <>
+      {phaseElement}
+      {/* T-31: one toast surface for the whole app - every route raises toasts, and the five studios that each mounted their own left Home (and any future route) silently
+          swallowing "Project saved", "Restored from autosave" and every error path. react-hot-toast keeps one global toast store per `toasterId`, so two <Toaster>s without one
+          both draw every toast: an app-level mount and a per-studio mount cannot coexist.
+          T-180 (1): it is mounted HERE, after the studio boundary and in every phase, never inside it. The crash screen replaces everything the boundary holds, so a toaster
+          inside it was unmounted while the screen showed: a job that ends meanwhile (an export, a Clip Kit, a Record save, autosave's own "couldn't save") raised a toast nobody
+          saw, and react-hot-toast dismisses an expired toast the moment a Toaster mounts again. It is at the same position in each phase so a phase change does not remount it,
+          and in its own boundary with nothing as its fallback: a toast that throws while rendering drops the toasts, and never unmounts App (which would stop autosave). */}
+      <ErrorBoundary fallback={null}>
+        <AppToaster />
+      </ErrorBoundary>
+    </>
   )
 }

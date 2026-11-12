@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { Rnd } from 'react-rnd'
 import type { CropBox } from '@shared/safeZone'
 import { useVideoStore } from './store/videoStore'
@@ -13,6 +14,16 @@ const ASPECTS: Record<AspectMode, number | null> = {
 }
 
 const PRESETS: AspectMode[] = ['free', '16:9', '9:16', '1:1', '4:5']
+
+// The button text. `AspectMode` is the store's value (and Player's), so the
+// lowercase internal name never reaches the screen (T-157 (4)).
+const PRESET_LABELS: Record<AspectMode, string> = {
+  free: 'Free',
+  '16:9': '16:9',
+  '9:16': '9:16',
+  '1:1': '1:1',
+  '4:5': '4:5'
+}
 
 interface CropControlsProps {
   enabled: boolean
@@ -109,12 +120,24 @@ export function CropControls({
               className={`px-2 py-1 rounded ${
                 aspect === m ? 'bg-accent text-bg-base' : 'bg-bg-hover text-ink-base'
               }`}
+              // T-113: the selected shape was shown by fill color alone.
+              aria-pressed={aspect === m}
               onClick={() => applyAspectPreset(m)}
             >
-              {m}
+              {PRESET_LABELS[m]}
             </button>
           ))}
-          <button className="ml-auto text-ink-dim hover:text-ink-base" onClick={clearCrop}>
+          <button
+            className="ml-auto text-ink-dim hover:text-ink-base"
+            onClick={() => {
+              // T-112: Reset clears the rectangle, not the section. A crop that arrived with a
+              // project is "on" only because it exists (Player derives `enabled` from it), so
+              // clearing it also switched the section off under the person's cursor, while a
+              // crop they ticked themselves stayed open. Both arrivals now behave as the second.
+              onEnabledChange(true)
+              clearCrop()
+            }}
+          >
             Reset
           </button>
         </>
@@ -141,6 +164,10 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
   const selectedClipId = useVideoStore((s) => s.selectedClipId)
   const setClipCrop = useVideoStore((s) => s.setClipCrop)
   const endGesture = useVideoStore((s) => s.endGesture)
+  // T-167: where the box was when the press began, in the box's own pixels (see onDragStop).
+  const dragStart = useRef<{ x: number; y: number } | null>(null)
+  // T-168 (3): the box's whole-pixel size when a handle press began (see onResizeStop).
+  const resizeStart = useRef<{ w: number; h: number } | null>(null)
 
   const clip = clips.find((c) => c.id === selectedClipId) ?? null
   if (!clip || !rect || rect.w <= 0 || rect.h <= 0) return null
@@ -170,7 +197,18 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
         // coalescing window here is what makes a second drag of the
         // rectangle its own undo step instead of a silent extension of the
         // first one.
+        onDragStart={(_e, d) => {
+          dragStart.current = { x: d.x, y: d.y }
+        }}
         onDragStop={(_e, d) => {
+          // T-167: react-draggable ends a gesture on any press and release, a plain click included, and `d.x / picture.w` is not always the stored `x` to the last bit (a 9:16 crop's box moved
+          // 3e-5 px and pushed an undo step past the store's equality guard). A press that did not move the box has nothing to store.
+          const start = dragStart.current
+          dragStart.current = null
+          if (start && start.x === d.x && start.y === d.y) {
+            endGesture()
+            return
+          }
           setClipCrop(activeClip.id, {
             x: Math.max(0, Math.min(1 - cropRect.w, d.x / picture.w)),
             y: Math.max(0, Math.min(1 - cropRect.h, d.y / picture.h)),
@@ -179,7 +217,20 @@ export function CropOverlay({ rect, aspect }: CropOverlayProps): JSX.Element | n
           })
           endGesture()
         }}
+        onResizeStart={(_e, _dir, ref) => {
+          resizeStart.current = { w: ref.offsetWidth, h: ref.offsetHeight }
+        }}
         onResizeStop={(_e, _dir, ref, _delta, position) => {
+          // T-168 (3): T-167's onDragStop guard, for the handles. re-resizable fires its stop on any press and release of a handle, and `ref.offsetWidth / picture.w` is whole pixels against a box
+          // drawn at the fractional `cropRect.w * picture.w` (0.9 of 640.37 px reads 576: 0.89946), so a click that moved nothing pushed an undo step. A press that changed no size has nothing to store.
+          // The size is compared with the size at the press, NOT read from `delta`: re-resizable sets `delta` only in its constructor and on a move and never resets it per press, so a plain click after a
+          // real resize is handed that resize's old delta. (A position cannot change without a size: the box is clamped to its parent, and a handle moves an edge by resizing.)
+          const start = resizeStart.current
+          resizeStart.current = null
+          if (start && ref.offsetWidth === start.w && ref.offsetHeight === start.h) {
+            endGesture()
+            return
+          }
           setClipCrop(activeClip.id, {
             x: Math.max(0, position.x / picture.w),
             y: Math.max(0, position.y / picture.h),

@@ -1,14 +1,12 @@
 import toast from 'react-hot-toast'
 import { NavCard } from '../components/NavCard'
 import { Icon } from '../components/Icon'
-import {
-  applyProject,
-  captureProject,
-  describeUnavailableSources
-} from '../modules/project/ProjectIO'
+import { audioSettled, captureProject, describeApplyOutcome } from '../modules/project/ProjectIO'
 import { AutosaveRestore } from '../components/AutosaveRestore'
-import { suppressAutosave } from '../hooks/useAutosave'
+import { useAutosaveOffer } from '../components/restoreRun'
+import { applyProjectHeld } from '../hooks/useAutosave'
 import { useGlobalUndo } from '../hooks/useGlobalUndo'
+import { claimFirst } from '../lib/claimFirst'
 import { reportFailure } from '../lib/reportFailure'
 import { ERROR_TOAST_MS } from '@shared/userFacingError'
 
@@ -17,10 +15,17 @@ import { ERROR_TOAST_MS } from '@shared/userFacingError'
 const PROJECT_OPEN_FAILED =
   "Couldn't open that project. The file may be damaged, or it was saved by a newer version of imagii."
 
+/**
+ * T-131 (5): Open project and Save project share ONE claim, and it covers the native dialog and nothing after it. Both go straight to a
+ * dialog, and a double-click on either opened two (executed: two choosers). The apply that follows an open is not under it: opening
+ * another project meanwhile is supported (T-112's `replacedSince`), and a claim held for a long conversion would drop that press.
+ */
+const projectDialog = { current: false }
+
 async function handleSave(): Promise<void> {
   try {
-    const project = captureProject()
-    const saved = await window.api.project.save(project)
+    // `undefined` is the second press of a double-click (the first one's dialog is on screen); `null` is a canceled dialog.
+    const saved = await claimFirst(projectDialog, () => window.api.project.save(captureProject()))
     if (saved) toast.success('Project saved')
   } catch (err) {
     reportFailure(err, { failed: "Couldn't save the project." })
@@ -28,36 +33,35 @@ async function handleSave(): Promise<void> {
 }
 
 async function handleLoad(): Promise<void> {
-  const release = suppressAutosave()
-  let opened = false
   try {
-    const result = await window.api.project.load()
-    if (!result) return // user canceled the dialog
+    const result = await claimFirst(projectDialog, () => window.api.project.load())
+    if (!result) return // a second press while the dialog was open, or the user canceled it
     if (!result.ok) {
       reportFailure(result.reason, { failed: PROJECT_OPEN_FAILED })
       return
     }
-    opened = true
     // T-84: a project whose video was moved still opens everything else, and
     // the ONE message says which file is gone (instead of "Project loaded"
     // over a half-empty studio, or a probe error over a half-restored one).
-    const outcome = await applyProject(result.project)
-    const missing = describeUnavailableSources(outcome.unavailable)
-    if (missing) {
-      toast(missing, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
-    } else {
+    // T-113: autosave is held for the apply and for nothing else — not the file dialog before
+    // it, not 1.5 s after it (a quit then saved none of what was done during a long conversion).
+    const outcome = await applyProjectHeld(result.project)
+    // T-139 (5): the project is in the stores. The autosave banner on this page offers a session that is not the person's any more: it goes (Restore would apply
+    // the snapshot over what was just opened).
+    useAutosaveOffer.getState().withdraw()
+    // T-112: also the files that would not open for another reason, and a source
+    // skipped because the person opened a different one while it loaded.
+    const note = describeApplyOutcome(outcome, 'project')
+    if (note) {
+      toast(note, { icon: <Icon name="warning" size={18} />, duration: ERROR_TOAST_MS })
+    } else if (await audioSettled(outcome)) {
+      // T-132 (11): a sound the project opened is drawn AFTER it opens and can still be refused; the green line waits for its waveform.
       toast.success('Project loaded')
     }
   } catch (err) {
     // Not a validation failure — something threw while opening (the dialog
     // bridge, a store). The "damaged or newer" line above would be a guess.
     reportFailure(err, { failed: "Couldn't open that project." })
-  } finally {
-    // On a successful load, hold suppression while stores settle. On any
-    // failure path (cancel, validation rejection, throw), release immediately
-    // so the user can keep autosaving without a 1.5s stall.
-    if (opened) setTimeout(release, 1500)
-    else release()
   }
 }
 

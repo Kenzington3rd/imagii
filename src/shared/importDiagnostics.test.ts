@@ -1,7 +1,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
+  DRIVE_NOT_CONNECTED_SENTENCE,
+  describeFailedOpen,
   describeImportError,
   examineDroppedFile,
+  isNotFoundError,
   pathLooksLikeCloudSync
 } from './importDiagnostics'
 
@@ -207,5 +210,255 @@ describe('describeImportError', () => {
     describeImportError(odd, 'a.mp4')
     expect(errorSpy).toHaveBeenCalledTimes(1)
     expect(errorSpy).toHaveBeenCalledWith("[imagii] imagii couldn't open that file.", odd)
+  })
+})
+
+/**
+ * T-136 (14): the classifier matched its keywords ('codec', 'decoder', 'moov atom', ...) anywhere in the message, and a finished sentence from main
+ * that QUOTES the person's file name carries that name: "Still extracting the sound from "codec_test.mp4". Wait for it to finish, then try again."
+ * became "imagii can't read this audio format..." (executed in the built app), a sentence about a problem that did not exist. A quoted name is not
+ * a cause, so the keywords are looked for in the message with its double-quoted spans taken out.
+ */
+describe('describeImportError - a quoted file name is not a cause (T-136 (14))', () => {
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  const wrap = (channel: string, inner: string): Error =>
+    new Error(`Error invoking remote method '${channel}': Error: ${inner}`)
+  /** main's single-flight refusal for the audio extraction (`ipc/audio.ts`): a finished sentence that quotes the file being worked on. */
+  const busy = (name: string): string => `Still extracting the sound from "${name}". Wait for it to finish, then try again.`
+
+  it('the sentence the executed case hit passes through whole, whatever the importer', () => {
+    const sentence = busy('codec_test.mp4')
+    for (const kind of ['audio', 'video'] as const) {
+      expect(describeImportError(wrap('audio:extractFromVideo', sentence), '/clips/codec_test.mp4', kind)).toBe(sentence)
+    }
+  })
+
+  it.each([
+    ['codec_test.mp4', 'audio'],
+    ['decoder notes.mp4', 'audio'],
+    ['moov atom.mp4', 'video'],
+    ['invalid data found.mov', 'video'],
+    ['no usable duration.mkv', 'audio'],
+    ['no video stream.mp4', 'video'],
+    ['no audio stream.wav', 'audio'],
+    ['cannot find me.mp4', 'video']
+  ] as const)('a file called "%s" (%s importer): main\'s sentence is not rewritten for the word in its name', (name, kind) => {
+    const sentence = busy(name)
+    expect(describeImportError(wrap('audio:extractFromVideo', sentence), `/clips/${name}`, kind)).toBe(sentence)
+    expect(errorSpy, 'no "could not open" line: nothing was classified').not.toHaveBeenCalledWith('[imagii] could not open', expect.anything(), expect.anything())
+  })
+
+  it('a clean name is the control: the same sentence passes through as it always did', () => {
+    const sentence = busy('saturday-stream.mp4')
+    expect(describeImportError(wrap('audio:extractFromVideo', sentence), '/clips/saturday-stream.mp4', 'audio')).toBe(sentence)
+  })
+
+  describe('and a real cause is still found, with or without a quoted name beside it', () => {
+    it.each([
+      ['Could not find codec parameters for stream 0 of "clip.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['Unsupported codec for "codec_test.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['No decoder for stream 0 in "x.wav"', 'audio', "imagii can't read this audio format. Re-export it as WAV or MP3 and try again."],
+      ['"a.mp4": Invalid data found when processing input', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['moov atom not found in "a b.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      ['Unsupported codec "unterminated', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      // A lone quote (an inch mark, a stray character) is not a span: it takes nothing with it, so a cause printed after it is still found.
+      ['Opening 5" capture failed: unsupported codec', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."],
+      // A keyword BETWEEN two quoted names is outside both: a span ends at the next quote, it does not run to the last one.
+      ['Could not open "a.mp4": unsupported codec in "b.mp4"', 'video', "imagii can't read this video format. Re-export it as MP4 from your recorder."]
+    ] as const)('%s (%s)', (raw, kind, expected) => {
+      expect(describeImportError(new Error(raw), '/x/clip.mp4', kind)).toBe(expected)
+      expect(errorSpy).toHaveBeenCalled()
+    })
+
+    it('a cause that is in the quoted text only is not one: the message is judged by what is left, so it falls through to the plain sentence', () => {
+      expect(describeImportError(new Error('Could not open "codec.mp4"'), null, 'video')).toBe("imagii couldn't open that file.")
+    })
+  })
+})
+
+// T-139 (10): the same ffmpeg line the export's catch reads (userFacingError.test.ts), as the IMPORTER reads it. A recording held open by another app makes ffprobe say
+// "<path>: Permission denied"; describeImportError listed EBUSY / EPERM / EACCES / "access ... denied" and not that phrase, so the person was told the file was not
+// a format imagii can read.
+describe('describeImportError - ffmpeg\'s "Permission denied" from a runner or probe (T-139 (10))', () => {
+  const BLOCKED = 'Windows blocked access. Close any app using the file, or check your antivirus.'
+  let errorSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+  const wrap = (channel: string, inner: string): Error => new Error(`Error invoking remote method '${channel}': Error: ${inner}`)
+
+  it.each([
+    ['the probe', 'video', wrap('video:probe', 'ffprobe exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['the probe, thrown by the runner', 'video', new Error('ffprobe exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['the audio probe', 'audio', wrap('audio:probe', 'ffprobe exit 1: C:\\x\\rec.wav: Permission denied')],
+    ['the sound extraction', 'audio', wrap('audio:extractFromVideo', 'audio extract exit 1: C:\\x\\rec.mp4: Permission denied')],
+    ['the conversion', 'video', wrap('video:convertForImport', 'convert-to-mp4 exit 1: C:\\x\\rec.mkv: Permission denied')],
+    [
+      'an input the shipped win32 ffmpeg could not open, all three lines as it prints them (captured under Wine)',
+      'audio',
+      wrap(
+        'audio:extractFromVideo',
+        'audio extract exit 243: [in#0 @ 00007fffff45e500] Error opening input: Permission denied\r\nError opening input file C:\\x\\rec.mp4.\r\nError opening input files: Permission denied\r\n'
+      )
+    ],
+    [
+      'an ffmpeg run, with the real win32 lines (CRLF)',
+      'video',
+      wrap('video:probe', 'FFmpeg exit 1: [out#0/mp4 @ 00007fffff46bfc0] Error opening output C:\\x\\clip.mp4: Permission denied\r\nError opening output files: Permission denied')
+    ]
+  ] as const)('%s (%s) says Windows blocked it and names the way out', (_label, kind, err) => {
+    expect(describeImportError(err, 'C:\\x\\rec.mp4', kind)).toBe(BLOCKED)
+    expect(errorSpy, 'the raw error goes to the console').toHaveBeenCalled()
+  })
+
+  it.each([
+    ['screen recording refused', new Error('Screen recording permission denied')],
+    ['a bare message', new Error('Permission denied')],
+    ['ffmpeg\'s line with no runner around it', new Error('Error opening output files: Permission denied')],
+    ['a runner exit that only mentions the words', new Error('ffprobe exit 1: Permission denied for the codec; try again')]
+  ])('%s is NOT read as a blocked file', (_label, err) => {
+    expect(describeImportError(err, 'C:\\x\\rec.mp4')).not.toBe(BLOCKED)
+  })
+
+  it('the controls stay as they were: the same words for EACCES and "access is denied", and "Screen recording permission denied" is the plain sentence', () => {
+    expect(describeImportError(new Error('EACCES: permission denied, open'))).toBe(BLOCKED)
+    expect(describeImportError(new Error('Access is denied.'))).toBe(BLOCKED)
+    expect(describeImportError(new Error('Screen recording permission denied'))).toBe("imagii couldn't open that file.")
+  })
+
+  it('a missing file still wins over the phrase when ffprobe says both (the file is not there to be blocked)', () => {
+    expect(describeImportError(new Error('ffprobe exit 1: C:\\x\\a.mp4: No such file or directory'), 'C:\\x\\a.mp4')).toMatch(/can't find that file/)
+  })
+})
+
+
+// T-150 (Recent fold): the importers drop a Recent entry whose file is gone, and say so. This is the question they ask.
+describe('isNotFoundError - the file is gone (T-150)', () => {
+  const wrap = (m: string): Error => new Error(`Error invoking remote method 'video:probe': Error: ${m}`)
+
+  it.each([
+    ['ffprobe, the POSIX line', wrap('ffprobe exit 1: /x/a.mp4: No such file or directory')],
+    ['a Node error code', new Error("ENOENT: no such file or directory, open '/x/a.mp4'")],
+    ['the Windows line', wrap('The system cannot find the file specified.')],
+    ['a bare "cannot find"', new Error('Cannot find the path')]
+  ])('%s is the not-found case', (_label, err) => {
+    expect(isNotFoundError(err)).toBe(true)
+  })
+
+  it.each([
+    ['a blocked file', new Error('EACCES: permission denied, open')],
+    ['an unreadable format', new Error('Invalid data found when processing input')],
+    ['a file NAME that says it, in quotes (a name is not a cause)', new Error('Still extracting the sound from "no such file.mp4"')],
+    ['nothing recognisable', new Error('boom')]
+  ])('%s is not', (_label, err) => {
+    expect(isNotFoundError(err)).toBe(false)
+  })
+
+  it('agrees with the sentence describeImportError writes, so "removed from Recent" is only ever said under "can\'t find that file"', () => {
+    const err = wrap('ffprobe exit 1: /x/a.mp4: No such file or directory')
+    expect(isNotFoundError(err)).toBe(true)
+    expect(describeImportError(err, '/x/a.mp4')).toMatch(/can't find that file/)
+  })
+})
+
+
+// T-151 fold: the runner's own `spawn <path> ENOENT` means the app's ffprobe / ffmpeg is missing, not that the person's file is gone.
+describe('isNotFoundError - a missing program is not a missing file (T-151)', () => {
+  it.each([
+    ['spawn ENOENT', new Error('spawn C:\\app\\resources\\ffprobe.exe ENOENT')],
+    ['spawn ENOENT across the bridge', new Error("Error invoking remote method 'video:probe': Error: spawn /opt/imagii/ffprobe ENOENT")],
+    ['spawn ENOENT, upper case', new Error('Spawn /x/ffmpeg ENOENT')]
+  ])('%s is not the not-found case', (_label, err) => {
+    expect(isNotFoundError(err)).toBe(false)
+  })
+
+  it('a missing FILE that happens to follow a spawn line on its own line is still found', () => {
+    expect(isNotFoundError(new Error('spawn ok\nENOENT: no such file or directory, open /x/a.mp4'))).toBe(true)
+  })
+
+  it('the ordinary ENOENT is still the not-found case', () => {
+    expect(isNotFoundError(new Error("ENOENT: no such file or directory, open '/x/a.mp4'"))).toBe(true)
+  })
+})
+
+/**
+ * T-175 (2) - a Recent entry on a drive that is not connected is not erased. An unplugged capture drive fails exactly as a deleted file does (ENOENT), and T-150 dropped the
+ * entry on that sentence. `describeFailedOpen` drops it only when the file's FOLDER is there; the importers hand it the Recent hook's `remove` and main's
+ * `settings.folderOfFilePresent`. Pinned in the built app by home-chrome.spec.ts; the importers' use of it by interactionWiring.test.ts.
+ */
+describe('describeFailedOpen: a Recent entry is dropped only when its folder is there (T-175 (2))', () => {
+  const NOT_FOUND = new Error('ffprobe exit 1: /x/a.mp4: No such file or directory')
+  const MOVED = "imagii can't find that file. It may have been moved or deleted — pick it again with Choose file…."
+  const CLOUD = "imagii can't find that file. It looks like a cloud-sync placeholder — right-click it in Explorer, choose Always keep on this device, then try again."
+
+  function recent(folder: boolean | 'rejects' | 'throws', inList = true) {
+    const folderPresent = vi.fn((_p: string): Promise<boolean> => {
+      if (folder === 'throws') throw new TypeError('window.api.settings.folderOfFilePresent is not a function')
+      return folder === 'rejects' ? Promise.reject(new Error('refused')) : Promise.resolve(folder)
+    })
+    const remove = vi.fn((_p: string): Promise<boolean> => Promise.resolve(inList))
+    return { folderPresent, remove }
+  }
+  beforeEach(() => {
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('the drive sentence is exactly the ticket\'s words', () => {
+    expect(DRIVE_NOT_CONNECTED_SENTENCE).toBe("imagii can't find that file. If it is on a drive that isn't connected, plug the drive in and try again.")
+  })
+
+  it('the folder is there (the file itself is gone): the entry is removed and the toast says so - T-150 unchanged', async () => {
+    const r = recent(true)
+    expect(await describeFailedOpen(NOT_FOUND, '/x/a.mp4', 'video', r)).toBe(`${MOVED} It was removed from Recent.`)
+    expect(r.folderPresent).toHaveBeenCalledWith('/x/a.mp4')
+    expect(r.remove).toHaveBeenCalledWith('/x/a.mp4')
+  })
+
+  it('the folder is NOT there (a drive that is not connected): the entry stays and the toast is the drive sentence alone', async () => {
+    const r = recent(false)
+    expect(await describeFailedOpen(NOT_FOUND, 'E:\\Captures\\a.mp4', 'video', r)).toBe(DRIVE_NOT_CONNECTED_SENTENCE)
+    expect(r.remove).not.toHaveBeenCalled()
+  })
+
+  it('a refused check (it rejects, or the bridge is missing and throws) counts as "not there": the entry stays', async () => {
+    for (const how of ['rejects', 'throws'] as const) {
+      const r = recent(how)
+      expect(await describeFailedOpen(NOT_FOUND, '/x/a.mp4', 'audio', r), how).toBe(DRIVE_NOT_CONNECTED_SENTENCE)
+      expect(r.remove, how).not.toHaveBeenCalled()
+    }
+  })
+
+  it('the folder is there but the path was not in the list: the not-found sentence, no removal claim', async () => {
+    expect(await describeFailedOpen(NOT_FOUND, '/x/a.mp4', 'video', recent(true, false))).toBe(MOVED)
+  })
+
+  it('the cloud-placeholder variant is unchanged when the folder is there, and a missing folder is the drive sentence even in a cloud folder', async () => {
+    const path = 'C:\\Users\\me\\OneDrive\\clip.mp4'
+    expect(await describeFailedOpen(NOT_FOUND, path, 'video', recent(true))).toBe(`${CLOUD} It was removed from Recent.`)
+    expect(await describeFailedOpen(NOT_FOUND, path, 'video', recent(false))).toBe(DRIVE_NOT_CONNECTED_SENTENCE)
+  })
+
+  it('a failure that is not "not found" is describeImportError, and asks main nothing and drops nothing', async () => {
+    const r = recent(false)
+    const codec = new Error('Unknown codec: hevc_xyz')
+    expect(await describeFailedOpen(codec, '/x/a.mp4', 'video', r)).toBe(describeImportError(codec, '/x/a.mp4'))
+    expect(await describeFailedOpen(codec, '/x/a.mp3', 'audio', r)).toBe(describeImportError(codec, '/x/a.mp3', 'audio'))
+    const spawn = new Error('spawn /opt/imagii/ffprobe ENOENT')
+    expect(await describeFailedOpen(spawn, '/x/a.mp4', 'video', r), 'the runner failing to start is not the person\'s file being gone (T-151)').toBe(describeImportError(spawn, '/x/a.mp4'))
+    expect(r.folderPresent).not.toHaveBeenCalled()
+    expect(r.remove).not.toHaveBeenCalled()
   })
 })

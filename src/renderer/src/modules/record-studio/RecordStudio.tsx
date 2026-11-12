@@ -1,23 +1,34 @@
 import { useEffect, useRef, useState } from 'react'
 import toast from 'react-hot-toast'
-import { useNavigate } from 'react-router-dom'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
-import { isModalOpen } from '../../components/Modal'
+import { anyDialogClaim } from '../../hooks/useFocusTrap'
 import { PanelHeader } from '../../components/PanelHeader'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
-import { useVideoStore } from '../video-studio/store/videoStore'
+import { useEditInVideoStudio } from '../../lib/editInVideoStudio'
 import type { RecordingSource } from '@shared/workspace'
 import { isCancelledError } from '@shared/cancel'
-import { ipcErrorMessage } from '@shared/ipcError'
-import { ERROR_TOAST_MS, userFacingError } from '@shared/userFacingError'
+import { formatTimer } from '@shared/clockTime'
+import { localStamp } from '@shared/filename'
+import { landedBesideNote } from '@shared/landedPath'
+import { ERROR_TOAST_MS, isRecordingKeptMessage, userFacingError } from '@shared/userFacingError'
+import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
+import { persistSetting } from '../../lib/persistSetting'
+import { ignoreHeldEnter } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
-import { toastSaved } from '../../lib/savedToast'
-import { startCompositor, type CompositorHandle, type WebcamCorner } from './compositor'
+import { toastKeptTake, toastSaved } from '../../lib/savedToast'
+import { NoPictureError, startCompositor, waitForFirstPicture, type CompositorHandle, type WebcamCorner } from './compositor'
 import { noDeviceHint, reconcileDeviceId, scanDevices, type DeviceOption } from './devices'
-import { saveCard } from './saveCard'
+import { micLostLine, saveCard, SAVE_RUNNING_MESSAGE } from './saveCard'
+import { useRecordSave } from './saveRun'
 
 type Phase = 'idle' | 'recording' | 'saving'
+
+/**
+ * T-120: what the recorder is asked to encode at (see `startRecording`). The temp take and the saved file are
+ * each about 1 MB a second at this rate, and the Output card's hint says so.
+ */
+const RECORDING_VIDEO_BITS_PER_SECOND = 8_000_000
 
 /**
  * T-41: what the source list knows about itself. There used to be a
@@ -29,13 +40,23 @@ type Phase = 'idle' | 'recording' | 'saving'
  */
 type SourceSearch = 'never' | 'searching' | 'done'
 
+/** T-171 (5): the microphone's `getUserMedia` rejected at Start; `original` is what the browser threw. */
+class MicStartFailure extends Error {
+  constructor(readonly original: unknown) {
+    super('microphone failed to start')
+  }
+}
+const MIC_START_REMEDY = 'To record without it, uncheck Record microphone.'
+
 const WEBCAM_CORNERS: WebcamCorner[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
 const WEBCAM_CORNER_LABELS: Record<WebcamCorner, string> = {
-  'top-left': 'Top-left',
-  'top-right': 'Top-right',
-  'bottom-left': 'Bottom-left',
-  'bottom-right': 'Bottom-right'
+  'top-left': 'Top left',
+  'top-right': 'Top right',
+  'bottom-left': 'Bottom left',
+  'bottom-right': 'Bottom right'
 }
+// A source tile captions its type in words, not the internal 'screen' | 'window' (T-157 (5)).
+const SOURCE_TYPE_LABELS: Record<'screen' | 'window', string> = { screen: 'Screen', window: 'Window' }
 
 export function RecordStudio(): JSX.Element {
   const [phase, setPhase] = useState<Phase>('idle')
@@ -44,26 +65,60 @@ export function RecordStudio(): JSX.Element {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [includeMic, setIncludeMic] = useState(true)
   const [convertToMp4, setConvertToMp4] = useState(true)
+  // T-194 (2): the value the take is SAVED with. `recorder.onstop` runs the `finalizeRecording` of the render Start was pressed in, so reading the state there
+  // used the checkbox as it was at the press: a change made during "Starting…" (the card stays up through the capture's open and the first-picture wait, up to
+  // 10 s) was persisted and shown, and the take ignored it. The ref is assigned on every render, so it is the box as it is when the take ends.
+  const convertToMp4Ref = useRef(convertToMp4)
+  convertToMp4Ref.current = convertToMp4
   const [mics, setMics] = useState<DeviceOption[]>([])
   const [selectedMicId, setSelectedMicId] = useState<string | null>(null)
   const [cams, setCams] = useState<DeviceOption[]>([])
+  // T-173 (3): false until the first device scan has written its lists. `mics` and `cams` start empty, and "No microphone found" read as an answer
+  // from the first paint, before anything was looked for. A later Refresh leaves it true: the previous lists stand until the new ones arrive.
+  const [devicesScanned, setDevicesScanned] = useState(false)
   const [selectedCamId, setSelectedCamId] = useState<string | null>(null)
   const [showCam, setShowCam] = useState(false)
+  // T-174 (1): the webcam is ticked and the first scan has not written `cams` yet, so a Start now would read an empty list and answer "No camera found." about a camera
+  // that may be there. Start waits (and says so) until the scan settles; with the box unticked it never waits, the take does not need a camera.
+  const checkingDevices = showCam && !devicesScanned
   const [webcamCorner, setWebcamCorner] = useState<WebcamCorner>('bottom-right')
   const [elapsed, setElapsed] = useState(0)
+  // T-126 (2): how far into the take the microphone stopped (null: it did not). The ref is what `finalizeRecording` reads for the
+  // saved toast (its closure is the render the recorder was made in); the state is what the REC header and the saving card draw.
+  const [micLostAt, setMicLostAt] = useState<number | null>(null)
+  const micLostAtRef = useRef<number | null>(null)
+  // T-119: Start has been pressed and the take is not rolling yet - the capture and the
+  // main-process session are still being opened. `phase` only changes at the very end of
+  // that, so without this a second press during the wait began a second capture over the
+  // first one's refs and orphaned it (and its growing temp webm). The ref is the guard
+  // (set the instant the function runs, before any render); the state is what the button
+  // shows.
+  const [starting, setStarting] = useState(false)
+  const startingRef = useRef(false)
+  // T-120: this component is gone. `startRecording` awaits the capture, the mic, the camera and the
+  // main-process session one after another, and the unmount cleanup runs before any of them lands, so a
+  // person who left during "Starting…" left a live capture (and a growing temp webm) nobody owned. Every
+  // await in `startRecording` is followed by `leftWhileStarting()`.
+  const unmountedRef = useRef(false)
 
   // M6 fix (round 15): surface webm→mp4 progress + give the user an abort button.
-  const [savePercent, setSavePercent] = useState(0)
-  // T-88: "Discard recording" has been pressed and the convert has not yet
-  // rejected. Lets the card say so, and keeps the button from being clicked twice.
-  const [discarding, setDiscarding] = useState(false)
+  // T-137 (2): the save - its percent, whether Discard has been pressed, which take it is - is a run in a module store (`saveRun.ts`), not this
+  // component's state: leaving Record during it returned an IDLE screen over a convert main was still running, and a second take's Discard then
+  // cancelled the first take's convert too and threw its raw webm away. A Record that mounts over a run shows the saving card (the bar, the
+  // Discard) and offers no Start; `phase === 'saving'` is only the instant between the Stop click and the run beginning.
+  // T-115: a null percent is "working, no measurement" (the convert had no length): an indeterminate
+  // bar, like the captions panel's. 0 is a measurement - nothing converted yet.
+  const saveRun = useRecordSave((s) => s.run)
+  const saving = phase === 'saving' || (phase === 'idle' && saveRun !== null)
+  const savePercent = saveRun === null ? 0 : saveRun.percent
+  const discarding = saveRun?.discarding ?? false
 
   // Round 18 D: record → clip handoff. The saved file is pushed into the
   // shared recentFiles.video bucket (same one Video Studio's Importer
   // reads) and "Edit in Video Studio" mirrors VideoStudio.cleanAudioFlow:
   // load into the studio's store, then navigate.
-  const navigate = useNavigate()
-  const loadVideoSource = useVideoStore((s) => s.loadSource)
+  // The saved take's "Edit in Video Studio" (T-123 (18): shared with Reframe's saved file).
+  const editInVideoStudio = useEditInVideoStudio("Couldn't open the recording in Video Studio.")
   const { push: pushRecentVideo } = useRecentFiles('video')
 
   const recorderRef = useRef<MediaRecorder | null>(null)
@@ -77,6 +132,9 @@ export function RecordStudio(): JSX.Element {
   const streamErrorRef = useRef<Error | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const camStreamRef = useRef<MediaStream | null>(null)
+  // T-173 (1): the microphone's own stream, held from the moment `getUserMedia` answers. It is a local of the start until `streamRef` holds
+  // `combined`, and a start that ended in between (a silent screen, a camera that threw) used to leave it open: nothing stopped it.
+  const micStreamRef = useRef<MediaStream | null>(null)
   // Raw screen capture stream from desktopCapturer. Tracked separately
   // from `streamRef` because in the webcam-composited path, `streamRef`
   // holds the compositor's canvas-captureStream output — NOT the original
@@ -88,8 +146,11 @@ export function RecordStudio(): JSX.Element {
   // webcam-in-recording. Owns its own canvas + offscreen video elements
   // and must be stopped to release them.
   const compositorRef = useRef<CompositorHandle | null>(null)
+  // T-124 (1): takes the `ended` listeners off the screen's video tracks (see `watchScreenEnd`); let go with the streams.
+  const screenEndOffRef = useRef<(() => void) | null>(null)
+  // T-125 (25): the same for the microphone's audio track (see `watchMicEnd`).
+  const micEndOffRef = useRef<(() => void) | null>(null)
   const previewRef = useRef<HTMLVideoElement>(null)
-  const camPreviewRef = useRef<HTMLVideoElement>(null)
   const startTimeRef = useRef<number>(0)
   const deviceScanRef = useRef(0)
   const elapsedTimerRef = useRef<number | null>(null)
@@ -101,6 +162,9 @@ export function RecordStudio(): JSX.Element {
   // default corner over an absent key, which made navigation alone a
   // settings write.
   useEffect(() => {
+    // Set again on every mount: StrictMode runs this effect's cleanup and then the effect again in dev, and a
+    // flag left true from that simulated unmount would make every Start bail.
+    unmountedRef.current = false
     void refreshDevices()
     let cancelled = false
     void window.api.settings.get<WebcamCorner>('record.webcamCorner').then((stored) => {
@@ -113,16 +177,9 @@ export function RecordStudio(): JSX.Element {
     })
     return () => {
       cancelled = true
+      unmountedRef.current = true
       stopAllStreams()
     }
-  }, [])
-
-  // M6 fix (round 15): wire the main-side conversion progress channel.
-  useEffect(() => {
-    const off = window.api.recording.onProgress((info) => {
-      setSavePercent(info.percent)
-    })
-    return off
   }, [])
 
   // Round 18 C: the `?` HotkeyOverlay has documented "Esc: Stop recording"
@@ -138,12 +195,40 @@ export function RecordStudio(): JSX.Element {
     if (phase !== 'recording') return
     function onKey(e: KeyboardEvent): void {
       if (e.key !== 'Escape') return
-      if (isModalOpen()) return
+      if (anyDialogClaim()) return
       e.preventDefault()
       stopRecording()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
+  }, [phase])
+
+  // T-133 (1): while a take is being recorded, every way off this screen asks about it first (`mayLeaveLiveTake`): the Home link below, and the
+  // toasts' "Open Audio Studio" / "Edit in Video Studio" buttons, which outlive the screen that raised them. The registration is the live take;
+  // it ends with the phase and with the screen.
+  useEffect(() => {
+    if (phase !== 'recording') return
+    return registerLiveTake(stopRecording)
+  }, [phase])
+
+  // T-120: the live preview. `startRecording` used to hand each stream to its <video> while `phase` was still
+  // 'idle', and both elements render only at phase === 'recording', so the refs were null at that moment:
+  // the recording view was a black box and the webcam thumbnail an empty border. The attach belongs to the
+  // render that has the elements, so it is an effect on the phase, and it lets go of the streams on the way
+  // out (the elements go away with the phase, and an element holding a stopped stream is a frozen frame).
+  // T-171 (1): there is no second, camera-only thumbnail. The main preview is the compositor's output - the webcam already
+  // in the chosen corner, as in the file - and a pre-compositor thumbnail at a fixed corner drew the face twice (and over the
+  // real one at the default). What the preview shows is the take.
+  useEffect(() => {
+    if (phase !== 'recording') return
+    const main = previewRef.current
+    if (main && streamRef.current) {
+      main.srcObject = streamRef.current
+      main.play().catch(() => undefined)
+    }
+    return () => {
+      if (main) main.srcObject = null
+    }
   }, [phase])
 
   /**
@@ -164,6 +249,8 @@ export function RecordStudio(): JSX.Element {
     setCams(next.cams)
     setSelectedMicId((current) => reconcileDeviceId(current, next.mics))
     setSelectedCamId((current) => reconcileDeviceId(current, next.cams))
+    // `scanDevices` never rejects (a scan that finds nothing is an answer), so this is reached for every scan that is still the newest.
+    setDevicesScanned(true)
   }
 
   /** Everything "Refresh sources" re-checks: the screens and windows, and the devices. */
@@ -200,19 +287,28 @@ export function RecordStudio(): JSX.Element {
       // A refused capture permission comes back as a rejected IPC call, not
       // an empty list. Say what happened rather than leaving the wait on
       // screen forever — the empty state below then offers the retry.
+      // T-117: in the studio's sentence (plus the plain cause where the shape is known). The
+      // envelope-stripped string used to be toasted as main wrote it: an errno, a path.
       setSources([])
       reconcileSelection([])
-      toast.error(ipcErrorMessage(err, 'Could not list screens or windows'))
+      reportFailure(err, { failed: "Couldn't list what can be recorded." })
     } finally {
       setSourceSearch('done')
     }
   }
 
   function stopAllStreams(): void {
+    screenEndOffRef.current?.()
+    screenEndOffRef.current = null
+    micEndOffRef.current?.()
+    micEndOffRef.current = null
     streamRef.current?.getTracks().forEach((t) => t.stop())
     streamRef.current = null
     camStreamRef.current?.getTracks().forEach((t) => t.stop())
     camStreamRef.current = null
+    // T-173 (1): the microphone too. Once `combined` holds the same tracks a second stop is a no-op.
+    micStreamRef.current?.getTracks().forEach((t) => t.stop())
+    micStreamRef.current = null
     // Stop the RAW screen tracks. When the compositor path was used,
     // streamRef holds the canvas-captureStream output (not the screen
     // tracks themselves), so without this the desktop capture stays
@@ -228,11 +324,46 @@ export function RecordStudio(): JSX.Element {
     }
   }
 
+  /**
+   * T-120: let go of everything a start has opened so far - every stream and the compositor, and the
+   * main-process session if `begin` has already answered (its empty temp webm goes with it; abandon is
+   * idempotent). A start that fails and a start whose studio was left both end here.
+   */
+  function abandonStart(): void {
+    stopAllStreams()
+    const sid = sessionIdRef.current
+    if (sid) {
+      sessionIdRef.current = null
+      void window.api.recording.abandon(sid).catch(() => undefined)
+    }
+  }
+
+  /**
+   * T-120: asked after each await in `startRecording`. True means the person left Record while that await was
+   * pending: whatever it just returned is released (`extra`: a stream the refs do not hold yet) and the start
+   * ends, with no toast for a screen nobody is looking at.
+   */
+  function leftWhileStarting(...extra: Array<MediaStream | null>): boolean {
+    if (!unmountedRef.current) return false
+    for (const stream of extra) stream?.getTracks().forEach((t) => t.stop())
+    abandonStart()
+    return true
+  }
+
   async function startRecording(): Promise<void> {
-    if (!selectedSourceId) {
-      toast.error('Pick a screen / window first')
+    if (startingRef.current) return
+    // T-137 (2): a take is still being saved (this screen was left during it and came back). The idle controls are not drawn over a save, so this is
+    // the backstop, not the way a person meets the rule; a second take over a running save is what let a Discard reach the first take's convert.
+    if (useRecordSave.getState().run !== null) {
+      toast(SAVE_RUNNING_MESSAGE, { id: 'record-save-busy', icon: <Icon name="warning" size={18} /> })
       return
     }
+    if (!selectedSourceId) {
+      toast.error('Pick a screen or window first')
+      return
+    }
+    startingRef.current = true
+    setStarting(true)
     try {
       const screenConstraints = {
         audio: false,
@@ -248,13 +379,19 @@ export function RecordStudio(): JSX.Element {
       // compositor. stopAllStreams now releases this on every exit path,
       // including the failure paths where the compositor never started.
       screenStreamRef.current = screenStream
+      if (leftWhileStarting()) return
 
       let micStream: MediaStream | null = null
       if (includeMic) {
         const audioConstraint: MediaTrackConstraints = selectedMicId
           ? { deviceId: { exact: selectedMicId } }
           : {}
-        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint })
+        // T-171 (5): only the microphone's own rejection is marked, so the one catch below can add the remedy that exists.
+        micStream = await navigator.mediaDevices.getUserMedia({ audio: audioConstraint }).catch((err: unknown) => {
+          throw new MicStartFailure(err)
+        })
+        micStreamRef.current = micStream
+        if (leftWhileStarting(micStream)) return
       }
 
       // If the user wants the webcam IN the recording (not just a preview),
@@ -283,6 +420,7 @@ export function RecordStudio(): JSX.Element {
             video: { deviceId: { exact: effectiveCamId } }
           })
           camStreamRef.current = camStream
+          if (leftWhileStarting(micStream)) return
           const compositor = await startCompositor({
             screenStream,
             webcamStream: camStream,
@@ -291,12 +429,22 @@ export function RecordStudio(): JSX.Element {
             fps: 30
           })
           compositorRef.current = compositor
+          if (leftWhileStarting(micStream)) return
           videoTrackSource = compositor.outputStream
-          if (camPreviewRef.current) {
-            camPreviewRef.current.srcObject = camStream
-            void camPreviewRef.current.play()
-          }
         } catch (err) {
+          // T-121: the studio was left while the camera or the compositor was opening - the same teardown the
+          // awaits above have, and no toast for a screen nobody is looking at (the start used to carry on from
+          // here and open a take for it).
+          if (leftWhileStarting(micStream)) return
+          // T-172 (1): a stalled SCREEN cannot be recorded, and the fallback below records the screen: it would open a take of nothing.
+          // The outer catch releases everything (the microphone too, T-173 (1)) and says the sentence.
+          if (err instanceof NoPictureError && err.source === 'screen') throw err
+          // T-121: the take continues WITHOUT the camera, so the camera is let go now. getUserMedia had
+          // succeeded (only the compositor failed): its tracks stayed live for the whole take, the camera's
+          // light on during a screen-only recording. Nothing else holds the stream (the compositor tore down
+          // its own elements).
+          camStream?.getTracks().forEach((t) => t.stop())
+          camStreamRef.current = null
           // T-84: the cause in plain words (the zero-camera case is our own
           // sentence above), then what the take will be instead — so the
           // ticked box and the file still agree (T-42).
@@ -306,6 +454,14 @@ export function RecordStudio(): JSX.Element {
         }
       }
 
+      // T-174 (2): a take whose picture is the raw screen (the webcam off, or the camera fell back) has no compositor to notice a screen that sends
+      // nothing. Wait for its first picture BEFORE the main-process session opens and the recorder is built, so a silent screen ends the start (the
+      // one catch below says the sentence and lets everything go) and no take of nothing is opened. A working screen answers at once.
+      if (videoTrackSource === screenStream) {
+        await waitForFirstPicture(screenStream)
+        if (leftWhileStarting(micStream)) return
+      }
+
       const tracks = [
         ...videoTrackSource.getVideoTracks(),
         ...(micStream ? micStream.getAudioTracks() : [])
@@ -313,14 +469,17 @@ export function RecordStudio(): JSX.Element {
       const combined = new MediaStream(tracks)
       streamRef.current = combined
 
-      if (previewRef.current) {
-        previewRef.current.srcObject = combined
-        void previewRef.current.play()
-      }
-
       const mimePref = ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm']
       const mime = mimePref.find((m) => MediaRecorder.isTypeSupported(m)) ?? ''
-      const recorder = new MediaRecorder(combined, mime ? { mimeType: mime } : undefined)
+      // T-120: say the bitrate. Without `videoBitsPerSecond` Chromium encodes at about 2.5 Mbps, which is soft
+      // for 1080p gameplay before a platform re-encodes it. 8 Mbps is this recording's OWN ceiling (T-132 (8): it was
+      // once "the top export preset's rate", and the 1080p60 preset's 12M is the top now), a CEILING and not what a take
+      // is written at: the encoder spends what the picture needs (2.56 Mbps measured on a flat synthetic canvas). The
+      // cost is disk, at most about 1 MB a second, 3.6 GB an hour, in the temp take AND the saved copy.
+      const recorder = new MediaRecorder(combined, {
+        ...(mime ? { mimeType: mime } : {}),
+        videoBitsPerSecond: RECORDING_VIDEO_BITS_PER_SECOND
+      })
 
       // Round 18 A: open the main-process streaming session BEFORE the
       // recorder starts so the first chunk always has somewhere to go.
@@ -330,6 +489,7 @@ export function RecordStudio(): JSX.Element {
       // chunk is appended to a temp .webm as it arrives.
       const { id: sessionId } = await window.api.recording.begin()
       sessionIdRef.current = sessionId
+      if (leftWhileStarting(micStream)) return
       appendQueueRef.current = Promise.resolve()
       streamErrorRef.current = null
 
@@ -361,26 +521,80 @@ export function RecordStudio(): JSX.Element {
       recorder.start(1000)
       recorderRef.current = recorder
       startTimeRef.current = Date.now()
+      micLostAtRef.current = null
+      setMicLostAt(null)
       elapsedTimerRef.current = window.setInterval(() => {
         setElapsed(Date.now() - startTimeRef.current)
       }, 200)
       setPhase('recording')
+      watchScreenEnd(screenStream)
+      if (micStream) watchMicEnd(micStream)
     } catch (err) {
       // By the time MediaRecorder construction / start() runs, the screen,
       // cam, compositor, and combined streams may all be assigned. If this
       // throws (e.g. NotSupportedError), those streams + the compositor rAF
       // loop would leak until navigation. Release everything before the
       // toast — every startRecording exit path must end ownership.
-      stopAllStreams()
       // Round 18 A: if begin() succeeded but start() then threw, reap the
       // just-opened session's empty temp file. abandon is idempotent.
-      const sid = sessionIdRef.current
-      if (sid) {
-        sessionIdRef.current = null
-        void window.api.recording.abandon(sid).catch(() => undefined)
+      abandonStart()
+      // T-175 (1): the studio was left while an await was pending and that await failed (the first-picture wait runs its 10 s on a screen nobody is
+      // looking at). Everything is let go above; the sentences below are for a person still on Record, never over Home or another studio. One guard in
+      // the one catch every start failure reaches, so every await of the start - present and future - is covered (`leftWhileStarting`'s own rule).
+      if (unmountedRef.current) return
+      if (err instanceof MicStartFailure) {
+        // T-171 (5): the cause sentence, then the remedy a missing microphone has (the camera's failure already records screen-only).
+        const { message } = userFacingError(err.original, "Couldn't start recording.")
+        toast.error(`${message} ${MIC_START_REMEDY}`, { duration: ERROR_TOAST_MS })
+      } else {
+        reportFailure(err, { failed: "Couldn't start recording." })
       }
-      reportFailure(err, { failed: "Couldn't start recording." })
+    } finally {
+      startingRef.current = false
+      setStarting(false)
     }
+  }
+
+  /**
+   * T-124 (1): the take ends when the SCREEN does. MediaRecorder stops by itself only when every track of the stream it
+   * records has ended, and `combined` also holds the microphone's audio track (on by default), so a game that crashed or a
+   * captured window that closed ended the picture, left the sound live, and REC went on counting over a frozen frame.
+   * The listener goes on the raw capture's video tracks and not on what the recorder is handed: with the webcam in the
+   * take that is the compositor's canvas capture, which never ends. A track that ended during the awaits of the start
+   * (the listener was not there to hear it) ends the take at once. Called after the phase is 'recording', so the
+   * 'saving' phase `stopRecording` sets is the last word.
+   */
+  function watchScreenEnd(screenStream: MediaStream): void {
+    const tracks = screenStream.getVideoTracks()
+    tracks.forEach((t) => t.addEventListener('ended', stopRecording))
+    screenEndOffRef.current = () => tracks.forEach((t) => t.removeEventListener('ended', stopRecording))
+    if (tracks.some((t) => t.readyState === 'ended')) stopRecording()
+  }
+
+  /**
+   * T-125 (25): a microphone that goes away mid-take (a USB headset pulled, a Bluetooth one out of range, the device disabled)
+   * ends its audio track and nothing else: the screen keeps recording, REC keeps counting, and the rest of the take is silent
+   * with no word of it until the person plays the file back. The take is NOT ended (the picture is worth keeping, and the
+   * screen's own end is what `watchScreenEnd` is for): the person is told, once, so they can stop and start again if the voice
+   * matters. A track that had already ended during the awaits of the start is told at once. `stop()` from `stopAllStreams` does
+   * not fire `ended`, and the listener is taken off there anyway, so a normal Stop says nothing.
+   * T-126 (2): the toast is told once and gone in 8 s, so the loss is also RECORDED - how far into the take it stopped - and the
+   * REC header, the saving card and the saved toast say it (`micLostLine`) until the file is done.
+   */
+  function watchMicEnd(micStream: MediaStream): void {
+    const tracks = micStream.getAudioTracks()
+    let told = false
+    const warn = (): void => {
+      if (told) return
+      told = true
+      const at = Math.max(0, Date.now() - startTimeRef.current)
+      micLostAtRef.current = at
+      setMicLostAt(at)
+      toast.error('The microphone stopped. The rest of this recording has no sound from it.', { duration: ERROR_TOAST_MS })
+    }
+    tracks.forEach((t) => t.addEventListener('ended', warn))
+    micEndOffRef.current = () => tracks.forEach((t) => t.removeEventListener('ended', warn))
+    if (tracks.some((t) => t.readyState === 'ended')) warn()
   }
 
   function stopRecording(): void {
@@ -391,22 +605,28 @@ export function RecordStudio(): JSX.Element {
     setPhase('saving')
   }
 
-  // Round 18 D: mirror VideoStudio.cleanAudioFlow's cross-studio bridge —
-  // load the path into the target studio's store first, then navigate.
-  async function editInVideoStudio(outputPath: string): Promise<void> {
-    try {
-      await loadVideoSource(outputPath)
-      navigate('/video')
-    } catch (err) {
-      reportFailure(err, { failed: "Couldn't open the recording in Video Studio." })
-    }
-  }
-
   async function finalizeRecording(): Promise<void> {
-    setSavePercent(0)
+    // T-123 (5): the save begins HERE, whoever stopped the take. Only the Stop button set the phase, so a take that ended
+    // by itself (the captured window closed and every track ended, `onstop` runs this) saved under a live "REC" screen
+    // with a Stop that did nothing and no Discard. The same call in `stopRecording` is the instant answer to a click;
+    // setting a state to the value it already has is nothing.
+    setPhase('saving')
+    // T-194 (2): read once, here: the run's flag, the file's extension and the finalize option are the same answer.
+    const convert = convertToMp4Ref.current
     const sessionId = sessionIdRef.current
     const durationMs = Date.now() - startTimeRef.current
+    const lostLine = micLostLine(micLostAtRef.current)
     stopAllStreams()
+    // T-137 (2): the save is a run in the module store from here until the take is dealt with (saved, discarded or failed), claimed before the
+    // first await and given back in the `finally`. `claimed` is false only with no session to save (the failure below says so) or if a run is
+    // somehow already there - which Start's refusal prevents - and then this save leaves the other run alone. The progress listener lasts exactly
+    // the save (it was an effect of the screen, and lost every event that arrived while the screen was gone).
+    const claimed =
+      sessionId !== null &&
+      useRecordSave.getState().begin({ takeId: sessionId, convertToMp4: convert, percent: 0, discarding: false, micLostAt: micLostAtRef.current })
+    const offProgress = window.api.recording.onProgress((info) => {
+      useRecordSave.getState().patch({ percent: info.percent ?? null })
+    })
     try {
       // All chunks were queued by ondataavailable before onstop fired, so
       // awaiting the queue's tail awaits every pending appendChunk. Each
@@ -416,9 +636,11 @@ export function RecordStudio(): JSX.Element {
       if (streamErrorRef.current) throw streamErrorRef.current
       if (!sessionId) throw new Error('Recording session was never started')
       const result = await window.api.recording.finalize(sessionId, {
-        filename: `recording-${new Date().toISOString().replace(/[:.]/g, '-')}.${convertToMp4 ? 'mp4' : 'webm'}`,
+        // T-117: the machine's clock, like the export panel's {date} and {time} - the UTC ISO
+        // string named an evening Pacific take for tomorrow.
+        filename: `recording-${localStamp()}.${convert ? 'mp4' : 'webm'}`,
         durationMs,
-        convertToMp4
+        convertToMp4: convert
       })
       // finalize reaped the session (success or not) — never abandon it too.
       sessionIdRef.current = null
@@ -428,7 +650,13 @@ export function RecordStudio(): JSX.Element {
         void pushRecentVideo(result.outputPath)
         // T-92: "Show in folder" and "Edit in Video Studio" are the only ways
         // on from here, so this toast stays up long enough to use them.
-        toastSaved(`Saved ${(result.sizeBytes / 1e6).toFixed(1)} MB`, result.outputPath, {
+        // T-126 (2): a take that lost its microphone says so here too, as a second sentence (two keep both periods).
+        const saved = `Saved ${(result.sizeBytes / 1e6).toFixed(1)} MB`
+        // T-140 (1): when the file chosen in the Save dialog was open in another app the take was kept beside it ("name (2)"): `result.outputPath` is
+        // the file that exists (the toast's buttons use it), and a third sentence says why it is not the name that was chosen.
+        const note = landedBesideNote(result.requestedPath, result.outputPath, 'recording')
+        const head = lostLine ? `${saved}. ${lostLine}.` : saved
+        toastSaved(note ? `${lostLine ? head : `${head}.`} ${note}` : head, result.outputPath, {
           label: 'Edit in Video Studio',
           onClick: () => {
             void editInVideoStudio(result.outputPath)
@@ -445,10 +673,20 @@ export function RecordStudio(): JSX.Element {
         // reading "imagii:cancelled".
         announceDiscarded()
       } else {
-        // T-59: main names the failure in the studio's own words; this side
-        // strips the "Error invoking remote method 'recording:finalize':"
-        // envelope Electron staples on, which used to reach the toast in full.
-        toast.error(ipcErrorMessage(err, 'Save failed'))
+        // Which branch says what (T-59, T-117, T-110 (u) narrowed by T-141 (5) and T-142 (1)). Main words the two take-specific failures as finished
+        // sentences `userFacingError` lets stand; every OTHER cause used to reach the toast raw, and goes through the same helper as every other
+        // failure: this sentence, plus the plain cause where the shape is known (disk full, a file Windows would not let us touch), 8 s (T-115).
+        //  - A failed convert says "Nothing was saved" and names the one setting that gets a file anyway: the half-written mp4 is reaped and the
+        //    take is deleted with it, so that is true.
+        //  - A swap onto the chosen name that was refused AFTER a whole convert, remux or copy keeps the raw take (the only copy of a finished
+        //    recording): main's sentence says where. That one is raised by `toastKeptTake`, with "Show in folder" and "Close", and stays until
+        //    closed, because the way to the file lives in that toast and nowhere else once the screen drops to idle (T-142 (1)).
+        //  - Any other failure of the save (the write stream, an empty take, an unreadable folder) is a plain `reportFailure` toast. Its take is
+        //    gone: `promoteTempWebm` reaped it before it threw, so there is nothing to retry or point at, and the retry advice some causes carry
+        //    ("free up some space and try again") is the generic one - whether to keep the webm on THOSE failures too is T-110 (u)'s open product call.
+        const { message } = userFacingError(err, 'Saving the recording failed.')
+        if (sessionId && isRecordingKeptMessage(message)) toastKeptTake(message, sessionId)
+        else reportFailure(err, { failed: 'Saving the recording failed.' })
       }
       // Failure path: reap the partial temp file. Reached when an append
       // failed mid-recording or finalize itself threw; in the latter case
@@ -458,9 +696,11 @@ export function RecordStudio(): JSX.Element {
         void window.api.recording.abandon(sessionId).catch(() => undefined)
       }
     } finally {
+      offProgress()
+      if (claimed) useRecordSave.getState().end()
       setElapsed(0)
-      setSavePercent(0)
-      setDiscarding(false)
+      micLostAtRef.current = null
+      setMicLostAt(null)
       setPhase('idle')
     }
   }
@@ -473,30 +713,56 @@ export function RecordStudio(): JSX.Element {
    * T-88: "Discard recording" kills the running convert (the one thing in the
    * save that can be stopped); the convert's cancel comes back from main as a
    * discard, which `finalizeRecording` announces. If there was nothing to
-   * kill — the click landed before the convert started or after it finished —
-   * the button comes back instead of sitting on "Discarding…" forever.
+   * cancel (no live convert, no open save run: the swap's retries are a run,
+   * T-158 (2)) the button comes back instead of sitting on "Discarding…" forever.
+   * T-137 (2): and it is aimed at ONE take, the run's (`takeId`): main cancels that take's convert and no other's, so a Discard here can never
+   * reach another take's save. Pressed in the instant before the run begins (the Stop click, the recorder's last chunk) there is no take to name
+   * yet and nothing to stop.
    */
   function discardRecording(): void {
-    setDiscarding(true)
+    const takeId = useRecordSave.getState().run?.takeId
+    if (takeId === undefined) return
+    useRecordSave.getState().patch({ discarding: true })
     window.api.recording
-      .cancelSave()
+      .cancelSave(takeId)
       .then((hadConvert) => {
-        if (!hadConvert) setDiscarding(false)
+        if (!hadConvert) useRecordSave.getState().patch({ discarding: false })
       })
       .catch((err) => {
-        setDiscarding(false)
+        useRecordSave.getState().patch({ discarding: false })
         reportFailure(err, { failed: "Couldn't discard the recording." })
       })
   }
 
-  function formatElapsed(ms: number): string {
-    const total = Math.floor(ms / 1000)
-    const m = Math.floor(total / 60)
-    const s = total % 60
-    return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
-  }
+  // The card draws the SAVE's own facts when a run exists (a Record that mounted over it has neither the checkbox's value nor the take's mic line).
+  const save = saveCard(saveRun === null ? convertToMp4 : saveRun.convertToMp4, discarding)
+  const micLine = micLostLine(saveRun === null ? micLostAt : saveRun.micLostAt)
 
-  const save = saveCard(convertToMp4, discarding)
+  // T-189 (1): two presses here remove the button that was pressed and put other content in its place, and a removed element takes focus to
+  // <body> (STYLE_GUIDE's swap rule, T-119): "Start recording" (the live view arrives, Stop is in the header) and "Pick a screen or window"
+  // (the source grid arrives). Focus goes to Stop, and to the first source tile. Both buttons are natively `disabled` while they work and
+  // Chromium blurs a disabled button, so by the time the swap renders focus is already on <body> and the render cannot say whether the
+  // button had it: the press records that (the other sites in this guide read it in the swap's own render). It moves nothing when the press
+  // did not have focus on the button (a mouse-less `click()`, Refresh sources) or when focus has gone to another control that outlives the
+  // swap (the header's Home link). Declared above any early return (there is none).
+  const startRef = useRef<HTMLButtonElement | null>(null)
+  const stopRef = useRef<HTMLButtonElement | null>(null)
+  const pickRef = useRef<HTMLButtonElement | null>(null)
+  const firstTileRef = useRef<HTMLButtonElement | null>(null)
+  const startHadFocus = useRef(false)
+  const pickHadFocus = useRef(false)
+  useEffect(() => {
+    if (phase !== 'recording') return
+    const active = document.activeElement
+    if (startHadFocus.current && (active === null || active === document.body)) stopRef.current?.focus()
+    startHadFocus.current = false
+  }, [phase])
+  useEffect(() => {
+    if (sourceSearch !== 'done') return
+    const active = document.activeElement
+    if (pickHadFocus.current && sources.length > 0 && (active === null || active === document.body)) firstTileRef.current?.focus()
+    pickHadFocus.current = false
+  }, [sourceSearch, sources])
 
   return (
     <div className="h-full overflow-auto px-8 py-6 flex flex-col gap-5">
@@ -512,14 +778,11 @@ export function RecordStudio(): JSX.Element {
               other studios. */}
           <span
             onClickCapture={(e) => {
-              if (phase !== 'recording') return
+              // T-133 (1): the question is shared (`lib/liveTake`) with every other way off this screen - a toast's button outlives the
+              // screen that raised it - so it is asked by the registration below, not by this link's own copy.
+              if (mayLeaveLiveTake()) return
               e.preventDefault()
               e.stopPropagation()
-              const stopFirst = window.confirm(
-                'A recording is in progress. Stop and save it before leaving? ' +
-                  '(Cancel keeps recording.)'
-              )
-              if (stopFirst) stopRecording()
             }}
           >
             <HomeLink />
@@ -530,20 +793,27 @@ export function RecordStudio(): JSX.Element {
           </p>
         </div>
         {phase === 'recording' ? (
-          <div className="flex items-center gap-3">
-            <span className="font-mono text-danger inline-flex items-center gap-1.5">
-              <Icon name="record" size={15} /> REC {formatElapsed(elapsed)}
-            </span>
-            <button className="btn-primary px-4 py-2" onClick={stopRecording}>
-              Stop
-            </button>
+          <div className="flex flex-col items-end gap-1">
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-danger inline-flex items-center gap-1.5">
+                <Icon name="record" size={15} /> REC {formatTimer(elapsed / 1000)}
+              </span>
+              <button ref={stopRef} className="btn-primary px-4 py-2" onClick={stopRecording} onKeyDown={ignoreHeldEnter}>
+                Stop
+              </button>
+            </div>
+            {/* T-126 (2): the record of a microphone that went away - the toast that said so is gone in 8 s. */}
+            {micLine ? <p className="text-xs text-danger">{micLine}</p> : null}
           </div>
         ) : null}
       </header>
 
-      {phase === 'idle' ? (
+      {phase === 'idle' && !saving ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(320px,20%,520px)] gap-5">
-          <div className="card p-4 flex flex-col gap-3">
+          {/* T-194 (2): the source, the microphone and the webcam are read once, when Start is pressed (the capture is opened from them before any render can
+              come back), so a change made during "Starting…" was shown and the take ignored it. A disabled fieldset locks every control inside it (the tiles,
+              Refresh sources, the checkboxes and the selects) and the reason is said under Start. Convert to MP4 is read when the take ends and stays live. */}
+          <fieldset disabled={starting} className="card p-4 flex flex-col gap-3 min-w-0 disabled:opacity-60">
             <PanelHeader
               icon="video"
               actions={
@@ -575,19 +845,27 @@ export function RecordStudio(): JSX.Element {
                   </p>
                 ) : null}
                 <button
+                  ref={pickRef}
                   className="btn-primary px-4 py-2 disabled:opacity-50"
-                  onClick={chooseSource}
+                  onClick={() => {
+                    pickHadFocus.current = document.activeElement === pickRef.current
+                    void chooseSource()
+                  }}
                   disabled={sourceSearch === 'searching'}
                 >
                   Pick a screen or window
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-96 overflow-y-auto">
-                {sources.map((s) => (
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 p-1 max-h-96 overflow-y-auto">
+                {sources.map((s, i) => (
                   <button
                     key={s.id}
+                    ref={i === 0 ? firstTileRef : undefined}
                     onClick={() => setSelectedSourceId(s.id)}
+                    // T-114: one of a set, and it shows which by a border and a ring - which a
+                    // screen reader cannot see.
+                    aria-pressed={selectedSourceId === s.id}
                     className={`text-left card p-2 transition-colors ${
                       selectedSourceId === s.id ? 'border-accent ring-2 ring-accent/50' : ''
                     }`}
@@ -597,15 +875,15 @@ export function RecordStudio(): JSX.Element {
                       alt={s.name}
                       className="w-full rounded mb-2"
                     />
-                    <div className="text-xs font-medium truncate">{s.name}</div>
-                    <div className="text-xs text-ink-dim">{s.type}</div>
+                    <div className="text-xs font-medium truncate" title={s.name}>{s.name}</div>
+                    <div className="text-xs text-ink-dim">{SOURCE_TYPE_LABELS[s.type]}</div>
                   </button>
                 ))}
               </div>
             )}
-          </div>
+          </fieldset>
           <div className="flex flex-col gap-3">
-            <div className="card p-4 flex flex-col gap-3 text-sm">
+            <fieldset disabled={starting} className="card p-4 flex flex-col gap-3 text-sm min-w-0 disabled:opacity-60">
               <PanelHeader icon="microphone">Audio</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
@@ -629,11 +907,11 @@ export function RecordStudio(): JSX.Element {
                   ))}
                 </select>
               ) : null}
-              {includeMic && mics.length === 0 ? (
+              {devicesScanned && includeMic && mics.length === 0 ? (
                 <p className="text-xs text-warn">{noDeviceHint('microphone')}</p>
               ) : null}
-            </div>
-            <div className="card p-4 flex flex-col gap-3 text-sm">
+            </fieldset>
+            <fieldset disabled={starting} className="card p-4 flex flex-col gap-3 text-sm min-w-0 disabled:opacity-60">
               <PanelHeader icon="record">Webcam</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
@@ -662,7 +940,7 @@ export function RecordStudio(): JSX.Element {
                   have been. Without it a user with no camera ticked the box,
                   watched a Corner picker appear, and got a screen-only
                   recording that never mentioned the webcam. */}
-              {showCam && cams.length === 0 ? (
+              {devicesScanned && showCam && cams.length === 0 ? (
                 <p className="text-xs text-warn">{noDeviceHint('camera')}</p>
               ) : null}
               {/* The corner only means something once there is a camera to
@@ -678,7 +956,7 @@ export function RecordStudio(): JSX.Element {
                     onChange={(e) => {
                       const corner = e.target.value as WebcamCorner
                       setWebcamCorner(corner)
-                      void window.api.settings.set('record.webcamCorner', corner)
+                      void persistSetting('record.webcamCorner', corner)
                     }}
                   >
                     {WEBCAM_CORNERS.map((c) => (
@@ -689,12 +967,15 @@ export function RecordStudio(): JSX.Element {
                   </select>
                 </label>
               ) : null}
-              <p className="text-xs text-ink-dim">
-                Webcam is composited into the recording at the chosen corner. The
-                preview overlay in the recording view shows the cam alongside the
-                screen for monitoring.
-              </p>
-            </div>
+              {/* T-165 (2): said only when a webcam WILL be recorded (the box ticked and a camera there), the Corner picker's gate: under the
+                  unticked box or "No camera found" the take is screen-only and the sentence would promise a corner nothing goes in. */}
+              {showCam && cams.length > 0 ? (
+                <p className="text-xs text-ink-dim">
+                  Your webcam is added to a corner of the recording. You can see it in the
+                  preview while you record.
+                </p>
+              ) : null}
+            </fieldset>
             <div className="card p-4 flex flex-col gap-3 text-sm">
               <PanelHeader icon="folder">Output</PanelHeader>
               <label className="flex items-center gap-2">
@@ -704,7 +985,7 @@ export function RecordStudio(): JSX.Element {
                   onChange={(e) => {
                     const on = e.target.checked
                     setConvertToMp4(on)
-                    void window.api.settings.set('record.convertToMp4', on)
+                    void persistSetting('record.convertToMp4', on)
                   }}
                 />
                 <span>
@@ -712,58 +993,71 @@ export function RecordStudio(): JSX.Element {
                 </span>
               </label>
               <p className="text-xs text-ink-dim">
-                Off = save as WebM (instant, but some apps don't accept WebM).
+                Off = save as WebM (quick, but some apps don't accept WebM). A take can use about
+                3.6 GB of disk per hour, and saving needs room for a second copy of it.
               </p>
             </div>
             <button
+              ref={startRef}
               className="btn-primary px-4 py-3 text-base disabled:opacity-50 inline-flex items-center justify-center gap-2"
-              disabled={!selectedSourceId}
-              onClick={startRecording}
+              disabled={!selectedSourceId || starting || checkingDevices}
+              onClick={() => {
+                startHadFocus.current = document.activeElement === startRef.current
+                void startRecording()
+              }}
             >
-              <Icon name="record" size={18} /> Start recording
+              <Icon name="record" size={18} /> {starting ? 'Starting…' : checkingDevices ? 'Checking devices…' : 'Start recording'}
             </button>
+            {starting ? (
+              <p className="text-xs text-ink-dim">
+                The capture is opening, so the source, microphone and webcam are locked for this recording. Convert to MP4 can still change.
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}
 
       {phase === 'recording' ? (
-        // B11 fix (round 16): the cam preview is `absolute`, but without a
-        // positioned ancestor it climbed to the page root, which on a tall
-        // window made the thumbnail drift far below the main preview. Mark
-        // this wrapper `relative` so the cam thumbnail anchors inside it.
-        <div className="relative flex flex-col gap-4">
+        // T-171 (1): ONE video, the composite - the webcam is seen where the file has it.
+        <div className="flex flex-col gap-4">
           <video
             ref={previewRef}
             className="w-full max-h-[60vh] bg-black rounded"
             muted
             playsInline
           />
-          {showCam ? (
-            <video
-              ref={camPreviewRef}
-              className="absolute bottom-8 right-8 w-48 rounded shadow-xl border-2 border-accent"
-              muted
-              playsInline
-            />
-          ) : null}
         </div>
       ) : null}
 
-      {phase === 'saving' ? (
+      {saving ? (
         <div className="card p-6 text-center flex flex-col items-center gap-3">
           <div className="text-accent">
             <Icon name="save" size={28} />
           </div>
           <p className="text-sm">{save.status}</p>
-          {/* M6 fix (round 15): coarse progress for the convert. T-88: only
+          {micLine ? <p className="text-xs text-danger">{micLine}</p> : null}
+          {/* M6 fix (round 15): progress for the convert. T-88: only
               the convert reports progress, so only the convert gets a bar —
-              a WebM save used to sit on this bar's 2% floor. */}
+              a WebM save used to sit on this bar's 2% floor. T-115: the number
+              is the encode position over the take's length; a convert with no
+              length reports none and the bar slides (no aria-valuenow). */}
           {save.showProgress ? (
-            <div className="w-64 h-1.5 bg-bg-hover rounded-full overflow-hidden">
-              <div
-                className="h-full bg-accent"
-                style={{ width: `${Math.max(2, Math.round(savePercent))}%` }}
-              />
+            <div
+              className="w-64 h-1.5 bg-bg-hover rounded-full overflow-hidden"
+              role="progressbar"
+              aria-label="Converting the recording to MP4"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={savePercent === null ? undefined : Math.round(savePercent)}
+            >
+              {savePercent === null ? (
+                <div className="h-full bg-accent progress-indeterminate" />
+              ) : (
+                <div
+                  className="h-full bg-accent"
+                  style={{ width: `${Math.max(2, Math.round(savePercent))}%` }}
+                />
+              )}
             </div>
           ) : null}
           <button

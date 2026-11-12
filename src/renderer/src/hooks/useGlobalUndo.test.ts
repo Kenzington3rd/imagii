@@ -209,7 +209,9 @@ describe('cross-studio ordering', () => {
     expect(clipCount()).toBe(0)
     expect(globalUndoState().canUndo).toBe(false)
 
-    // …and the mirror puts the board back in the middle of the queue.
+    // …and the mirror puts the board back in the middle of the queue. T-182 (1): the board Undo's disk write is a counted mutation now, so a Redo pressed
+    // while it is still out waits its turn (a press cannot overtake a write that may yet fail); a person's next press is milliseconds later, so the write lands first here.
+    await useReferencesStore.getState().refreshCollections()
     globalRedo()
     expect(clipCount()).toBe(1)
     globalRedo()

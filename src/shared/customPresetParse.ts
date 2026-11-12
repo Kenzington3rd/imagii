@@ -59,7 +59,7 @@ export function parseCustomPreset(raw: string): CustomPreset | null {
   // T-50: `basePlatformId` used to pass on being any non-empty string, and
   // both the manager list and (now) the export grid look the platform table
   // up by it — an unknown id resolved to `undefined` and the next property
-  // read threw. It must be one of the five platforms or the file is refused,
+  // read threw. It must be one of the six built-in presets or the file is refused,
   // the same way a missing name is.
   if (!isPlatformId(parsed.basePlatformId)) return null
   return {

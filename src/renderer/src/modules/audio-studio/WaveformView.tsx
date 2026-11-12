@@ -1,10 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
+import toast from 'react-hot-toast'
 import WaveSurfer from 'wavesurfer.js'
 import RegionsPlugin, { type Region } from 'wavesurfer.js/dist/plugins/regions.esm.js'
 import { useAudioStore } from './state/audioStore'
 import { VolumeMeter } from './VolumeMeter'
 import { Icon } from '../../components/Icon'
-import { ACCENT, ACCENT_MUTED, EMBER, withAlpha } from '../../styles/tokens'
+import { ACCENT, EMBER, INK_DIM, withAlpha } from '../../styles/tokens'
+import { PLAYBACK_ERROR_MESSAGE, peaksMaxMagnitude } from '@shared/audio'
+import { ERROR_TOAST_MS } from '@shared/userFacingError'
+import { formatClock } from '@shared/clockTime'
+import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
+import { dropSwapPress, focusAfterSwap } from '../../lib/swapFocus'
 
 /**
  * Every region this view puts on the waveform for a stored cut carries this id
@@ -20,16 +26,10 @@ const CUT_ID_PREFIX = 'cut-'
 const SELECTION_FILL = withAlpha(ACCENT, 0.25)
 const CUT_FILL = withAlpha(ACCENT, 0.35)
 
-function formatTime(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '0:00.00'
-  const m = Math.floor(seconds / 60)
-  const s = Math.floor(seconds % 60)
-  const cs = Math.floor((seconds - Math.floor(seconds)) * 100)
-  return `${m}:${String(s).padStart(2, '0')}.${String(cs).padStart(2, '0')}`
-}
-
 export function WaveformView(): JSX.Element | null {
   const source = useAudioStore((s) => s.source)
+  const waveform = useAudioStore((s) => s.waveform)
+  const drawing = useAudioStore((s) => s.drawing)
   const cutRegions = useAudioStore((s) => s.chain.cutRegions)
   const setCurrentTime = useAudioStore((s) => s.setCurrentTime)
   const addCutRegion = useAudioStore((s) => s.addCutRegion)
@@ -41,15 +41,38 @@ export function WaveformView(): JSX.Element | null {
   const [time, setTime] = useState(0)
   const [ready, setReady] = useState(false)
   const [mediaEl, setMediaEl] = useState<HTMLMediaElement | null>(null)
+  const playRef = useRef<HTMLButtonElement | null>(null)
+
+  // T-192 (3): a file picked with the keyboard (Choose file…, a Recent entry) replaced the importer the focus was on, and the next Tab started at the top of the window.
+  // Play is the studio's primary control, and it is disabled until the player is ready, so the focus is put on it then (STYLE_GUIDE's swap rule; `lib/swapFocus.ts`
+  // holds the press's record and moves focus only while it is on <body>). A swap that no such press made (a drop, a project opened from Home) moves nothing.
+  useEffect(() => {
+    if (ready) focusAfterSwap('audio-play', playRef.current)
+  }, [ready])
 
   useEffect(() => {
-    if (!source || !containerRef.current) return
+    // A file whose waveform is still being read has no player yet: nothing from the last one may stay ready.
+    setReady(false)
+    setMediaEl(null)
+    // T-157 (2): a new sound never inherits the old one's readout or Play state (the cleanup below removes the pause / finish listeners before
+    // `ws.destroy()`, so nothing else clears them). Item 1's restore sets the time again on `ready` when the store holds one.
+    setPlaying(false)
+    setTime(0)
+    if (!source || !waveform || !containerRef.current) return
     const regions = RegionsPlugin.create()
     regionsRef.current = regions
+    // T-129 (T-110 (ao)): wavesurfer draws the PEAKS main read from a stream of the sound (`audioStore.drawWaveform`) over the
+    // length it measured, and never decodes the file: given `peaks`, its `load()` skips both the fetch of the whole file and
+    // WebAudio's decode (wavesurfer 7.12.6, `loadAudio`), which took 3.25 GB of this process for a 1 h WAV. The `url` is only
+    // the media element's, which plays the file by streaming it over the Range-capable imagii-file protocol.
     const ws = WaveSurfer.create({
       container: containerRef.current,
       url: source.url,
-      waveColor: ACCENT_MUTED,
+      peaks: waveform.peaks,
+      duration: waveform.duration,
+      // T-191 (4): the unplayed wave is INK_DIM (6.2:1 on the waveform's `bg-bg-base`), the played part ACCENT (5.29:1): the two clear 3:1 (WCAG 1.4.11) and differ in hue.
+      // It was ACCENT_MUTED beside ACCENT, about 1.03:1 apart - the played part could not be told from the rest; accent-muted is the hover state of accent elements.
+      waveColor: INK_DIM,
       progressColor: ACCENT,
       cursorColor: EMBER,
       cursorWidth: 2,
@@ -58,13 +81,24 @@ export function WaveformView(): JSX.Element | null {
       barGap: 1,
       barRadius: 1,
       normalize: true,
+      // T-132 (5): `normalize` alone scales by the loudest of channel 0 (the HIGHS); a take with louder lows drew its bottom half past the
+      // canvas edge. The loudest of both halves, so the whole waveform is scaled by one number that fits it.
+      maxPeak: peaksMaxMagnitude(waveform.peaks),
       plugins: [regions]
     })
     wsRef.current = ws
     setReady(false)
+    // T-157 (1): the Audio Studio twin of T-156 (2). Visiting Home, Video Studio or References unmounts this view and builds a fresh player on
+    // return, while the store's `currentTime` (written by `audioprocess` / `seeking`) still holds the place the person left. That is safe to
+    // restore because every way a DIFFERENT sound arrives goes through `loadSource` / `clearSource`, which zero it.
+    const resumeAt = useAudioStore.getState().currentTime
 
     const offReady = ws.on('ready', () => {
       setReady(true)
+      if (resumeAt > 0 && resumeAt < waveform.duration) {
+        ws.setTime(resumeAt)
+        setTime(resumeAt)
+      }
       try {
         const internal = (ws as unknown as { getMediaElement?: () => HTMLMediaElement })
           .getMediaElement
@@ -81,9 +115,26 @@ export function WaveformView(): JSX.Element | null {
       setTime(t)
       setCurrentTime(t)
     })
+    // T-123 (14): a file the player could not take (an ADPCM WAV the media element refuses) left a panel with no word:
+    // `WaveSurfer.create` swallows the load's rejection and tells only the `error` event. A failed `load()` emits it and
+    // RETHROWS into the constructor's own catch, which emits it again (a media-element error is emitted once), so the toast
+    // has an id and the second one lands on the first. The raw error is the console's.
+    // T-129: the waveform itself is drawn from main's peaks now (ffmpeg reads an ADPCM WAV), so what fails here is PLAYBACK:
+    // the sentence says so, and Play goes back off (with peaks, `ready` comes before the media element has said anything).
+    const offError = ws.on('error', (err) => {
+      console.error('[audio-waveform] the player could not play the file', err)
+      setReady(false)
+      dropSwapPress('audio-play')
+      toast.error(PLAYBACK_ERROR_MESSAGE, { id: 'waveform-error', duration: ERROR_TOAST_MS })
+    })
     const offPlay = ws.on('play', () => setPlaying(true))
     const offPause = ws.on('pause', () => setPlaying(false))
-    const offFinish = ws.on('finish', () => setPlaying(false))
+    // T-158 (1): a sound that played to the end has no place to come back to but its start. `ended` emits `finish` but not `audioprocess`, so the store still
+    // holds the last timer tick (a frame short of the end) and the restore above would park the fresh player there, where Play plays a frame and finishes.
+    const offFinish = ws.on('finish', () => {
+      setPlaying(false)
+      setCurrentTime(0)
+    })
 
     regions.enableDragSelection({ color: SELECTION_FILL })
     // One drag is one cut, which is what the panel copy below promises.
@@ -103,6 +154,7 @@ export function WaveformView(): JSX.Element | null {
 
     return () => {
       offReady()
+      offError()
       offTime()
       offSeek()
       offPlay()
@@ -113,8 +165,10 @@ export function WaveformView(): JSX.Element | null {
       wsRef.current = null
       regionsRef.current = null
     }
-  }, [source, setCurrentTime, addCutRegion])
+  }, [source, waveform, setCurrentTime, addCutRegion])
 
+  // `waveform` is a dependency (T-129): the waveform arrives AFTER the file opened, and a restored project's cuts were set before
+  // there were regions to draw them on.
   useEffect(() => {
     const regions = regionsRef.current
     if (!regions) return
@@ -143,7 +197,7 @@ export function WaveformView(): JSX.Element | null {
       // for this; `drag:false` only makes its `onMove` a no-op.)
       if (region.element) region.element.style.pointerEvents = 'none'
     })
-  }, [cutRegions])
+  }, [cutRegions, waveform])
 
   if (!source) return null
 
@@ -151,12 +205,28 @@ export function WaveformView(): JSX.Element | null {
     wsRef.current?.playPause()
   }
 
+  const percent = drawing?.percent ?? 0
   return (
     <div className="card p-4 flex flex-col gap-3">
-      <div ref={containerRef} className="bg-bg-base rounded-md overflow-hidden" />
+      <div ref={containerRef} className={waveform ? 'bg-bg-base rounded-md overflow-hidden' : 'hidden'} />
+      {/* T-129: main reads the sound for the waveform while the studio is open (a 3 h file takes real seconds); the box the
+          waveform will fill says how far it has read, where the old decode showed an empty dark box and a Play that stayed off. */}
+      {waveform ? null : (
+        <div
+          role="progressbar"
+          aria-label="Drawing the waveform"
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-valuenow={percent}
+          className="h-24 bg-bg-base rounded-md flex items-center justify-center text-sm text-ink-muted"
+        >
+          Drawing the waveform… {percent}%
+        </div>
+      )}
       <div className="flex items-center gap-3 text-sm">
         <button
-          className="btn-ghost px-3 py-2"
+          ref={playRef}
+          className="btn-ghost px-3 py-2 disabled:opacity-50"
           onClick={togglePlay}
           disabled={!ready}
           title={playing ? 'Pause' : 'Play'}
@@ -165,13 +235,16 @@ export function WaveformView(): JSX.Element | null {
           <Icon name={playing ? 'pause' : 'play'} size={16} />
         </button>
         <div className="font-mono text-ink-muted">
-          {formatTime(time)} / {formatTime(source.probe.duration)}
+          {formatClock(time, 2)} / {formatClock(source.probe.duration, 2)}
         </div>
         <div className="ml-auto text-xs text-ink-dim">
-          {source.probe.sampleRate} Hz · {source.probe.channels} ch · {source.probe.codec}
+          {/* T-100: the codec id ("pcm_s16le") is ffprobe's word for how the file
+              is stored, not something a person cleaning audio can act on. The
+              sample rate and channel count are. */}
+          {source.probe.sampleRate} Hz · {source.probe.channels} ch
         </div>
       </div>
-      <VolumeMeter audioElement={mediaEl} />
+      <VolumeMeter audioElement={mediaEl} channels={source.probe.channels} />
       {cutRegions.length > 0 ? (
         <div className="flex flex-wrap gap-2 text-xs">
           <span className="text-ink-muted">Removed when you export:</span>
@@ -183,18 +256,25 @@ export function WaveformView(): JSX.Element | null {
           {cutRegions.map((cut, i) => (
             <button
               key={i}
-              onClick={() => removeCutRegion(i)}
+              onClick={(e) => {
+                // T-154 (4): the chip is gone after the first press and the next one slides under the pointer.
+                if (isRepeatPress(e)) return
+                removeCutRegion(i)
+              }}
+              // T-192 (2): the chips are index-keyed, so after one is put back the focused node shows the NEXT cut; a held Enter's repeats (keyboard clicks, `detail` 0)
+              // put back every one after it, each an Undo step. A repeat is not a new decision; a fresh Enter puts back the chip now under focus.
+              onKeyDown={ignoreHeldEnter}
               className="px-2 py-0.5 bg-accent/20 border border-accent/40 rounded hover:bg-accent/30"
               title="Click to put this part back"
             >
-              {formatTime(cut.startSec)}–{formatTime(cut.endSec)} ✕
+              {formatClock(cut.startSec, 2)}–{formatClock(cut.endSec, 2)} ✕
             </button>
           ))}
         </div>
       ) : (
         <p className="text-xs text-ink-dim">
           Drag across the waveform to mark a part to remove — it comes out when you export.
-          Click a mark to put it back.
+          Click its chip below to put it back.
         </p>
       )}
     </div>

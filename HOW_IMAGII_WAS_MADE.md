@@ -86,7 +86,7 @@ This guide is the chronological development story, pulled from the commit log an
 
 **The 13-feature push.** Identified pain points small-audience streamers hit, then built features for each:
 
-- **A1 Compilation panel** — concat clips with crossfades into a montage.
+- **A1 Compilation panel** — concat clips into a montage, each one fading out and the next fading in.
 - **A2 Chat spike finder** — paste a Twitch chat log, finds bursts in message density.
 - **A3 Output preview** — live snapshot of what the chosen platform crop will look like.
 - **A4 PiP composite** — overlay one video on another (e.g. webcam on screen).
@@ -253,6 +253,3 @@ Two rounds catching bugs surfaced after the feature work:
 5. **Local-first as a wedge** — every feature stays on-device unless it has to. Privacy as a competitive advantage, not just a stance.
 6. **Cost discipline** — no paid services, no subscriptions, no cloud. The user can run imagii with $0 of running cost.
 
----
-
-*Generated 2026-05-09 from the imagii commit log + handoff docs at `~/.claude/projects/.../memory/`.*

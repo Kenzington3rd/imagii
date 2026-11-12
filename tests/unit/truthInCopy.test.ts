@@ -80,20 +80,28 @@ describe('Reframe is a fixed strip, and says so', () => {
     expect(panel).toMatch(/label: 'Left'/)
     expect(panel).toMatch(/label: 'Center'/)
     expect(panel).toMatch(/label: 'Right'/)
-    expect(panel.match(/label: '/g)).toHaveLength(3)
+    // The three POSITIONS rows and no fourth. (T-123 (18): the saved toast's `label: 'Edit in Video Studio'` is the
+    // same word `label` on a different object, so the count reads the rows' own shape.)
+    expect(panel.match(/\{ id: '\w+', label: '/g)).toHaveLength(3)
   })
 
   it('is titled for what it does, and states plainly that it does not track', () => {
-    expect(panel).toMatch(/Reframe to 9:16 \(center crop\)/)
+    // T-126 (14): "(center crop)" was stale the day Left and Right became positions (a Left strip is not a center crop), and the
+    // shorter title is also the one that fits the header at the 298 px card without breaking a word.
+    expect(panel).toMatch(/<PanelHeader[^>]*>[\s\S]{0,400}>\s*Reframe to 9:16\s*<\/PanelHeader>/)
+    expect(panel).not.toMatch(/center crop/)
     expect(panel).toMatch(/it does not track faces or action/)
     expect(panel).toMatch(/TikTok, Reels, and Shorts/)
   })
 
   it("the 'smart' position is gone from the type, the validator and the crop maths", () => {
     expect(read('src/shared/api.ts')).toMatch(/position: 'left' \| 'center' \| 'right'\n/)
-    expect(read('src/main/ffmpeg/reframe.ts')).toMatch(
-      /export type ReframePosition = 'left' \| 'center' \| 'right'\n/
+    // T-125 (9): the strip is a stage of the shared builder now, so the three sides are `StripPosition` (filters.ts) and Reframe's own
+    // type is that alias - one union, not two.
+    expect(read('src/main/ffmpeg/filters.ts')).toMatch(
+      /export type StripPosition = 'left' \| 'center' \| 'right'\n/
     )
+    expect(read('src/main/ffmpeg/reframe.ts')).toMatch(/export type ReframePosition = StripPosition\n/)
     expect(read('src/main/ipc/video.ts')).toMatch(
       /const REFRAME_POSITIONS = \['left', 'center', 'right'\] as const/
     )
@@ -147,6 +155,20 @@ describe('local-first names its two online exceptions', () => {
     expect(branding).toMatch(/Everything runs on the user's computer, except/)
     expect(read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')).toMatch(/caption model download/)
     expect(read('docs/PRODUCT_GUIDE.md').replace(/\s+/g, ' ')).toMatch(/Reference Search|References\s+searches/)
+  })
+
+  // T-119 (14): the fix table of T-85 missed two files that still said an absolute. The README's privacy
+  // section called reference search "the only feature that touches the internet" (its own system-requirements
+  // note names the model download as going online), and the release body said "Everything stays on your
+  // computer". A file a person reads before they ever open the app is where a promise like that is first
+  // read, so both name the two exceptions and neither says the absolute.
+  it('the README and the release notes name both exceptions, and neither says the absolute', () => {
+    const readme = read('README.md').replace(/\s+/g, ' ')
+    const release = read('.github/workflows/release.yml').replace(/\s+/g, ' ')
+    expect(readme).toMatch(EXCEPTIONS)
+    expect(release).toMatch(EXCEPTIONS)
+    expect(readme).not.toMatch(/only feature that touches the internet/i)
+    expect(release).not.toMatch(/everything stays on your computer/i)
   })
 })
 
@@ -202,13 +224,16 @@ describe('Captions say what they do (T-89)', () => {
   it('the size control is "Size" with the real height beside it — not "Font px", not "pixels"', () => {
     expect(panel).not.toMatch(/Font px|size in pixels|\d+ pixels/)
     expect(panel).toMatch(/>Size</)
-    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize\)/)
+    // T-112: about the loaded video's own frame, not 1080p.
+    expect(panel).toMatch(/captionSizeReadout\(style\.fontSize, source\.probe\)/)
   })
 
   it('progress prints a plain label, never the phase id, and has an indeterminate branch', () => {
     expect(panel).toMatch(/captionPhaseLabel\(progress\.phase\)/)
     expect(panel).not.toMatch(/\{progress\.phase\}/)
-    expect(panel).toMatch(/progress-indeterminate/)
+    // T-136 (7): the sliding segment is the shared track's, drawn when the panel hands it no number (main sent none for this phase).
+    expect(panel).toMatch(/<ProgressTrack label=\{captionPhaseLabel\(progress\.phase\)\} percent=\{determinate \? percent : null\} \/>/)
+    expect(read('src/renderer/src/components/ProgressTrack.tsx')).toMatch(/progress-indeterminate/)
   })
 
   it('main sends no invented progress number', () => {
@@ -221,5 +246,117 @@ describe('Captions say what they do (T-89)', () => {
     expect(panel).toMatch(/if \(result\.captioned\)/)
     expect(panel).toMatch(/'Caption model downloaded'/)
     expect(panel).not.toMatch(/Whisper model installed/)
+  })
+})
+
+// T-139 (6): the setup card named a file the releases page does not offer. The Windows build is a zip (listed under the newest release that has one; some are marked
+// Pre-release), and the engine in it needs the .dll files that sit beside it. whisper.cpp's release workflow zips the folder build/bin/Release, so they are in a Release folder.
+describe('the Captions setup names the download the releases page really has (T-139 (6))', () => {
+  const panelSource = read('src/renderer/src/modules/video-studio/CaptionsPanel.tsx')
+  const panel = stripComments(panelSource).replace(/\s+/g, ' ')
+  const guide = read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+
+  it('the card names whisper-bin-x64.zip, says which release lists it, and asks for the program AND the .dll files from its Release folder', () => {
+    expect(panel).toContain('1. Download <code>whisper-bin-x64.zip</code> from the{\' \'} <a href="https://github.com/ggml-org/whisper.cpp/releases"')
+    expect(panel).toContain('(the newest release that lists it; some are marked Pre-release)')
+    expect(panel).toMatch(/Open the zip and copy <code>whisper-cli\.exe<\/code> and every{' '} <code>\.dll<\/code> next to it \(they are in its Release folder\) into the folder below, so the engine sits exactly here:/)
+    expect(panel, 'the file the releases page does not have').not.toMatch(/Download <code>whisper-cli\.exe<\/code>/)
+    expect(panel).not.toContain('(the Windows build)')
+  })
+
+  it('the releases link is the repository the project lives under now, not the old owner\'s path', () => {
+    expect(panelSource).toContain('href="https://github.com/ggml-org/whisper.cpp/releases"')
+    expect(panelSource).not.toContain('github.com/ggerganov')
+    // The only two addresses on the card: the releases page and the model's page (the network allowlist's two hosts).
+    expect([...panelSource.matchAll(/href="(https:\/\/[^"]+)"/g)].map((m) => m[1])).toEqual([
+      'https://github.com/ggml-org/whisper.cpp/releases',
+      'https://huggingface.co/ggerganov/whisper.cpp/tree/main'
+    ])
+  })
+
+  it('USER_GUIDE says the same: the zip, the newest release that lists it, a Pre-release, the .dll files, the Release folder - and the older name still works', () => {
+    expect(guide).toContain('download `whisper-bin-x64.zip` (the newest release that lists it; some are marked Pre-release), open the zip, and copy `whisper-cli.exe` and every `.dll` next to it (they are in the zip\'s `Release` folder)')
+    expect(guide).toContain('(The older name, `whisper.exe`, also works.)')
+    expect(guide).toContain('imagii does not download these files for you.')
+    expect(guide).not.toContain('Get `whisper-cli.exe` from the whisper.cpp releases page')
+    // "also works" is true of the code, which looks for either name.
+    expect(stripComments(read('src/main/sidecars/paths.ts'))).toMatch(/WHISPER_EXE_NAMES = \['whisper-cli\.exe', 'whisper\.exe'\]/)
+  })
+})
+
+// T-151 (1): T-150 (4) wrote "(50 and 50 is the centre)" in the guide over a top-left anchor; a 50 / 85 caption starts at the frame's middle and runs off the right edge.
+// The guide now says what the boxes place and that an edge never cuts a caption off. (filters.test.ts pins the drawtext clamp; media.spec.ts decodes the pixels.)
+describe('the Text overlays paragraph describes the top-left anchor (T-151 (1))', () => {
+  const para = (): string => read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+  it('says the boxes place the text\'s top left corner and that a caption past an edge is kept inside the frame', () => {
+    expect(para()).toMatch(/Position \(%\)\*\* is how far across and how far down the text's top left corner sits, from 0 to 100/)
+    // T-152 (1): a caption that fits is moved back inside; a line wider than the frame keeps its START and loses its end - the guide says both.
+    expect(para()).toMatch(/a caption that would run past the right or bottom edge is moved back inside the frame/)
+    expect(para()).toMatch(/a line wider than the frame starts at the left edge and its end is cut/)
+  })
+  it('no longer calls 50 and 50 the centre', () => {
+    expect(para()).not.toMatch(/50 and 50 is the centre/)
+  })
+})
+
+// T-152 (2), (3), (4): the guide's three lines. The behavior is held where it happens (references.spec.ts, projectSave.test.ts, videoStore.test.ts / video-core.spec.ts).
+describe('the guide says what an Asset Library card, Open project and the I and O keys do (T-152)', () => {
+  const para = (): string => read('docs/USER_GUIDE.md').replace(/\s+/g, ' ')
+  it('an Asset Library card opens in place of what is there, asks first when the canvas has layers, and Undo brings them back', () => {
+    expect(para()).toContain('Click one to open it on the Stream Graphics canvas, in place of what is there. If the canvas already has layers, imagii asks first (Cancel changes nothing)')
+    expect(para()).toContain('Undo in Stream Graphics brings the old layers back')
+    expect(para()).not.toContain('Like a template, it replaces what is already on the canvas')
+  })
+  it('Open project names the size of a file over the limit however large, without reading it', () => {
+    expect(para()).toContain('**Open project** names the size of a file that is over it, however large')
+    expect(para()).toContain('without reading it, instead of calling it damaged')
+  })
+  it('a clip is never shorter than 0.1 seconds: O at the start or I at the end leaves 0.1, not nothing', () => {
+    expect(para()).toContain('A clip is never shorter than 0.1 seconds: `O` at the very start (or `I` at the very end) of the video leaves a 0.1-second clip rather than one with no length.')
+  })
+})
+
+// T-153 (6): the product name is "YouTube Shorts" (a proper name, like TikTok and Reels); the preset manager's hint wrote it as a common noun.
+describe('the preset manager names YouTube Shorts as a name (T-153)', () => {
+  it('"vertical YouTube Shorts", never "shorts" in lower case', () => {
+    const manager = read('src/renderer/src/modules/video-studio/CustomPresetManager.tsx').replace(/\s+/g, ' ')
+    expect(manager).toContain('vertical YouTube Shorts at custom size')
+    expect(manager).not.toContain('YouTube shorts')
+  })
+})
+
+
+// T-154 (6): the audio tutorial's Cleanup step named a checkbox ("Softer harsh' sounds") that the screen does not have; the screen's label is "Softer harsh 's' sounds".
+describe('the audio tutorial names the Cleanup checkboxes as the screen labels them (T-154)', () => {
+  it('"Softer harsh \'s\' sounds", in the tutorial exactly as on the panel; the old fragment is gone', async () => {
+    const { audioTutorial } = await import('../../src/renderer/src/tutorials/audioTutorial')
+    const body = audioTutorial.steps.find((s) => s.id === 'cleanup')?.body ?? ''
+    const label = "Softer harsh 's' sounds"
+    expect(read('src/renderer/src/modules/audio-studio/CleanupPanel.tsx')).toContain(`<span>${label}</span>`)
+    expect(body).toContain(`"${label}"`)
+    expect(body).not.toContain("'Softer harsh' sounds")
+  })
+})
+
+// T-155 (1): a "→ Canvas" whose picture does not load in 10 s says so in a finished sentence, and the sentence is the one the failure toast shows AS WRITTEN (not the fallback
+// "Couldn't add that image to the canvas."), because `userFacingError` lets a one-line sentence ending in a full stop stand alone.
+describe('a stalled "→ Canvas" load speaks one finished sentence (T-155)', () => {
+  it('the deadline error is shown exactly as written, and the busy copy is in the panel', async () => {
+    const { userFacingError } = await import('../../src/shared/userFacingError')
+    const panel = read('src/renderer/src/modules/references/MoodBoardPanel.tsx')
+    const sentence = "That picture didn't load. Try again, or save it to the board again."
+    expect(panel).toContain(`const SEND_LOAD_FAILED = "${sentence}"`)
+    expect(userFacingError(new Error(sentence), "Couldn't add that image to the canvas.").message).toBe(sentence)
+    expect(panel).toContain("'Adding the last picture…'")
+    expect(panel).toContain("'Still adding the last picture'")
+  })
+})
+
+// T-156 (3): nothing queues a Clip Kit behind an export (`runKit` begins only from the button's click), so its disabled title must not say the kit "starts" by itself.
+describe('the Clip Kit button\'s disabled title promises only what happens (T-156)', () => {
+  it('it tells the person to start the kit, and never says the kit starts when the export is done', () => {
+    const kit = read('src/renderer/src/modules/video-studio/ClipKitButton.tsx')
+    expect(kit).toContain("'An export is running. Start Clip Kit when it is done.'")
+    expect(kit).not.toMatch(/Clip Kit starts/i)
   })
 })

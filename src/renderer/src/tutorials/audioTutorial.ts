@@ -22,7 +22,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'waveform',
       title: 'The waveform',
-      body: 'Drag across the waveform to mark a part to remove. It comes out when you export; click a mark to put it back.',
+      body: 'Drag across the waveform to mark a part to remove. It comes out when you export; click its chip under the waveform to put it back.',
       targetSelector: '[data-tutorial="audio-waveform"]',
       placement: 'bottom'
     },
@@ -36,7 +36,7 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'cleanup',
       title: 'Cleanup',
-      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then check 'Remove low rumble', 'Hum removal', or 'Softer harsh' sounds as needed.",
+      body: "Pick how much to quiet the background: Light, Medium, Aggressive, or Custom. Then check 'Remove low rumble', 'Hum removal', or \"Softer harsh 's' sounds\" as needed.",
       targetSelector: '[data-tutorial="audio-cleanup"]',
       placement: 'left'
     },
@@ -57,14 +57,14 @@ export const audioTutorial: TutorialDef = {
     {
       id: 'export',
       title: 'Export',
-      body: "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For audio taken from a video, 'Re-attach to video' puts the cleaned sound back on the original.",
+      body: "Pick a Format, and a Bitrate for MP3 or AAC, then click 'Export'. For a video's sound, 'Re-attach to video' is checked and puts the cleaned sound back on the original as an .mp4; uncheck it to pick a Format instead.",
       targetSelector: '[data-tutorial="audio-export"]',
       placement: 'top'
     },
     {
       id: 'done',
       title: 'All set',
-      body: 'The ? button in the header replays this tour any time. It only points at what is on screen, so it covers more once audio is loaded.',
+      body: 'The ? button in the header replays this tour any time, and the ? key on your keyboard lists every shortcut on the screen you are on. The tour only points at what is on screen, so it covers more once audio is loaded.',
       placement: 'center'
     }
   ]

@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest'
+import { readFileSync } from 'node:fs'
+import path from 'node:path'
 import { LUFS_PRESETS, lufsTargetToPresetId } from './LevelsPanel'
 
 // Round 16 INIT-H regression: the loudness preset picker round-trips through
@@ -39,10 +41,14 @@ describe('the loudness picker round-trips every row (T-90)', () => {
     expect(new Set(LUFS_PRESETS.map((p) => p.value)).size).toBe(LUFS_PRESETS.length)
   })
 
-  it('lists the two −14 platforms as one row that names all four services', () => {
+  it('lists the −14 services as one row; the label is short enough for the picker, and the line under it names all four (T-124 (24))', () => {
     const rows = LUFS_PRESETS.filter((p) => p.target === -14)
     expect(rows).toHaveLength(1)
-    expect(rows[0]?.label).toBe('YouTube, Spotify, TikTok, Reels (−14)')
+    expect(rows[0]?.label).toBe('YouTube, TikTok, Reels (−14)')
+    // The label of "YouTube, Spotify, TikTok, Reels (−14)" was 210 px of text for the 176 px the picker shows at the narrowest column
+    // (a select clips its text; tests/e2e/layout.ts measures it), so Spotify is named by the sentence under the picker.
+    const source = readFileSync(path.join(__dirname, 'LevelsPanel.tsx'), 'utf8').replace(/\s+/g, ' ')
+    expect(source).toContain('−14 matches YouTube, Spotify, TikTok and Reels.')
   })
 
   it('speaks to a streamer: no EBU, R128 or LUFS unit in a row label', () => {

@@ -26,8 +26,10 @@ export default defineConfig({
   // mouse.down() and the first processed move, before any drawn state
   // exists to poll, and that residue reproduced ~2 in 9 loaded runs. One
   // window at a time removes the trigger outright (25/25 and 2/2 controls
-  // green). Cost: ~4 min instead of ~2.7 for the full suite. Do not raise
-  // this without re-reading T-55/T-62 in docs/TICKETS.md.
+  // green). Cost: the suite runs one test at a time; its real duration is in
+  // the table "How long each layer takes" in docs/TESTING.md, the one place a
+  // duration is written. Do not raise this without re-reading T-55/T-62 in
+  // docs/TICKETS.md.
   workers: 1,
   // E2E launches a real Electron process; allowing retries can hide flakes
   // that point at real start-up bugs. Tweak only if a flake is benign.

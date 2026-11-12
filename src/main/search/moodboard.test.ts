@@ -22,14 +22,39 @@ vi.mock('electron', () => ({
     getPath: () => TMP
   },
   net: {
-    // cacheThumb must fail gracefully in tests — no network.
-    fetch: async () => {
-      throw new Error('no network in tests')
-    }
+    // cacheThumb must fail gracefully in tests — no network. T-151 (2): a test swaps `fetchImpl` for a stalled / oversize / good answer.
+    fetch: (url: string, init?: { signal?: AbortSignal }) =>
+      fetchStub.impl(url, init)
   }
 }))
+const fetchStub = vi.hoisted(() => ({
+  impl: (async () => {
+    throw new Error('no network in tests')
+  }) as (url: string, init?: { signal?: AbortSignal }) => Promise<Response>
+}))
+
+// T-139 (1): the failures a disk makes, injected into the real `node:fs/promises` (everything else in it stays real). Off unless a test turns one on.
+const faults = vi.hoisted(() => ({
+  /** A write to a path this accepts puts the first half of its bytes on disk, then fails with ENOSPC. */
+  failWhen: null as ((file: string) => boolean) | null
+}))
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const real = await importOriginal<typeof import('node:fs/promises')>()
+  return {
+    ...real,
+    writeFile: async (file: string, data: string | Buffer, ...rest: unknown[]) => {
+      if (faults.failWhen?.(String(file))) {
+        const bytes = Buffer.from(data)
+        await real.writeFile(file, bytes.subarray(0, Math.ceil(bytes.length / 2)))
+        throw Object.assign(new Error('ENOSPC: simulated, write'), { code: 'ENOSPC' })
+      }
+      return (real.writeFile as (...a: unknown[]) => Promise<void>)(file, data, ...rest)
+    }
+  }
+})
 
 beforeEach(() => {
+  faults.failWhen = null
   TMP = mkdtempSync(path.join(tmpdir(), 'imagii-moodboard-'))
 })
 afterEach(() => {
@@ -56,8 +81,8 @@ describe('moodboard concurrent mutation safety (round 18)', () => {
       m.addToCollection(board.id, makeResult(1)),
       m.addToCollection(board.id, makeResult(2))
     ])
-    expect(a).not.toBeNull()
-    expect(b).not.toBeNull()
+    expect(a.collection).not.toBeNull()
+    expect(b.collection).not.toBeNull()
     const collections = await m.listCollections()
     const saved = collections.find((c) => c.id === board.id)
     expect(saved?.items.length).toBe(2)
@@ -78,7 +103,7 @@ describe('moodboard concurrent mutation safety (round 18)', () => {
     const m = await import('./moodboard')
     const board = await m.createCollection('Mixed')
     const withOne = await m.addToCollection(board.id, makeResult(1))
-    const firstId = withOne?.items[0]?.id
+    const firstId = withOne.collection?.items[0]?.id
     expect(firstId).toBeTruthy()
     await Promise.all([
       m.addToCollection(board.id, makeResult(2)),
@@ -192,6 +217,34 @@ describe('restoreCollections — the single inverse the undo history steps throu
     expect(written?.items.map((i) => i.id)).toEqual(['normalizeitem', 'escaped'])
     expect(written?.items[0]?.cachedThumbPath).toBe(path.join(thumbsDir(), 'ok.jpg'))
     expect(written?.items[1]?.cachedThumbPath).toBeUndefined()
+  })
+})
+
+// T-117 (2): the thumbnail gate is the third site that asked `rel.startsWith('..')`. A cached thumbnail
+// whose own name starts with two dots is in the cache; one that is not in the cache is still dropped.
+describe('the thumbnail confinement reads a real parent segment (T-117)', () => {
+  it('keeps a ..-named thumbnail inside the cache and still unsets one outside it', async () => {
+    const m = await import('./moodboard')
+    const inCache = seedThumb('..cover.jpg')
+    const subCache = path.join(thumbsDir(), '..old')
+    mkdirSync(subCache, { recursive: true })
+    const inSub = path.join(subCache, 'a.jpg')
+    writeFileSync(inSub, 'jpeg-bytes')
+    const outside = path.join(TMP, 'cache', 'thumbs-evil', 'secret.jpg')
+    const board = withThumb('dots', 'Dots', inCache)
+    board.items.push(
+      { ...board.items[0]!, id: 'sub', cachedThumbPath: inSub },
+      { ...board.items[0]!, id: 'outside', cachedThumbPath: outside },
+      { ...board.items[0]!, id: 'parent', cachedThumbPath: path.join(TMP, 'cache', 'secret.jpg') }
+    )
+    seedBoard(board)
+
+    const [read] = await m.listCollections()
+    const thumbs = Object.fromEntries((read?.items ?? []).map((i) => [i.id, i.cachedThumbPath]))
+    expect(thumbs.dotsitem, 'a name that starts with two dots is in the cache').toBe(inCache)
+    expect(thumbs.sub, 'so is a folder that does').toBe(inSub)
+    expect(thumbs.outside, 'a sibling that starts with the cache folder\'s name is not').toBeUndefined()
+    expect(thumbs.parent, 'nor is a file one level up').toBeUndefined()
   })
 })
 
@@ -346,5 +399,273 @@ describe('clearThumbCache — the button empties it, whatever it holds (T-29, T-
   it('does nothing when there is no cache directory yet', async () => {
     const m = await import('./moodboard')
     await expect(m.clearThumbCache()).resolves.toBeUndefined()
+  })
+})
+
+/**
+ * T-139 (1) - a board is the old board until the new one is whole.
+ *
+ * Every board write was `writeFile(board.json, ...)`, which truncates the file first. A write that failed part-way (a full drive) left a truncated
+ * `<id>.json`, and `readCollection` returns null for a file that does not parse, so the board silently dropped out of the list with its items. The five
+ * writes (create, rename, add, remove, and the undo history's restore) go through `writeFileAtomic` now; the failing write is injected into the real
+ * `node:fs/promises` and the functions, the lock and the files are real.
+ */
+describe('a board write that fails leaves the board as it was (T-139 (1))', () => {
+  const onDisk = (id: string): Buffer => readFileSync(path.join(boardsDir(), `${id}.json`))
+  const inBoards = (file: string): boolean => path.dirname(file) === boardsDir()
+  const justTheBoards = (...ids: string[]): string[] => ids.map((id) => `${id}.json`).sort()
+
+  async function boardWithOneItem(): Promise<{ m: typeof import('./moodboard'); id: string; before: Buffer }> {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Keepers')
+    const withOne = await m.addToCollection(board.id, makeResult(1))
+    expect(withOne.collection?.items).toHaveLength(1)
+    return { m, id: board.id, before: onDisk(board.id) }
+  }
+
+  it('rename: the old board is byte-identical, still listed under its old name, and no tmp is left', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    faults.failWhen = inBoards
+    await expect(m.renameCollection(id, 'A much longer name than before '.repeat(20))).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+    faults.failWhen = null
+    const listed = await m.listCollections()
+    expect(listed.map((c) => [c.name, c.items.length])).toEqual([['Keepers', 1]])
+  })
+
+  it('add: the item is not half-saved, the board keeps its first item, and a retry then lands both', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    faults.failWhen = inBoards
+    await expect(m.addToCollection(id, makeResult(2))).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+    faults.failWhen = null
+    const retried = await m.addToCollection(id, makeResult(2))
+    expect(retried.collection?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl, makeResult(2).fullUrl])
+  })
+
+  it('remove: the item stays, byte-identical board, no tmp', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    const itemId = (await m.listCollections())[0]?.items[0]?.id as string
+    faults.failWhen = inBoards
+    await expect(m.removeFromCollection(id, itemId)).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+  })
+
+  it('restore (the undo history): a board it could not rewrite is still the board that was there', async () => {
+    const { m, id, before } = await boardWithOneItem()
+    const snapshot = (await m.listCollections()).map((c) => ({ ...c, name: 'Restored name', items: [] }))
+    faults.failWhen = inBoards
+    await expect(m.restoreCollections(snapshot)).rejects.toThrow('ENOSPC')
+    expect(onDisk(id).equals(before)).toBe(true)
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+  })
+
+  it('create: a board that could not be written leaves no stub file (the list never has a board it cannot read)', async () => {
+    const m = await import('./moodboard')
+    expect(await m.listCollections()).toEqual([])
+    faults.failWhen = inBoards
+    await expect(m.createCollection('Doomed')).rejects.toThrow('ENOSPC')
+    expect(readdirSync(boardsDir())).toEqual([])
+  })
+
+  it('every write that succeeds is the whole board as JSON, and leaves no tmp beside it', async () => {
+    const { m, id } = await boardWithOneItem()
+    const renamed = await m.renameCollection(id, 'Renamed')
+    expect(onDisk(id).toString('utf8')).toBe(JSON.stringify(renamed, null, 2))
+    const removed = await m.removeFromCollection(id, renamed?.items[0]?.id as string)
+    expect(onDisk(id).toString('utf8')).toBe(JSON.stringify(removed, null, 2))
+    await m.restoreCollections((await m.listCollections()).map((c) => ({ ...c, name: 'Back' })))
+    expect(JSON.parse(onDisk(id).toString('utf8')).name).toBe('Back')
+    expect(readdirSync(boardsDir())).toEqual(justTheBoards(id))
+  })
+
+  // Found by the tests above: `withCollectionLock` ended with `void next.finally(...)`, and a `finally` on a promise that REJECTED is a new promise that rejects
+  // too, with nobody to hear it. Every failed board write was therefore also an unhandled rejection in main (Node's default is to raise it), on top of the
+  // caller's own rejection. The clean-up now settles on either outcome and ends there.
+  it('a failed board write is the caller\'s rejection only: the lock\'s clean-up raises no unhandled one', async () => {
+    const { m, id } = await boardWithOneItem()
+    const unhandled: unknown[] = []
+    const onUnhandled = (reason: unknown): void => {
+      unhandled.push(reason)
+    }
+    process.on('unhandledRejection', onUnhandled)
+    try {
+      faults.failWhen = inBoards
+      await expect(m.addToCollection(id, makeResult(2))).rejects.toThrow('ENOSPC')
+      await expect(m.renameCollection(id, 'x'.repeat(2000))).rejects.toThrow('ENOSPC')
+      // The rejection of a dropped promise is reported on a later turn of the event loop.
+      await new Promise((resolve) => setTimeout(resolve, 30))
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', onUnhandled)
+    }
+  })
+})
+
+
+// T-149 (4): main decides, under the board's lock, whether IT added the picture. The renderer used to infer that from an item-count compare of two re-reads, which a
+// double-click on Save defeated (both presses snapshot N, both re-listed N+1: "Saved" twice and an empty Undo step on top of the real one).
+describe('addToCollection says whether it added the picture (T-149 (4))', () => {
+  it('a new picture is added: true, and the board it hands back holds it', async () => {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Fresh')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items.map((i) => i.fullUrl)).toEqual([makeResult(1).fullUrl])
+  })
+
+  it('the same picture again is a duplicate: false, the board unchanged', async () => {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Twice')
+    await m.addToCollection(board.id, makeResult(1))
+    const again = await m.addToCollection(board.id, makeResult(1))
+    expect(again.added).toBe(false)
+    expect(again.collection?.items).toHaveLength(1)
+  })
+
+  it('two presses in flight at once: the lock serialises them, so exactly ONE says true', async () => {
+    const m = await import('./moodboard')
+    const board = await m.createCollection('Double')
+    const answers = await Promise.all([m.addToCollection(board.id, makeResult(1)), m.addToCollection(board.id, makeResult(1))])
+    expect(answers.map((a) => a.added).sort()).toEqual([false, true])
+    expect((await m.listCollections()).find((c) => c.id === board.id)?.items).toHaveLength(1)
+  })
+
+  it('a board that is not there is nothing added: false, and no board', async () => {
+    const m = await import('./moodboard')
+    const answer = await m.addToCollection('missingboard', makeResult(1))
+    expect(answer).toEqual({ collection: null, added: false })
+  })
+})
+
+
+// T-151 (2): cacheThumb runs inside the board's lock (and T-150's References chain waits behind it), so a thumbnail host that accepts and never answers stalled
+// every later board edit and Undo. The fetch now has a deadline and a byte cap; a miss saves the item WITHOUT a cached thumbnail (the tile shows the source URL).
+describe('the thumbnail fetch has a deadline and a size cap (T-151 (2))', () => {
+  const stubTimeout = (): { signal: AbortSignal; fire: () => void; asked: number[] } => {
+    const ctl = new AbortController()
+    const asked: number[] = []
+    vi.spyOn(AbortSignal, 'timeout').mockImplementation((ms: number) => {
+      asked.push(ms)
+      return ctl.signal
+    })
+    return { signal: ctl.signal, fire: () => ctl.abort(new DOMException('timed out', 'TimeoutError')), asked }
+  }
+  const streamOf = (chunks: Uint8Array[]): Response =>
+    new Response(
+      new ReadableStream<Uint8Array>({
+        start(c) {
+          for (const ch of chunks) c.enqueue(ch)
+          c.close()
+        }
+      }),
+      { status: 200 }
+    )
+  afterEach(() => {
+    vi.restoreAllMocks()
+    fetchStub.impl = async () => {
+      throw new Error('no network in tests')
+    }
+  })
+
+  it('asks for a 10 s deadline and an answer that never comes saves the item with no cached thumbnail, once the deadline fires', async () => {
+    const m = await import('./moodboard')
+    expect(m.THUMB_FETCH_TIMEOUT_MS).toBe(10_000)
+    const t = stubTimeout()
+    let seen: AbortSignal | undefined
+    fetchStub.impl = (_url, init) => {
+      seen = init?.signal
+      return new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener('abort', () => reject(init.signal?.reason)))
+    }
+    const board = await m.createCollection('Stalled')
+    let settled = false
+    const pending = m.addToCollection(board.id, makeResult(1)).then((r) => ((settled = true), r))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(settled, 'still waiting on the host before the deadline').toBe(false)
+    expect(seen, 'the fetch carries the deadline signal').toBe(t.signal)
+    expect(t.asked).toEqual([10_000])
+    t.fire()
+    const answer = await pending
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
+    expect(readdirSync(path.join(TMP, 'cache', 'thumbs')), 'no half file left in the cache').toEqual([])
+  })
+
+  it('a body past 8 MB is dropped as it streams in: no cached thumbnail, nothing written', async () => {
+    const m = await import('./moodboard')
+    expect(m.THUMB_MAX_BYTES).toBe(8 * 1024 * 1024)
+    stubTimeout()
+    const chunk = new Uint8Array(1024 * 1024)
+    let pulled = 0
+    fetchStub.impl = async () =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          pull(c) {
+            pulled++
+            c.enqueue(chunk) // never ends on its own
+          }
+        }),
+        { status: 200 }
+      )
+    const board = await m.createCollection('Huge')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
+    expect(pulled, 'the read stopped soon after the cap, it did not drain the stream').toBeLessThan(14)
+    expect(readdirSync(path.join(TMP, 'cache', 'thumbs'))).toEqual([])
+  })
+
+  it('a body of exactly the cap is kept', async () => {
+    const m = await import('./moodboard')
+    stubTimeout()
+    fetchStub.impl = async () => streamOf([new Uint8Array(m.THUMB_MAX_BYTES)])
+    const board = await m.createCollection('Edge')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeTruthy()
+  })
+
+  it('an ordinary body is cached: the item carries the path and the bytes are on disk', async () => {
+    const m = await import('./moodboard')
+    stubTimeout()
+    fetchStub.impl = async () => streamOf([Uint8Array.from([1, 2, 3]), Uint8Array.from([4, 5])])
+    const board = await m.createCollection('Normal')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    const cached = answer.collection?.items[0]?.cachedThumbPath
+    expect(cached).toBeTruthy()
+    expect([...readFileSync(cached as string)]).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it('a non-ok answer saves the item without a cached thumbnail', async () => {
+    const m = await import('./moodboard')
+    stubTimeout()
+    fetchStub.impl = async () => new Response('nope', { status: 404 })
+    const board = await m.createCollection('Missing')
+    const answer = await m.addToCollection(board.id, makeResult(1))
+    expect(answer.added).toBe(true)
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
+  })
+
+  it('a stall while the body is streaming is cut by the same deadline', async () => {
+    const m = await import('./moodboard')
+    const t = stubTimeout()
+    fetchStub.impl = async (_url, init) =>
+      new Response(
+        new ReadableStream<Uint8Array>({
+          start(c) {
+            c.enqueue(Uint8Array.from([1]))
+            init?.signal?.addEventListener('abort', () => c.error(init.signal?.reason))
+          }
+        }),
+        { status: 200 }
+      )
+    const board = await m.createCollection('Trickle')
+    const pending = m.addToCollection(board.id, makeResult(1))
+    await new Promise((r) => setTimeout(r, 50))
+    t.fire()
+    const answer = await pending
+    expect(answer.collection?.items[0]?.cachedThumbPath).toBeUndefined()
   })
 })

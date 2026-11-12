@@ -4,6 +4,7 @@ import {
   _electron as electron,
   type Dialog,
   type ElectronApplication,
+  type Locator,
   type Page
 } from '@playwright/test'
 import {
@@ -28,7 +29,10 @@ import { pathToImagiiFileUrl } from '../../src/shared/fileUrl'
 import { ffmpegPath } from '../../src/main/ffmpeg/paths'
 import { ASSET_CATALOG } from '../../src/renderer/src/modules/references/assetCatalog'
 import type { MoodBoardCollection } from '../../src/shared/search'
+import { countOf } from '../../src/shared/plural'
+import { INK_BASE } from '../../src/renderer/src/styles/tokens'
 import { installToastLog, readToastLog } from './toastLog'
+import { withoutAtomicTmp } from './atomicTmp'
 
 // ESM-friendly __dirname (Playwright loads specs as ESM under our setup).
 const __filename = fileURLToPath(import.meta.url)
@@ -278,8 +282,11 @@ test.describe('imagii References studio', () => {
         await expect(tabStrip.getByRole('button', { name: label, exact: true })).toHaveCount(1)
       }
 
-      // Default tab: Reference Search.
+      // Default tab: Reference Search — and the strip says which tab is open (T-113: it was an
+      // underline and nothing else).
       await expect(searchInput).toBeVisible()
+      await expect(tabStrip.getByRole('button', { name: 'Reference Search', exact: true })).toHaveAttribute('aria-current', 'true')
+      await expect(tabStrip.getByRole('button', { name: 'Mood Boards', exact: true })).not.toHaveAttribute('aria-current', /.*/)
       // T-85: the panel says WHO filters (DuckDuckGo's SafeSearch — imagii
       // screens nothing itself). T-89: and that search goes online while the
       // saved boards stay on this computer — it is NOT "the one feature that
@@ -297,6 +304,8 @@ test.describe('imagii References studio', () => {
       // -> Mood Boards.
       await moodBoardTab(window).click()
       await expect(boardsPanel).toBeVisible()
+      await expect(tabStrip.getByRole('button', { name: 'Mood Boards', exact: true })).toHaveAttribute('aria-current', 'true')
+      await expect(tabStrip.getByRole('button', { name: 'Reference Search', exact: true })).not.toHaveAttribute('aria-current', /.*/)
       await expect(
         window.getByText('Create a mood board on the left to get started.')
       ).toBeVisible()
@@ -413,6 +422,26 @@ test.describe('imagii References studio', () => {
       await expect(alphaRow).toHaveClass(/border-accent/)
       await expect(window.locator('li', { hasText: 'Beta board' })).not.toHaveClass(/border-accent/)
 
+      // T-114: ...and it is said to assistive tech too, and reachable by keyboard. A board row was a
+      // clickable <li> with only the border to say which: no tab stop, no Enter, no state.
+      const betaRow = window.locator('li', { hasText: 'Beta board' })
+      await expect(alphaRow).toHaveAttribute('aria-current', 'true')
+      await expect(alphaRow.getByRole('button')).toHaveAttribute('aria-current', 'true')
+      await expect(betaRow).not.toHaveAttribute('aria-current', /.*/)
+      await betaRow.getByRole('button').focus()
+      await window.keyboard.press('Enter')
+      await expect(detailTitle).toHaveText('Beta board')
+      await expect(betaRow).toHaveClass(/border-accent/)
+      await expect(betaRow).toHaveAttribute('aria-current', 'true')
+      await expect(alphaRow).not.toHaveAttribute('aria-current', /.*/)
+      await alphaRow.getByRole('button').focus()
+      await window.keyboard.press('Space')
+      await expect(detailTitle).toHaveText('Alpha board')
+      await expect(alphaRow).toHaveAttribute('aria-current', 'true')
+      await expect(betaRow).not.toHaveAttribute('aria-current', /.*/)
+      // A name a screen reader can use: the board and how much is on it.
+      await expect(alphaRow.getByRole('button', { name: 'Alpha board, 0 items' })).toBeVisible()
+
       // ── delete, dismissed ──
       // Handler registered BEFORE the click: an unhandled dialog blocks the
       // renderer, and Playwright's auto-dismiss would give us nothing to
@@ -424,7 +453,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', dismisser)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items?'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board"? Ctrl+Z brings it back.'])
       // Cancel means cancel: still two boards, still selected, still on disk.
       await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible()
       await expect(detailTitle).toHaveText('Alpha board')
@@ -442,7 +471,7 @@ test.describe('imagii References studio', () => {
       }
       window.once('dialog', accepter)
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
-      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board" and all 0 items?'])
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Alpha board"? Ctrl+Z brings it back.'])
       await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
       await expect(window.locator('li', { hasText: 'Alpha board' })).toHaveCount(0)
       // Selection falls back to the surviving board rather than emptying out.
@@ -457,6 +486,36 @@ test.describe('imagii References studio', () => {
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-128 (1): a board name the layout cuts with an ellipsis is readable by hovering. The list row's name and the detail card's heading
+  // were two of the spans the T-127 (15) ledger listed as still without a title (the post checklist, the variant labels, Record's sources,
+  // the layer names and the highlight lines were the rest; `a11ySweep.test.ts` rule 6 holds all of them in source, this reads the built page).
+  test('a long board name is cut with an ellipsis and carries its whole self as the title, in the list and in the heading (T-128 (1))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-longname')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const name = 'Stream highlights season finale, the whole run from the first clip to the last, every platform, 2026 edition'
+      const nameInput = window.getByPlaceholder('New board name', { exact: false })
+      await nameInput.fill(name)
+      await nameInput.press('Enter')
+
+      const heading = window.locator('h3.text-lg')
+      await expect(heading).toHaveText(name)
+      const rowName = window.locator('li button span.truncate').first()
+      await expect(rowName).toHaveText(name)
+      for (const [label, el] of [['the list row', rowName], ['the heading', heading]] as const) {
+        const cut = await el.evaluate((n) => n.scrollWidth > n.clientWidth)
+        expect(cut, `${label}: the name really is cut with an ellipsis here, so the title is what reads the rest`).toBe(true)
+        await expect(el, `${label} carries the whole name as its title`).toHaveAttribute('title', name)
+      }
+    } finally {
+      await app.close()
     }
   })
 
@@ -507,8 +566,10 @@ test.describe('imagii References studio', () => {
       await openReferences(window)
       await moodBoardTab(window).click()
 
-      const undo = window.getByRole('button', { name: 'Undo' })
-      const redo = window.getByRole('button', { name: 'Redo' })
+      // T-114: exact. A board row is a named button now ("Undo board, 1 item") and this fixture's
+      // board is called "Undo board", so the substring "Undo" names two buttons.
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      const redo = window.getByRole('button', { name: 'Redo', exact: true })
       const detailTitle = window.locator('h3.text-lg')
       const thumb = window.locator('img[alt="Undoable reference"]')
       const decoded = (): Promise<number> =>
@@ -530,7 +591,7 @@ test.describe('imagii References studio', () => {
       await window.getByRole('button', { name: 'Delete', exact: true }).click()
       await expect
         .poll(() => dialogs)
-        .toEqual(['confirm: Delete "Undo board" and all 1 item?'])
+        .toEqual(['confirm: Delete "Undo board" and the 1 item in it? Ctrl+Z brings it back.'])
       await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
       await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
       // The confirm still guards a real deletion — but not the picture.
@@ -584,6 +645,80 @@ test.describe('imagii References studio', () => {
    * "this control throws in the renderer and nothing happens", and it has to
    * be empty on the way through.
    */
+  // T-123 (7): Chromium dispatches a click to the COMMON ANCESTOR of where the button went down and where it came up. Press in the
+  // dialog's text box (to select a word of the name) and let go a little outside the card, and that ancestor is the scrim: the
+  // scrim's click handler closed the dialog and threw the typed name away. A click is a press AND a release on the scrim.
+  test('a drag that starts inside the dialog and is released on the scrim neither closes it nor loses the typed name; a plain click on the scrim still does (T-123 (7))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-scrim-drag')
+    const boardFile = path.join(fx.boardsDir, 'dragboard.json')
+    writeFileSync(
+      boardFile,
+      JSON.stringify({ id: 'dragboard', name: 'Original name', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const detailTitle = window.locator('h3.text-lg')
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      await expect(dialog).toBeVisible()
+      await field.fill('A name I have typed')
+
+      const box = async (locator: typeof dialog): Promise<{ x: number; y: number; width: number; height: number }> => {
+        const b = await locator.boundingBox()
+        if (!b) throw new Error('no bounding box')
+        return b
+      }
+      const inField = await box(field)
+      const card = await box(dialog)
+      // The scrim is the whole window around the card: the top-left corner is far from it.
+      expect(card.x).toBeGreaterThan(40)
+      expect(card.y).toBeGreaterThan(40)
+
+      // ── press in the text box, release on the scrim: the dialog stays and the name survives ──
+      await window.mouse.move(inField.x + 24, inField.y + inField.height / 2)
+      await window.mouse.down()
+      await window.mouse.move(inField.x + 8, inField.y + inField.height / 2, { steps: 3 })
+      await window.mouse.move(12, 12, { steps: 12 })
+      await window.mouse.up()
+      await expect(dialog, 'a drag out of the card is not a click on the scrim').toBeVisible()
+      await expect(field).toHaveValue('A name I have typed')
+
+      // ── press on the card's padding, release on the scrim: the same ──
+      await window.mouse.move(card.x + 4, card.y + 4)
+      await window.mouse.down()
+      await window.mouse.move(12, 12, { steps: 8 })
+      await window.mouse.up()
+      await expect(dialog).toBeVisible()
+      await expect(field).toHaveValue('A name I have typed')
+
+      // ── press on the scrim, release inside the card: not a click on the scrim either ──
+      await window.mouse.move(12, 12)
+      await window.mouse.down()
+      await window.mouse.move(card.x + card.width / 2, card.y + card.height / 2, { steps: 12 })
+      await window.mouse.up()
+      await expect(dialog).toBeVisible()
+      await expect(field).toHaveValue('A name I have typed')
+
+      // ── a click inside the card does nothing to it, and does not leave a stale press behind ──
+      await dialog.locator('h2.text-lg').click()
+      await expect(dialog).toBeVisible()
+
+      // ── the control: a plain click on the scrim (press and release both there) closes it, and the board is untouched ──
+      await window.mouse.click(12, 12)
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
+    } finally {
+      await app.close()
+    }
+  })
+
   test('the Rename dialog renames on Enter and on the button, and both cancels leave disk alone', async () => {
     test.setTimeout(120_000)
     const fx = makeFixture('refs-rename')
@@ -761,8 +896,26 @@ test.describe('imagii References studio', () => {
       const dialog = window.getByRole('dialog')
       const field = dialog.getByRole('textbox')
 
-      // ── cancelling writes nothing at all ──
-      await save.click()
+      // ── T-115/T-116: Save lives in an overlay that is drawn only on hover - and on KEYBOARD focus ──
+      // Tab reaches the button, and a button drawn at opacity 0 is one a keyboard user presses
+      // blind. Parked mouse, so only the keyboard can be what shows it. The Search button sits
+      // right before the first tile, so one Tab from it is the real route to Save.
+      const overlay = save.locator('xpath=..')
+      const searchButton = window.getByRole('button', { name: 'Search', exact: true })
+      await window.mouse.move(0, 0)
+      await expect(overlay, 'at rest the tile shows only its picture').toHaveCSS('opacity', '0')
+      await searchButton.focus()
+      await window.keyboard.press('Tab')
+      await expect(save, 'Tab from Search lands on Save').toBeFocused()
+      await expect(overlay, 'a Tab-focused Save is visible').toHaveCSS('opacity', '1')
+      await window.keyboard.press('Shift+Tab')
+      await expect(save).not.toBeFocused()
+      await expect(overlay, 'and goes back when focus leaves').toHaveCSS('opacity', '0')
+
+      // ── canceling writes nothing at all ── (opened from the keyboard: Tab, then Enter)
+      await window.keyboard.press('Tab')
+      await expect(save).toBeFocused()
+      await window.keyboard.press('Enter')
       await expect(dialog).toBeVisible()
       await expect(dialog.getByText('Name your first mood board').first()).toBeVisible()
       await expect(field).toHaveValue('')
@@ -816,11 +969,20 @@ test.describe('imagii References studio', () => {
       await input.press('Enter')
       await save.click()
       // Same fullUrl, so the store de-duplicates rather than adding a twin —
-      // but the toast still names where it went, and no dialog appears.
+      // the toast still names the board (T-147 (5): as "Already on"), and no dialog appears.
       await expect(dialog).toHaveCount(0)
       await expect
         .poll(() => readToastLog(window).then((l) => l.filter((t) => t.includes('Inspiration'))))
         .toHaveLength(2)
+
+      // ── T-116: a MOUSE click is not keyboard focus ──
+      // The click left Save focused, and the overlay used to stay lit (focus-within) until focus
+      // moved on: a scrim stuck over the picture after the pointer had left. Under the pointer
+      // the tile is lit; once the pointer leaves, it is not - with Save still the focused element.
+      await expect(overlay, 'under the pointer the tile is lit').toHaveCSS('opacity', '1')
+      await window.mouse.move(0, 0)
+      await expect(save, 'the click left Save focused').toBeFocused()
+      await expect(overlay, 'a clicked Save lets go when the pointer leaves').toHaveCSS('opacity', '0')
 
       expect(pageErrors).toEqual([])
     } finally {
@@ -887,7 +1049,29 @@ test.describe('imagii References studio', () => {
         .toBe(8)
 
       // ── -> Canvas bridge ──
-      await window.getByRole('button', { name: /Canvas/ }).click()
+      // T-115/T-116: the button sits in an overlay drawn only on hover - and on KEYBOARD focus.
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      const tileOverlay = toCanvas.locator('xpath=..')
+      await window.mouse.move(0, 0)
+      await expect(tileOverlay, 'at rest the tile shows only its picture').toHaveCSS('opacity', '0')
+      // A mouse press focuses the button but is not keyboard focus: press it, drag off the tile
+      // and let go elsewhere (so the click never fires and the studio stays put). The button keeps
+      // focus and the scrim must not - this is the stuck overlay a click used to leave.
+      await toCanvas.hover()
+      await expect(tileOverlay, 'under the pointer the tile is lit').toHaveCSS('opacity', '1')
+      await window.mouse.down()
+      await window.mouse.move(0, 0)
+      await window.mouse.up()
+      await expect(toCanvas, 'the press left "→ Canvas" focused').toBeFocused()
+      await expect(tileOverlay, 'a pressed "→ Canvas" lets go when the pointer leaves').toHaveCSS('opacity', '0')
+      expect(window.url()).not.toContain('#/image')
+      // Reached from the keyboard with the mouse parked: it must be visible, and Enter must do the
+      // whole job. Delete is the control before the tile's in tab order.
+      await window.getByRole('button', { name: 'Delete', exact: true }).focus()
+      await window.keyboard.press('Tab')
+      await expect(toCanvas, 'Tab from Delete lands on "→ Canvas"').toBeFocused()
+      await expect(tileOverlay, 'a Tab-focused "→ Canvas" is visible').toHaveCSS('opacity', '1')
+      await window.keyboard.press('Enter')
       await expect
         .poll(() => readToastLog(window))
         .toContain("Added to canvas as a reference \u2014 it won't be in your export")
@@ -895,6 +1079,14 @@ test.describe('imagii References studio', () => {
         timeout: 15_000
       })
       expect(window.url()).toContain('#/image')
+      // T-125 (19): the toast says what the reference is NOT (it won't be in the export), and the studio changes under it as it
+      // appears, so it is held as long as an action toast: still up 4.5 s on (a success toast is taken down at about 3 s).
+      await window.mouse.move(2, 2)
+      await window.waitForTimeout(4_500)
+      await expect(
+        window.getByText("Added to canvas as a reference \u2014 it won't be in your export"),
+        'the reference note outlives a success toast\'s default'
+      ).toBeVisible()
 
       // canvasStore gained exactly one image layer, named from the item
       // title, and PropertiesPanel shows it selected at 40% opacity.
@@ -924,8 +1116,9 @@ test.describe('imagii References studio', () => {
       }, exportsDir)
       await window.getByLabel('Scale').selectOption('1')
       await window.getByRole('button', { name: 'Export', exact: true }).click()
-      await expect.poll(() => readdirSync(exportsDir).length, { timeout: 30_000 }).toBe(1)
-      const exported = path.join(exportsDir, readdirSync(exportsDir)[0] as string)
+      // T-139 (1): the finished files - Export writes a tmp and renames it over (atomicTmp.ts), and a count that includes the tmp is a name that is gone by the read.
+      await expect.poll(() => withoutAtomicTmp(readdirSync(exportsDir)).length, { timeout: 30_000 }).toBe(1)
+      const exported = path.join(exportsDir, withoutAtomicTmp(readdirSync(exportsDir))[0] as string)
       expect(await pngPixel(exported, 62, 62), 'the reference is not in the export').toEqual({
         r: 255,
         g: 255,
@@ -1026,6 +1219,12 @@ test.describe('imagii References studio', () => {
       // quarter of a million times under it, and the whole cache, which is
       // what the button asked for.
       expect(readdirSync(fx.thumbsDir).sort()).toEqual(owned)
+      // T-123 (33): the tooltip says the verb the button, the toast and BRANDING's Destruction verbs say. It said "Drop",
+      // the app's drag-and-drop verb, for the one control that empties a folder.
+      await expect(window.getByRole('button', { name: 'Clear thumbnail cache' })).toHaveAttribute(
+        'title',
+        'Clear the on-disk thumbnail cache for mood boards'
+      )
       await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
       await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
       await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
@@ -1243,11 +1442,20 @@ test.describe('imagii References studio', () => {
       await installToastLog(window)
       await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
 
-      // ── card 1: a scene card ──
+      // T-152 (2): every dialog the page raises is recorded and accepted, so the empty canvas below can prove it was NOT asked and the second
+      // card can read the question it was.
+      const dialogs: string[] = []
+      window.on('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      })
+
+      // ── card 1: a scene card, onto an EMPTY canvas: no question, and the toast does not claim a replace ──
       await window.getByRole('button', { name: new RegExp(sceneCard.name) }).click()
       await expect
         .poll(() => readToastLog(window))
-        .toContain(`Dropped "${sceneCard.name}" into the editor`)
+        .toContain(`"${sceneCard.name}" is on the Stream Graphics canvas`)
+      expect(dialogs, 'an empty canvas has nothing to lose, so it is not asked').toEqual([])
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({
         timeout: 15_000
       })
@@ -1264,6 +1472,11 @@ test.describe('imagii References studio', () => {
       await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({
         timeout: 15_000
       })
+      // The canvas held the scene card's layers, so this one asked first (T-152 (2)) and the toast says it was a replace.
+      expect(dialogs).toEqual([
+        `confirm: Replace the Stream Graphics canvas with "${socialCard.name}"? Its ${countOf(sceneCard.doc.layers.length, 'layer')} will be replaced. Undo in Stream Graphics brings them back.`
+      ])
+      expect(await readToastLog(window)).toContain(`Replaced the canvas with "${socialCard.name}" — press Ctrl+Z to undo`)
       await expect(
         window.getByRole('heading', { name: `Layers (${socialCard.doc.layers.length})` })
       ).toBeVisible()
@@ -1273,6 +1486,417 @@ test.describe('imagii References studio', () => {
         if (rowsFor(socialCard).includes(gone)) continue
         await expect(layerRows(window).filter({ hasText: gone })).toHaveCount(0)
       }
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-133 (8): the Search button is disabled while a request is out and the input's Enter was not, so a second press (or a held key) sent a second
+  // request, and whichever answered LAST owned the grid. T-134 (3): the guard it landed refused EVERY press while a request was out, which threw
+  // away a corrected query (type, Enter, spot the typo, fix it, Enter) and left the typo's answer on a grid no query on the page named. Now a press
+  // of the query that is already out sends nothing (a held Enter is one request), a DIFFERENT query goes out at once, and an answer is drawn only if
+  // it belongs to the newest request. Main's handler holds the first request open (and counts its calls), so "while a request is out" is a state the
+  // test creates; every result is a one-pixel data: image titled with the query it answers (no network), so the grid says whose answer it is.
+  test('Reference Search: a held Enter is one request, a corrected query is answered, and the typo\'s late answer never replaces it (T-133 (8), T-134 (3))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-search-once')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(async ({ ipcMain }) => {
+        const g = globalThis as unknown as { __searchCalls: string[]; __releaseSearch: () => void }
+        g.__searchCalls = []
+        const gate = new Promise<void>((resolve) => {
+          g.__releaseSearch = resolve
+        })
+        const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', async (_e, query: unknown) => {
+          g.__searchCalls.push(String(query))
+          // Only the FIRST request (the typo) is held open; everything after it answers at once.
+          if (g.__searchCalls.length === 1) await gate
+          return {
+            query: String(query),
+            provider: 'duckduckgo',
+            results: [{ id: 'r1', thumbnail: PIXEL, fullUrl: PIXEL, source: 'local', title: `answer to ${String(query)}` }]
+          }
+        })
+      })
+      const calls = (): Promise<string[]> => app.evaluate(() => (globalThis as unknown as { __searchCalls: string[] }).__searchCalls)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      const searchButton = window.locator('.card', { has: input }).getByRole('button')
+
+      // A typo, Enter, and the key held: ONE request for three presses of one query.
+      await input.fill('minimalist mountian photography')
+      await input.press('Enter')
+      await expect(searchButton).toHaveText('Searching…')
+      await input.press('Enter')
+      await input.press('Enter')
+      await window.waitForTimeout(400)
+      expect(await calls(), 'one request for three presses of one query').toEqual(['minimalist mountian photography'])
+
+      // The person sees the typo, corrects it, presses Enter: that is a different question, and it is asked now.
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['minimalist mountian photography', 'minimalist mountain photography'])
+      // ... and its answer is on the grid, the panel idle, while the typo's request is STILL out.
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]')).toBeVisible({ timeout: 10_000 })
+      await expect(searchButton).toHaveText('Search')
+
+      // The typo's answer arrives late: it must not take the grid back.
+      await app.evaluate(() => (globalThis as unknown as { __releaseSearch: () => void }).__releaseSearch())
+      await window.waitForTimeout(700)
+      await expect(window.locator('img[alt="answer to minimalist mountian photography"]'), 'the late answer to the typo was drawn').toHaveCount(0)
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]')).toBeVisible()
+      await expect(searchButton).toHaveText('Search')
+
+      // Once nothing is out, the next Enter is a search like any other.
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toHaveLength(3)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-135 (5): T-134 (3) made a corrected query go out, but only on Enter: the Search button was `disabled={loading}`, so a pointer or voice-control
+  // user could not send the correction. It is off now only for the question that is already out (typed text equals the in-flight query), and a
+  // click on it sends the correction exactly as Enter does. And the input was the panel's own state while the grid is the store's: a trip to Mood
+  // Boards and back drew the grid over a blank box (the state STYLE_GUIDE calls a defect). The input is seeded from the store's query on mount.
+  // Same stand-in handler as the case above: the first request is held, every other one answers at once, one-pixel data: images named for the query.
+  test('Reference Search: a corrected query is sent BY CLICK while the typo is out, and the box names the grid after a trip to another tab (T-135 (5))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-search-click')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(async ({ ipcMain }) => {
+        const g = globalThis as unknown as { __searchCalls: string[]; __releaseSearch: () => void }
+        g.__searchCalls = []
+        const gate = new Promise<void>((resolve) => {
+          g.__releaseSearch = resolve
+        })
+        const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', async (_e, query: unknown) => {
+          g.__searchCalls.push(String(query))
+          if (g.__searchCalls.length === 1) await gate
+          return {
+            query: String(query),
+            provider: 'duckduckgo',
+            results: [{ id: 'r1', thumbnail: PIXEL, fullUrl: PIXEL, source: 'local', title: `answer to ${String(query)}` }]
+          }
+        })
+      })
+      const calls = (): Promise<string[]> => app.evaluate(() => (globalThis as unknown as { __searchCalls: string[] }).__searchCalls)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      const searchButton = window.locator('.card', { has: input }).getByRole('button')
+      const referenceTab = window.getByRole('button', { name: 'Reference Search', exact: true })
+
+      // The typo goes out by CLICK and is held: the button says so and is off - for this question.
+      await input.fill('minimalist mountian photography')
+      await searchButton.click()
+      await expect(searchButton).toHaveText('Searching…')
+      await expect(searchButton).toBeDisabled()
+      await searchButton.click({ force: true }) // a second press of the same question is not sent
+      await window.waitForTimeout(300)
+      expect(await calls(), 'one request for the typo').toEqual(['minimalist mountian photography'])
+
+      // A trip to Mood Boards and back while the typo is out: the box still says what was asked, and the button still says it is out.
+      await moodBoardTab(window).click()
+      await expect(input).toHaveCount(0)
+      await referenceTab.click()
+      await expect(input, 'the box names the question that is out').toHaveValue('minimalist mountian photography')
+      await expect(searchButton).toHaveText('Searching…')
+      await expect(searchButton).toBeDisabled()
+
+      // The correction: the button is a button again the moment the text differs, and a click sends it.
+      await input.fill('minimalist mountain photography')
+      await expect(searchButton).toBeEnabled()
+      await expect(searchButton).toHaveText('Search')
+      await searchButton.click()
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['minimalist mountian photography', 'minimalist mountain photography'])
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]')).toBeVisible({ timeout: 10_000 })
+
+      // The typo's late answer is dropped, as it is for Enter.
+      await app.evaluate(() => (globalThis as unknown as { __releaseSearch: () => void }).__releaseSearch())
+      await window.waitForTimeout(500)
+      await expect(window.locator('img[alt="answer to minimalist mountian photography"]')).toHaveCount(0)
+      await expect(searchButton).toHaveText('Search')
+
+      // Away and back with the grid on screen: the box names it (it was blank over the grid).
+      await input.fill('something half typed')
+      await moodBoardTab(window).click()
+      await referenceTab.click()
+      await expect(window.locator('img[alt="answer to minimalist mountain photography"]'), 'the grid is the store\'s and is still there').toBeVisible()
+      await expect(input, 'and the box says which search it is').toHaveValue('minimalist mountain photography')
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-135 (13): "→ Canvas" awaits the picture's load before it adds the layer, and the load can be a NETWORK fetch (a tile whose cached thumbnail is gone
+  // falls back to the URL it came from). `navigate('/image')` ran after that wait wherever the person was: the T-134 (1) class at one more site, blessed
+  // by the same click-time premise ("the person is on References, pressing a button on the screen"). The layer is added and the toast reports it
+  // either way; the person is taken to the canvas only if they are still on References when the picture arrives. The renderer's content policy allows
+  // images from https only, so a held network fetch cannot be served from here; the test holds the bridge's own `new Image()` instead (the page's
+  // `HTMLImageElement.src` setter parks the assignment for a file named "slow" until the test releases it), which is exactly the wait the premise
+  // missed: the load is started by the press and ends whenever the test says.
+  test('→ Canvas that finishes after the person went to another screen adds the layer and leaves them where they are; one they waited for still opens the canvas (T-135 (13))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-tocanvas-away')
+    const thumbPath = path.join(fx.thumbsDir, 'slow-thumb.png')
+    writeFileSync(thumbPath, Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(
+      path.join(fx.boardsDir, 'slowboard.json'),
+      JSON.stringify({
+        id: 'slowboard',
+        name: 'Slow board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'slowitem',
+            collectionId: 'slowboard',
+            thumbnail: 'https://example.invalid/slow-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Slow reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      const ADDED = "Added to canvas as a reference \u2014 it won't be in your export"
+      // Park every `img.src = <a slow-thumb file>` until released (the load starts when the assignment lands).
+      await window.evaluate(() => {
+        const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+        w.__parked = []
+        w.__holdSlow = true
+        const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+        if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+        const { get, set } = desc
+        Object.defineProperty(HTMLImageElement.prototype, 'src', {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return get.call(this)
+          },
+          set(value: string) {
+            if (w.__holdSlow && String(value).includes('slow-thumb')) w.__parked.push(() => set.call(this, value))
+            else set.call(this, value)
+          }
+        })
+      })
+      const parked = (): Promise<number> => window.evaluate(() => (window as unknown as { __parked: unknown[] }).__parked.length)
+      const release = (): Promise<void> =>
+        window.evaluate(() => {
+          const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+          w.__holdSlow = false
+          for (const go of w.__parked.splice(0)) go()
+        })
+
+      // ── away: press → Canvas, go Home while the picture is loading, then let it arrive ──
+      await toCanvas.focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(parked, { timeout: 10_000 }).toBe(1)
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      expect(window.url()).toContain('#/home')
+      await release()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain(ADDED)
+      await window.waitForTimeout(700)
+      expect(window.url(), 'the person was not taken to Stream Graphics from the screen they went to').toContain('#/home')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toHaveCount(0)
+      // The add itself happened: the canvas holds the reference layer.
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+
+      // ── control: a person who waits on References gets the canvas, as before ──
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible({ timeout: 15_000 })
+      await moodBoardTab(window).click()
+      await window.evaluate(() => {
+        ;(window as unknown as { __holdSlow: boolean }).__holdSlow = true
+      })
+      await toCanvas.focus()
+      await window.keyboard.press('Enter')
+      await expect.poll(parked, { timeout: 10_000 }).toBe(1)
+      await expect(window.locator('h1', { hasText: 'References' }), 'still here while the picture loads').toBeVisible()
+      await release()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      expect(window.url()).toContain('#/image')
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  // T-135 (8): a board's name is capped at 200 in main (it THROWS past that), and neither name box had a cap; create / rename / delete had no catch, and the
+  // first-save flow closed its dialog BEFORE the create landed, so a refused first save dropped the picture being saved without a word. The boxes take
+  // at most 200 characters now; a write main still refuses (the test puts a 201-character name past the cap with `fill`, which a person cannot do by typing
+  // or pasting) is reported in a sentence, and the dialog keeps what the person typed and the picture they were saving until the write has landed.
+  const LONG_BOARD_NAME = 'B'.repeat(201)
+  // `fill` goes through the browser's text insertion, which honors `maxlength`; assigning `.value` (as a script, a drop or an autofill does) does not.
+  // The box's cap stops a person typing or pasting past it; this is the name that gets past it anyway.
+  const setValuePastCap = (field: Locator, value: string): Promise<void> =>
+    field.evaluate((el, v) => {
+      const set = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set
+      if (!set) throw new Error('no value setter')
+      set.call(el, v)
+      el.dispatchEvent(new Event('input', { bubbles: true }))
+    }, value)
+
+  test('the board-name boxes take at most 200 characters (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-name-cap')
+    writeFileSync(
+      path.join(fx.boardsDir, 'capboard.json'),
+      JSON.stringify({ id: 'capboard', name: 'Cap board', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const create = window.getByPlaceholder('New board name…')
+      await expect(create).toHaveAttribute('maxlength', '200')
+      await create.pressSequentially('c'.repeat(205))
+      await expect(create, 'typing stops at the cap').toHaveValue('c'.repeat(200))
+      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await expect(field).toHaveAttribute('maxlength', '200')
+      await field.press('Control+a')
+      await field.pressSequentially('r'.repeat(205))
+      await expect(field, 'the rename box stops at the cap too').toHaveValue('r'.repeat(200))
+      await window.keyboard.press('Escape')
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused first save says so, keeps the dialog with the name that was typed and the picture being saved, and the retry saves it (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-firstsave-refused')
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+      res.end(png)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      await save.click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await expect(field).toHaveAttribute('maxlength', '200')
+
+      // main refuses a name past 200: the person cannot type one, so the test sets it.
+      await setValuePastCap(field, LONG_BOARD_NAME)
+      await expect(field).toHaveValue(LONG_BOARD_NAME)
+      await dialog.getByRole('button', { name: 'Create & save' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain("Couldn't create that board.")
+      await expect(dialog, 'the dialog is still there').toBeVisible()
+      await expect(field, 'with the name that was typed').toHaveValue(LONG_BOARD_NAME)
+      expect(readBoardsFromDisk(fx.boardsDir), 'no board was made').toHaveLength(0)
+      expect((await readToastLog(window)).some((t) => t.includes('Saved to')), 'and no success was claimed').toBe(false)
+
+      // The retry, with a name main takes, saves the SAME picture the first press was holding.
+      await field.fill('Inspiration')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readToastLog(window)).toContain('Saved to "Inspiration"')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Inspiration'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items.map((i) => i.title)).toEqual(['Stubbed reference'])
+      expect(pageErrors, 'no unhandled rejection reached the page').toEqual([])
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused Create and a refused Rename are reported, and keep what was typed (T-135 (8))', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-name-refused')
+    writeFileSync(
+      path.join(fx.boardsDir, 'keepboard.json'),
+      JSON.stringify({ id: 'keepboard', name: 'Keep me', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+
+      // ── Create (the + beside the box) ──
+      const create = window.getByPlaceholder('New board name…')
+      await setValuePastCap(create, LONG_BOARD_NAME)
+      await expect(create).toHaveValue(LONG_BOARD_NAME)
+      await window.getByRole('button', { name: 'Create board' }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain("Couldn't create that board.")
+      await expect(create, 'the box keeps the name for the retry').toHaveValue(LONG_BOARD_NAME)
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await create.fill('Second board')
+      await window.getByRole('button', { name: 'Create board' }).click()
+      await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible({ timeout: 15_000 })
+      await expect(create, 'a board that was made empties the box').toHaveValue('')
+
+      // ── Rename ──
+      await window.getByRole('button', { name: /^Keep me/ }).click()
+      await window.getByRole('button', { name: 'Rename', exact: true }).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      await setValuePastCap(field, LONG_BOARD_NAME)
+      await expect(field).toHaveValue(LONG_BOARD_NAME)
+      await dialog.getByRole('button', { name: 'Rename', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toContain("Couldn't rename that board.")
+      await expect(dialog, 'the rename dialog is still there').toBeVisible()
+      await expect(field, 'with the name that was typed').toHaveValue(LONG_BOARD_NAME)
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort(), 'nothing was renamed on disk').toEqual(['Keep me', 'Second board'])
+      await field.fill('Kept and renamed')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort()).toEqual(['Kept and renamed', 'Second board'])
+      expect(pageErrors, 'no unhandled rejection reached the page').toEqual([])
     } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
@@ -1406,6 +2030,2330 @@ test.describe('imagii References studio', () => {
       await expect(errorCard).toHaveCount(0)
     } finally {
       killProxy()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-136 (12): T-135 (8) gave the board create / rename / delete / save a catch. Two writes beside them had none: "Clear thumbnail cache" awaited its IPC call
+// bare (a refusal was an unhandled rejection and the button did nothing, visibly), and the tile's ✕ called the store's `removeFromCollection` with nothing
+// awaiting it at all. A refused write says so, in a sentence, and the tile stays where it is. Main's refusals cannot be produced from the UI (the clear
+// removes a folder the app owns; the remove takes an id the app minted), so the handlers are replaced in main by ones that throw, as the autosave
+// Clear's refusal case does.
+test.describe('T-136 (12): the mood board\'s cache clear and tile remove report a refusal', () => {
+  test('a refused Clear thumbnail cache never says "cleared", and a refused ✕ says so and leaves the tile', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t136-refused')
+    const owned = ['a.jpg', 'b.jpg']
+    owned.forEach((name) => writeFileSync(path.join(fx.thumbsDir, name), Buffer.alloc(1024)))
+    writeFileSync(path.join(fx.boardsDir, 'refusedboard.json'), JSON.stringify(boardOwning('refusedboard', 'Refused board', fx.thumbsDir, owned)), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Refused board')
+      const boardItems = (): string[] => readBoardsFromDisk(fx.boardsDir).flatMap((b) => b.items.map((i) => i.id))
+      expect(boardItems()).toEqual(['refusedboarditem0', 'refusedboarditem1'])
+
+      // ── control: the same ✕ with a working main removes the tile ──
+      await window.getByRole('button', { name: 'Remove item' }).first().click()
+      await expect(window.locator('img[alt="Cached a.jpg"]')).toHaveCount(0)
+      await expect.poll(boardItems).toEqual(['refusedboarditem1'])
+
+      // ── main refuses both writes ──
+      await app.evaluate(({ ipcMain }) => {
+        for (const channel of ['moodboard:clearThumbs', 'moodboard:removeItem']) {
+          ipcMain.removeHandler(channel)
+          ipcMain.handle(channel, () => {
+            throw new Error('the write was refused by the test')
+          })
+        }
+      })
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't clear the thumbnail cache.")
+      expect((await readToastLog(window)).some((t) => t.includes('Thumbnail cache cleared')), 'a refusal is never reported as a success').toBe(false)
+      expect(readdirSync(fx.thumbsDir).sort(), 'and the cache is as it was').toEqual(owned)
+
+      await window.getByRole('button', { name: 'Remove item' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't remove that picture.")
+      await expect(window.locator('img[alt="Cached b.jpg"]'), 'the tile is still on the board').toBeVisible()
+      await expect(window.getByText('Empty. Switch to Reference Search and click Save to add inspiration here.')).toHaveCount(0)
+      expect(boardItems(), 'the board file is as it was').toEqual(['refusedboarditem1'])
+      // The raw cause goes to the console, never to the person.
+      expect((await readToastLog(window)).join(' | ')).not.toMatch(/refused by the test|Error invoking/)
+      expect(pageErrors, 'no unhandled rejection reached the page').toEqual([])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-137 (10): "→ Canvas" set the layer's `src` to the address of the tile's cached thumbnail (an imagii-file: URL). Clear thumbnail cache, and the launch sweep
+// after a board item is deleted, remove that file; the tile falls back to the URL it came from, but a layer has no fallback: it drew nothing (no shape, no marker)
+// and saved projects carried the dead address. The layer now carries the picture itself, a copy drawn at the size the layer is drawn. The decoded node is what
+// the canvas shows, read from the Konva stage the Stream Graphics studio publishes.
+test.describe('References - → Canvas embeds the picture (T-137 (10))', () => {
+  /** The pictures on the canvas, as the stage draws them: the src each node decoded, and its decoded size. */
+  function drawnPictures(window: Page): Promise<Array<{ prefix: string; naturalWidth: number; naturalHeight: number; cornerAlpha: number }>> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; getClassName(): string; image?: () => HTMLImageElement }> }> }
+        | undefined
+      if (!stage) return []
+      return (stage.children[0]?.children ?? [])
+        .filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image' && n.image)
+        .map((n) => {
+          const img = (n.image as () => HTMLImageElement)()
+          const canvas = document.createElement('canvas')
+          canvas.width = img.naturalWidth
+          canvas.height = img.naturalHeight
+          const ctx = canvas.getContext('2d')
+          ctx?.drawImage(img, 0, 0)
+          return {
+            prefix: img.src.slice(0, img.src.indexOf(';') > 0 && img.src.indexOf(';') < 30 ? img.src.indexOf(';') : 12),
+            naturalWidth: img.naturalWidth,
+            naturalHeight: img.naturalHeight,
+            cornerAlpha: ctx?.getImageData(2, 2, 1, 1).data[3] ?? -1
+          }
+        })
+    })
+  }
+
+  test('a reference sent to the canvas still draws after Clear thumbnail cache and a fresh visit to the canvas', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t137-embed')
+    const thumbPath = path.join(fx.thumbsDir, 'embed-thumb.png')
+    writeFileSync(thumbPath, Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(
+      path.join(fx.boardsDir, 'embedboard.json'),
+      JSON.stringify({
+        id: 'embedboard',
+        name: 'Embed board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'embeditem',
+            collectionId: 'embedboard',
+            thumbnail: 'https://example.invalid/embed-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Embedded reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      // The tile is the cached file, decoded from disk (the control: the picture IS there when it is sent).
+      await expect
+        .poll(() => window.locator('img[alt="Embedded reference"]').evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 })
+        .toBe(8)
+
+      // ── send it: the canvas draws it from a copy it carries, not from the cache file ──
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect.poll(async () => (await drawnPictures(window)).length, { timeout: 15_000 }).toBe(1)
+      const [sent] = await drawnPictures(window)
+      expect.soft(sent?.prefix, 'the layer carries the picture, not the address of the cache file').toMatch(/^data:image\//)
+      expect.soft(sent?.prefix, 'an opaque thumbnail is kept as a JPEG: a tenth of the PNG\'s bytes').toBe('data:image/jpeg')
+      expect(sent?.naturalWidth).toBe(8)
+      expect(sent?.naturalHeight).toBe(6)
+
+      // ── the cache is cleared (the file is gone) ──
+      await backToReferences(window)
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+
+      // ── the canvas, mounted fresh, still draws the reference ──
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect
+        .poll(async () => (await drawnPictures(window)).length, { timeout: 15_000, message: 'the reference layer draws after the cache it came from is gone' })
+        .toBe(1)
+      expect((await drawnPictures(window))[0]?.naturalWidth).toBe(8)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a transparent reference keeps its transparency: a PNG copy, not a JPEG that paints it black', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t137-embed-alpha')
+    const thumbPath = path.join(fx.thumbsDir, 'ghost-thumb.png')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'color=c=0xFF0000@0.5:size=16x12:rate=1,format=rgba', '-frames:v', '1', thumbPath])
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`fixture ffmpeg exit ${code}`))))
+    })
+    writeFileSync(
+      path.join(fx.boardsDir, 'ghostboard.json'),
+      JSON.stringify({
+        id: 'ghostboard',
+        name: 'Ghost board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'ghostitem',
+            collectionId: 'ghostboard',
+            thumbnail: 'https://example.invalid/ghost-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Ghost reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect.poll(async () => (await drawnPictures(window)).length, { timeout: 15_000 }).toBe(1)
+      const [ghost] = await drawnPictures(window)
+      expect(ghost?.prefix).toBe('data:image/png')
+      expect(ghost?.cornerAlpha, 'half transparent, as it was').toBeGreaterThan(100)
+      expect(ghost?.cornerAlpha).toBeLessThan(155)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-139 (2): "→ Canvas" placed a reference at min(its size, 800 px) at (60, 60) whatever the canvas that is open, like an imported file: on the 112x112 emote a 512 px
+// thumbnail's layer was 400 px of canvas it did not have. It is placed wholly on the canvas that is open when the picture lands (`placementFor`). The node's own
+// attributes on the Konva stage are the placed layer.
+test.describe('References - → Canvas places the picture wholly on a small canvas (T-139 (2))', () => {
+  /** The pictures on the stage, bottom to top, as the nodes are drawn (position, and size times scale). */
+  function drawnBoxes(window: Page): Promise<Array<{ x: number; y: number; width: number; height: number }>> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string; x: number; y: number; width?: number; height?: number; scaleX: number; scaleY: number }; getClassName(): string }> }> }
+        | undefined
+      return (stage?.children[0]?.children ?? [])
+        .filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image')
+        .map((n) => ({ x: n.attrs.x, y: n.attrs.y, width: (n.attrs.width ?? 0) * n.attrs.scaleX, height: (n.attrs.height ?? 0) * n.attrs.scaleY }))
+    })
+  }
+
+  test('on the 112x112 emote a 512x512 reference lands as the whole emote, not a corner of it', async () => {
+    test.setTimeout(180_000)
+    const fx = makeFixture('t139-emote')
+    const thumbPath = path.join(fx.thumbsDir, 'big-thumb.png')
+    await new Promise<void>((resolve, reject) => {
+      const child = spawn(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=512x512:rate=1', '-frames:v', '1', thumbPath])
+      child.on('error', reject)
+      child.on('close', (code) => (code === 0 ? resolve() : reject(new Error(`fixture ffmpeg exit ${code}`))))
+    })
+    writeFileSync(
+      path.join(fx.boardsDir, 'emoteboard.json'),
+      JSON.stringify({
+        id: 'emoteboard',
+        name: 'Emote board',
+        createdAt: 1700000000000,
+        items: [
+          {
+            id: 'bigitem',
+            collectionId: 'emoteboard',
+            thumbnail: 'https://example.invalid/big-thumb.png',
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title: 'Big reference',
+            cachedThumbPath: thumbPath,
+            addedAt: 1700000000000
+          }
+        ]
+      }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await window.waitForLoadState('domcontentloaded')
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+      // The canvas that is open when the reference lands: the emote template (112x112).
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await window.locator('button.card').filter({ has: window.getByText('Emote · Blank circle', { exact: true }) }).click()
+      await expect(window.getByText('112 × 112')).toBeVisible()
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+
+      await backToReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect
+        .poll(() => window.locator('img[alt="Big reference"]').evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 })
+        .toBe(512)
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+
+      await expect.poll(async () => (await drawnBoxes(window)).length, { timeout: 15_000, message: 'the reference layer draws' }).toBe(1)
+      const [box] = await drawnBoxes(window)
+      expect.soft(box?.x, 'the left edge is on the canvas').toBeGreaterThanOrEqual(0)
+      expect.soft(box?.y, 'the top edge is on the canvas').toBeGreaterThanOrEqual(0)
+      expect.soft((box?.x ?? 0) + (box?.width ?? 0), `the right edge is on the 112 px canvas (${JSON.stringify(box)})`).toBeLessThanOrEqual(112.01)
+      expect.soft((box?.y ?? 0) + (box?.height ?? 0), `the bottom edge is on the 112 px canvas (${JSON.stringify(box)})`).toBeLessThanOrEqual(112.01)
+      expect({ x: box?.x, y: box?.y, w: Math.round(box?.width ?? 0), h: Math.round(box?.height ?? 0) }, 'and it is the whole emote').toEqual({ x: 0, y: 0, w: 112, h: 112 })
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-141 (9): the board's "Deleted - press Ctrl+Z to undo" lasts as long as an action toast ─────────────────────────────────────────────────
+//
+// The toast is the ONLY place a person is told that Ctrl+Z brings the board back (the board has just vanished from the list they were looking at), and `toast.success(...)` with no
+// duration takes react-hot-toast's 2 s: gone before a person who looked away read it. BRANDING_GUIDE: a sentence that carries a needed fact lasts `ACTION_TOAST_MS` (8 s), as
+// its siblings do. react-hot-toast keeps nothing readable about a duration, so the case waits past the default and finds the sentence still on screen: the one place in this
+// file where a fixed wait IS the assertion (`expectRevealToast` in video-pipelines.spec.ts is the same). The wait is past the 2 s default AND its 1 s exit animation.
+test.describe('T-141 (9): the delete toast outlives react-hot-toast\'s 2 s default', () => {
+  test('after the board is deleted its toast is still on screen 4.5 s later, with the way back in it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t141-toast')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const nameInput = window.getByPlaceholder('New board name', { exact: false })
+      await nameInput.fill('Short lived')
+      await nameInput.press('Enter')
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+
+      window.once('dialog', (d) => void d.accept())
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      const toast = window.locator('[data-rht-toaster]').getByText(DELETED_TOAST, { exact: true })
+      await expect(toast, 'the toast is up when the board goes').toBeVisible()
+      await window.waitForTimeout(4500)
+      await expect(toast, 'and is still up 4.5 s later: it carries the only way back, so it is not the 2 s default').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === DELETED_TOAST), 'said once').toHaveLength(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-144 (b): "Create board" cleared the name box only AFTER the awaited write, so the second press of a double-click (or a second Enter) found the same name still in
+// the box and made a second board of it, and a held Enter made one per repeat. The create is claimed before its first await (the first-save create in the Reference
+// panel has been since T-135 (8)) and the name box's Enter ignores an auto-repeat. The write is made slow in MAIN from the test (the board file's write waits 300 ms,
+// the way `slowWrites.ts` slows a preset's), so the second press is certain to land while the first create is out.
+test.describe('T-144 (b): a double press on Create board makes ONE board', () => {
+  async function slowBoardWrites(app: ElectronApplication, ms: number): Promise<void> {
+    await app.evaluate((_electron, delay) => {
+      const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+      const fsp = getBuiltin('node:fs/promises') as { writeFile: (...a: unknown[]) => Promise<unknown> }
+      const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+      const g = globalThis as unknown as { __boardWriteReal?: (...a: unknown[]) => Promise<unknown> }
+      g.__boardWriteReal ??= fsp.writeFile
+      const real = g.__boardWriteReal
+      fsp.writeFile = async (...a: unknown[]) => {
+        if (/moodboards/.test(String(a[0]))) await new Promise((resolve) => setTimeout(resolve, delay))
+        return real(...a)
+      }
+      mod.syncBuiltinESMExports()
+    }, ms)
+  }
+
+  test('a double-click, Enter pressed twice, and a held Enter each make one board with the name that was typed', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t144-create')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await slowBoardWrites(app, 300)
+      const name = window.getByPlaceholder('New board name…')
+      const create = window.getByRole('button', { name: 'Create board' })
+      const onDisk = (): string[] => readBoardsFromDisk(fx.boardsDir).map((b) => b.name)
+
+      // ── a double-click, the second press ~120 ms after the first ──
+      await name.fill('Double')
+      const box = await create.boundingBox()
+      if (!box) throw new Error('Create board has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await window.waitForTimeout(120)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(800)
+      expect(onDisk(), 'one board file, not two').toEqual(['Double'])
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(name, 'the box is emptied when the create lands').toHaveValue('')
+
+      // ── Enter twice (two presses, not a repeat) ──
+      await name.fill('Twice')
+      await name.press('Enter')
+      await window.waitForTimeout(100)
+      await name.press('Enter')
+      await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(800)
+      expect(onDisk().sort(), 'a second Enter made nothing').toEqual(['Double', 'Twice'])
+
+      // ── a held Enter: the first down is the press, the second down is the key's auto-repeat ──
+      await name.fill('Held')
+      await name.focus()
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(window.getByRole('heading', { name: 'Boards (3)' })).toBeVisible({ timeout: 15_000 })
+      await window.waitForTimeout(800)
+      expect(onDisk().sort(), 'the repeats made nothing').toEqual(['Double', 'Held', 'Twice'])
+      expect((await readToastLog(window)).filter((t) => /Couldn't create/.test(t)), 'and no error was raised').toEqual([])
+
+      // ── a held Enter over a create main REFUSES: the name stays in the box, so each repeat would otherwise try the write again and say so again ──
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('moodboard:create')
+        ipcMain.handle('moodboard:create', () => {
+          throw new Error('the write was refused by the test')
+        })
+      })
+      await name.fill('Refused')
+      await name.focus()
+      await window.keyboard.down('Enter')
+      await window.waitForTimeout(400)
+      await window.keyboard.down('Enter')
+      await window.waitForTimeout(400)
+      await window.keyboard.down('Enter')
+      await window.waitForTimeout(400)
+      await window.keyboard.up('Enter')
+      await expect.poll(async () => (await readToastLog(window)).filter((t) => t === "Couldn't create that board.").length, { timeout: 15_000, intervals: [200] }).toBe(1)
+      expect((await readToastLog(window)).filter((t) => t === "Couldn't create that board."), 'one refusal said once, not once per repeat').toHaveLength(1)
+      await expect(name, 'and the name stays for the retry').toHaveValue('Refused')
+      expect(onDisk().sort()).toEqual(['Double', 'Held', 'Twice'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-76 / T-147 (5): a picture already on the board is not saved again. main dedupes on `fullUrl` and hands the board back unchanged, but the panel toasted
+// `Saved to "X"` for the no-write and the store pushed an Undo step that undid nothing. The renderer learns the difference from the item count of the
+// list it already re-reads: a duplicate says `Already on "X"` and records no step, so ONE Undo takes the real save back. Same stand-in search and
+// local thumbnail socket as the first-save case above; the board is seeded so the first Save does not ask for a name.
+test.describe('T-76 (T-147 (5)): saving a picture that is already on the board', () => {
+  test('"Saved to" then "Already on", and ONE Undo removes the item (no empty step on top of it)', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-dup-save')
+    writeFileSync(
+      path.join(fx.boardsDir, 'dupboard.json'),
+      JSON.stringify({ id: 'dupboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+      res.end(png)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      await expect(undo, 'nothing has been done yet').toBeDisabled()
+
+      await save.click()
+      await expect.poll(() => readToastLog(window)).toEqual(['Saved to "Inspiration"'])
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length).toBe(1)
+
+      // The same picture again: told the truth, and nothing was written.
+      await save.click()
+      await expect.poll(() => readToastLog(window)).toEqual(['Saved to "Inspiration"', 'Already on "Inspiration"'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items, 'still the one copy').toHaveLength(1)
+
+      // ONE Undo takes the real save back. The duplicate left no step of its own, so nothing is on top of it.
+      await expect(undo).toBeEnabled()
+      await undo.click()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length, { timeout: 15_000 }).toBe(0)
+      await expect(undo, 'and there is no second step behind it').toBeDisabled()
+      expect(pageErrors).toEqual([])
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-147 (7): a search's outcome was silent to a screen reader - the error card, the notice, "No results." and the grid all mounted with no live region
+// and no toast. One always-mounted `role="status"` wrapper now holds the error, the notice, "No results." and, for a search that found pictures, an
+// sr-only "N results." line. The search answer is a stand-in handler in main (as the cases above), so everything the panel does with it is real.
+test.describe('T-147 (7): a References search says how it went', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  test('results: "N results."; none: "No results."; a notice and a failure: their own text - all inside one status region that is always mounted and takes no room while empty', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-status')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      // The panel's own region, not a toast's: react-hot-toast puts `role=status` on its messages inside [data-rht-toaster].
+      const status = window.locator('[role="status"]:not([data-rht-toaster] *)')
+      const mode = (m: string): Promise<void> =>
+        app.evaluate(({ ipcMain }, args) => {
+          const [kind, pixel] = args as [string, string]
+          ipcMain.removeHandler('search:images')
+          ipcMain.handle('search:images', async (_e, query: unknown) => {
+            if (kind === 'throw') throw new Error('the stand-in search failed')
+            const q = String(query)
+            if (kind === 'three') {
+              return {
+                query: q, provider: 'duckduckgo',
+                results: [1, 2, 3].map((n) => ({ id: `r${n}`, thumbnail: pixel, fullUrl: `${pixel}#${n}`, source: 'local', title: `tile ${n}` }))
+              }
+            }
+            if (kind === 'one' || kind === 'hold') {
+              if (kind === 'hold') await new Promise<void>((resolve) => { (globalThis as unknown as { __release: () => void }).__release = resolve })
+              return { query: q, provider: 'duckduckgo', results: [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'local', title: 'tile 1' }] }
+            }
+            if (kind === 'notice') {
+              return { query: q, provider: 'duckduckgo', results: [], notice: "Couldn't reach DuckDuckGo. Check your internet connection and try again. Your saved boards still work offline." }
+            }
+            return { query: q, provider: 'duckduckgo', results: [] }
+          })
+        }, [m, PIXEL])
+      const search = async (q: string): Promise<void> => {
+        await input.fill(q)
+        await input.press('Enter')
+      }
+
+      // Before any search: the region is there (a live region that arrives with its text is not reliably read), empty, and holds no space.
+      await expect(status).toHaveCount(1)
+      await expect(status).toHaveText('')
+      const box = await status.boundingBox()
+      expect(box?.height ?? -1, 'empty, it is no taller than a line of nothing').toBe(0)
+
+      // Results: the count, said once the search is answered, and the grid is drawn as before.
+      await mode('three')
+      await search('mountains')
+      await expect(window.locator('img[alt="tile 3"]')).toBeVisible()
+      await expect(status).toHaveText('3 results.')
+      await expect(status.locator('.sr-only'), 'the count is for a screen reader, not drawn').toHaveCount(1)
+      expect((await status.boundingBox())?.height ?? -1, 'and takes no room').toBeLessThanOrEqual(1)
+      const gridGap = await window.evaluate(() => {
+        const region = document.querySelector('[role="status"]:not([data-rht-toaster] *)') as HTMLElement
+        const grid = region.nextElementSibling as HTMLElement
+        const note = region.previousElementSibling as HTMLElement
+        return Math.round(grid.getBoundingClientRect().top - note.getBoundingClientRect().bottom)
+      })
+      expect(gridGap, 'the grid sits one 16 px gap under the note, as it did before the region').toBe(16)
+
+      // The next search is out (held in main) while the old grid is still on screen: the old count is not said for it; the new one is said when it answers.
+      await mode('hold')
+      await search('mountain')
+      await expect(window.getByRole('button', { name: 'Searching…' })).toBeVisible()
+      await expect(status, 'no count while the next search is out').toHaveText('')
+      await app.evaluate(() => (globalThis as unknown as { __release: () => void }).__release())
+      await expect(status).toHaveText('1 result.')
+
+      // None: the search ran and found nothing.
+      await mode('none')
+      await search('a query nothing matches')
+      await expect(status).toHaveText('No results.')
+      await expect(window.getByText('No results.')).toHaveCount(1)
+
+      // A notice: a search that could not run says so - and not "No results.".
+      await mode('notice')
+      await search('offline')
+      await expect(status).toContainText("Couldn't reach DuckDuckGo.")
+      await expect(status).not.toContainText('No results.')
+      await expect(status).not.toContainText('results.')
+
+      // A failure (a rejected call, shown as the plain sentence userFacingError makes of an unknown error): the error card is inside it.
+      await mode('throw')
+      await search('rejected')
+      await expect(status).toContainText('Search failed.')
+      await expect(window.locator('.border-danger-strong\\/40')).toHaveCount(1)
+      await expect(status.locator('.border-danger-strong\\/40'), 'the error card is the region\'s own').toHaveCount(1)
+
+      // And it empties again when the next search answers with results.
+      await mode('three')
+      await search('mountains again')
+      await expect(status).toHaveText('3 results.')
+      await expect(window.locator('.border-danger-strong\\/40')).toHaveCount(0)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-149 (4): a REAL double-click on a result's Save is one save. The second press began while the first was still in main (the thumbnail fetch runs inside the board's
+// lock), so both snapshotted N items, both re-listed N+1, both toasted `Saved to "X"` and both pushed an Undo step - the second an empty one. Main now answers whether IT
+// added the picture, the store trusts that, and the Save button drops the repeat press of a double-click. The thumbnail socket answers after 300 ms so the second press
+// is certainly in flight (on the unchanged build: two toasts, two steps).
+test.describe('T-149 (4): a double-click on Save is one save', () => {
+  test('dblclick on Save: ONE "Saved to" toast, no "Already on", one item on the board, and ONE Undo empties it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-dblclick-save')
+    writeFileSync(
+      path.join(fx.boardsDir, 'dblboard.json'),
+      JSON.stringify({ id: 'dblboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        res.end(png)
+      }, 300)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      await expect(undo, 'nothing has been done yet').toBeDisabled()
+
+      await save.dblclick()
+      await expect.poll(() => readToastLog(window), { timeout: 15_000 }).toEqual(['Saved to "Inspiration"'])
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length).toBe(1)
+      // Let anything the second press started finish, then look again: still one toast, still one item.
+      await window.waitForTimeout(1500)
+      expect(await readToastLog(window), 'one double-click is one save and one toast, never an "Already on"').toEqual(['Saved to "Inspiration"'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items, 'one copy on the board').toHaveLength(1)
+
+      await expect(undo).toBeEnabled()
+      await undo.click()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length, { timeout: 15_000 }).toBe(0)
+      await expect(undo, 'ONE Undo emptied it: no empty step was left behind').toBeDisabled()
+      expect(pageErrors).toEqual([])
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-150 (2): two saves in quick succession are two Undo steps. Main serialises the writes under its board lock and the first picture's thumbnail fetch runs
+// INSIDE it, so a second Save pressed while the first is still downloading used to take its Undo snapshot at press time - the same N as the first - and one
+// Ctrl+Z removed both pictures (the next did nothing). The thumbnail server below holds picture A's socket until the test lets it go.
+test.describe('T-150 (2): two quick saves are two Undo steps', () => {
+  test('Save A (held thumbnail), Save B, release: ONE Ctrl+Z removes only B, a second Ctrl+Z removes A', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-two-saves')
+    writeFileSync(
+      path.join(fx.boardsDir, 'twoboard.json'),
+      JSON.stringify({ id: 'twoboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    let releaseA!: () => void
+    const aHeld = new Promise<void>((resolve) => (releaseA = resolve))
+    let aRequested!: () => void
+    const aSeen = new Promise<void>((resolve) => (aRequested = resolve))
+    const thumbServer = http.createServer((req, res) => {
+      const send = (): void => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        res.end(png)
+      }
+      if ((req.url ?? '').includes('/a.png')) {
+        aRequested()
+        void aHeld.then(send)
+      } else send()
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const base = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await app.evaluate(async ({ ipcMain }, root) => {
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', (_e, query: unknown) => ({
+          query: typeof query === 'string' ? query : '',
+          provider: 'duckduckgo',
+          results: ['a', 'b'].map((k) => ({
+            id: `result-${k}`,
+            thumbnail: `${root}/${k}.png`,
+            fullUrl: `${root}/${k}.png`,
+            source: '127.0.0.1',
+            title: `Picture ${k.toUpperCase()}`
+          }))
+        }))
+      }, base)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('two pictures')
+      await input.press('Enter')
+      const saves = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(saves).toHaveCount(2)
+
+      await saves.nth(0).click()
+      await aSeen // main is inside its lock, fetching A's thumbnail
+      await saves.nth(1).click()
+      await window.waitForTimeout(500) // B is certainly issued while A is still in flight
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items, 'nothing has landed yet').toHaveLength(0)
+      releaseA()
+
+      await expect.poll(() => readToastLog(window), { timeout: 20_000 }).toEqual(['Saved to "Inspiration"', 'Saved to "Inspiration"'])
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length).toBe(2)
+      const titlesOnDisk = (): string[] => (readBoardsFromDisk(fx.boardsDir)[0]?.items ?? []).map((i) => i.title)
+      expect(titlesOnDisk()).toEqual(['Picture A', 'Picture B'])
+
+      await window.keyboard.press('Control+z')
+      await expect.poll(titlesOnDisk, { timeout: 15_000 }).toEqual(['Picture A'])
+      await window.waitForTimeout(500)
+      expect(titlesOnDisk(), 'ONE Ctrl+Z removed only the second picture').toEqual(['Picture A'])
+      await window.keyboard.press('Control+z')
+      await expect.poll(titlesOnDisk, { timeout: 15_000 }).toEqual([])
+      expect(pageErrors).toEqual([])
+    } finally {
+      releaseA()
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-150 fold: the Save button ignores a HELD Enter. Enter on a focused button clicks it on keydown and the key auto-repeats; each repeat is a keyboard click
+// (`detail` 0, so the double-click guard lets it through) and stacked an "Already on" toast per repeat. Nothing was written twice.
+test.describe('T-150: a held Enter on Save is one save', () => {
+  test('focus Save, hold Enter: one "Saved to" toast, no "Already on", one item on the board', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-held-enter-save')
+    writeFileSync(
+      path.join(fx.boardsDir, 'heldboard.json'),
+      JSON.stringify({ id: 'heldboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const png = Buffer.from(PNG_8x6, 'base64')
+    const thumbServer = http.createServer((_req, res) => {
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'image/png', 'content-length': png.length })
+        res.end(png)
+      }, 200)
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/thumb.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('minimalist mountain photography')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      await save.focus()
+
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 6; i++) {
+        await window.waitForTimeout(60)
+        await window.keyboard.down('Enter') // auto-repeats while the key is held
+      }
+      await window.keyboard.up('Enter')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)[0]?.items.length, { timeout: 15_000 }).toBe(1)
+      await window.waitForTimeout(1000)
+      expect(await readToastLog(window), 'a held key is one decision: one toast, never an "Already on" per repeat').toEqual(['Saved to "Inspiration"'])
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items).toHaveLength(1)
+    } finally {
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-151 (2): the thumbnail fetch inside Save had no deadline. A host that accepts the connection and never answers held the board's lock - and, through T-150's single
+// References chain, every later board edit and Undo - with nothing on screen to say why. The fetch now gives up after 10 s (and past 8 MB); the item is saved WITHOUT a
+// cached thumbnail and its tile draws the source URL. The 10 s is the shipped constant: the suite has no env hook for it, so this case waits it out (~12 s).
+test.describe('T-151 (2): a thumbnail host that never answers does not hold the board', () => {
+  test('Save lands within the deadline with no cached thumbnail, the tile shows the source URL, the next edit completes and Ctrl+Z works', async () => {
+    test.setTimeout(90_000)
+    const fx = makeFixture('refs-stalled-thumb')
+    writeFileSync(
+      path.join(fx.boardsDir, 'stallboard.json'),
+      JSON.stringify({ id: 'stallboard', name: 'Inspiration', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const sockets = new Set<net.Socket>()
+    // Accepts, reads, never answers.
+    const thumbServer = http.createServer(() => undefined)
+    thumbServer.on('connection', (s) => {
+      sockets.add(s)
+      s.on('close', () => sockets.delete(s))
+    })
+    await new Promise<void>((resolve) => thumbServer.listen(0, '127.0.0.1', resolve))
+    const thumbUrl = `http://127.0.0.1:${(thumbServer.address() as net.AddressInfo).port}/never.png`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      const pageErrors: string[] = []
+      window.on('pageerror', (e) => pageErrors.push(e.message))
+      await stubOneSearchResult(app, thumbUrl)
+      await openReferences(window)
+      await installToastLog(window)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('a picture on a host that is down')
+      await input.press('Enter')
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      await save.click()
+
+      const items = (): MoodBoardCollection['items'] => readBoardsFromDisk(fx.boardsDir)[0]?.items ?? []
+      await expect.poll(() => items().length, { timeout: 15_000, intervals: [250] }).toBe(1)
+      expect(items()[0]?.cachedThumbPath, 'saved without a cached thumbnail').toBeUndefined()
+      expect(items()[0]?.thumbnail).toBe(thumbUrl)
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toEqual(['Saved to "Inspiration"'])
+      expect(readdirSync(fx.thumbsDir), 'nothing half-written in the cache').toEqual([])
+
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Inspiration')
+      await expect(window.locator('img[alt="Stubbed reference"]'), 'the tile draws the source URL').toHaveAttribute('src', thumbUrl)
+
+      // The next board edit is not queued behind anything.
+      await window.getByRole('button', { name: 'Remove item' }).click()
+      await expect.poll(() => items().length, { timeout: 5000 }).toBe(0)
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => items().length, { timeout: 5000 }).toBe(1)
+      expect(pageErrors).toEqual([])
+    } finally {
+      for (const s of sockets) s.destroy()
+      thumbServer.close()
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-152 (2): one click on an Asset Library card replaced the whole Stream Graphics canvas, a canvas the person was not looking at, with no question, and
+// the toast ("Dropped ... into the editor", 2 s) read as an addition. Now a canvas that holds layers is asked first (Cancel changes nothing, goes nowhere,
+// says nothing), an accepted replace says so and names Ctrl+Z at the action-toast duration, and Ctrl+Z in Stream Graphics brings the layers back.
+test.describe('T-152 (2): an Asset Library card asks before it replaces a canvas that has layers', () => {
+  test('dismissed: nothing changes; accepted: the asset is there, the toast names Undo, and Ctrl+Z brings the old layers back', async () => {
+    test.setTimeout(150_000)
+    const fx = makeFixture('refs-t152-replace')
+    const asset = ASSET_CATALOG.find((a) => a.id === 'scene-brb')
+    expect(asset, 'catalog asset scene-brb').toBeTruthy()
+    if (!asset) return
+    const question = `confirm: Replace the Stream Graphics canvas with "${asset.name}"? Its 1 layer will be replaced. Undo in Stream Graphics brings them back.`
+    const replacedToast = `Replaced the canvas with "${asset.name}" — press Ctrl+Z to undo`
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+
+      // The header says what a click does.
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      await expect(
+        window.getByText(
+          'Click an asset to open it on the Stream Graphics canvas, in place of what is there.',
+          { exact: false }
+        )
+      ).toBeVisible()
+      await expect(window.getByText(/drop it directly into/)).toHaveCount(0)
+
+      // A canvas with one layer (Start with text), then back to the Asset Library.
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await window.getByRole('button', { name: 'Start with text' }).click()
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible({ timeout: 20_000 })
+      const before = await layerRows(window).allTextContents()
+      expect(before).toHaveLength(1)
+      await backToReferences(window)
+      await expect(window.getByRole('heading', { name: 'Overlay frames', exact: true })).toBeVisible()
+
+      // ── dismissed ──
+      const dialogs: string[] = []
+      const dismisser = (d: Dialog): void => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.dismiss()
+      }
+      window.once('dialog', dismisser)
+      await window.getByRole('button', { name: new RegExp(asset.name) }).click()
+      await expect.poll(() => dialogs).toEqual([question])
+      // Cancel means cancel: still on References, no toast, and the canvas is as it was.
+      await window.waitForTimeout(500)
+      expect(window.url()).toContain('#/references')
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible()
+      expect(await readToastLog(window), 'a refused replace says nothing').toEqual([])
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await window.locator('a', { hasText: 'Stream Graphics' }).first().click()
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect(layerRows(window)).toHaveText(before)
+      await backToReferences(window)
+
+      // ── accepted ──
+      dialogs.length = 0
+      window.once('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      })
+      await window.getByRole('button', { name: new RegExp(asset.name) }).click()
+      await expect.poll(() => dialogs).toEqual([question])
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      expect(window.url()).toContain('#/image')
+      await expect(window.getByRole('heading', { name: `Layers (${asset.doc.layers.length})` })).toBeVisible()
+      await expect(layerRows(window)).toHaveText([...asset.doc.layers].reverse().map((l) => l.name))
+      expect(await readToastLog(window)).toEqual([replacedToast])
+      // It carries the way back, so it is up for the action-toast duration, not react-hot-toast's 2 s default.
+      const toast = window.locator('[data-rht-toaster]').getByText(replacedToast, { exact: true })
+      await expect(toast).toBeVisible()
+      await window.waitForTimeout(4500)
+      await expect(toast, 'still up 4.5 s later').toBeVisible()
+
+      // ── Ctrl+Z puts the previous layers back ──
+      await window.keyboard.press('Control+z')
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect(layerRows(window)).toHaveText(before)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-154 (1), (2): "→ Canvas" and a board tile's ✕ are one press, whatever the second one does
+// ═══════════════════════════════════════════════════════════════════════════
+// "→ Canvas" awaits the picture's load before it adds the layer, so T-153's route-change swallow cannot catch the second press of a double-click (it lands BEFORE the
+// route changes): the reference was added twice. The tile's ✕ removed two pictures: the grid reflows when the first tile goes and the next tile's ✕ is under the pointer.
+// Two rules cover each: a repeat press (a double-click's second) is dropped, and a claim is held across the await so a second, separate press is refused too.
+test.describe('T-154 (1), (2): one press on → Canvas and on a tile ✕', () => {
+  /** Board `fiveboard` with `n` items, each with its cached thumbnail on disk (`slow-thumb-N.png`: the page parks loads of any file with "slow-thumb" in its name). */
+  function seedBoard(fx: Fixture, n: number): void {
+    const names = Array.from({ length: n }, (_, i) => `slow-thumb-${i}.png`)
+    for (const name of names) writeFileSync(path.join(fx.thumbsDir, name), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, 'fiveboard.json'), JSON.stringify(boardOwning('fiveboard', 'Five board', fx.thumbsDir, names)), 'utf8')
+  }
+
+  /** The T-135 (13) hold: every `img.src = <a slow-thumb file>` is parked until `release`. */
+  async function parkSlowThumbs(window: Page): Promise<{ parked: () => Promise<number>; release: () => Promise<void> }> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+      w.__parked = []
+      w.__holdSlow = true
+      const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+      if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+      const { get, set } = desc
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return get.call(this)
+        },
+        set(value: string) {
+          if (w.__holdSlow && String(value).includes('slow-thumb')) w.__parked.push(() => set.call(this, value))
+          else set.call(this, value)
+        }
+      })
+    })
+    return {
+      parked: () => window.evaluate(() => (window as unknown as { __parked: unknown[] }).__parked.length),
+      release: () =>
+        window.evaluate(() => {
+          const w = window as unknown as { __parked: Array<() => void>; __holdSlow: boolean }
+          w.__holdSlow = false
+          for (const go of w.__parked.splice(0)) go()
+        })
+    }
+  }
+
+  const ADDED = "Added to canvas as a reference — it won't be in your export"
+
+  test('a real double-click on → Canvas, and two separate presses while the picture loads, each add ONE reference layer and say so once', async () => {
+    test.setTimeout(150_000)
+    const fx = makeFixture('refs-t154-tocanvas')
+    seedBoard(fx, 2)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const { parked, release } = await parkSlowThumbs(window)
+      const toCanvas = window.getByRole('button', { name: /Canvas/ }).first()
+      const added = async (): Promise<number> => (await readToastLog(window)).filter((t) => t === ADDED).length
+
+      // ── a real double-click: the second press is the first one's decision ──
+      // App swallows a repeat press for half a second after every route change (T-153 (3)); the double-click must come after that, or it proves nothing.
+      await window.waitForTimeout(800)
+      await toCanvas.dblclick()
+      await expect.poll(parked, { timeout: 10_000 }).toBeGreaterThanOrEqual(1)
+      await window.waitForTimeout(500)
+      expect(await parked(), 'the double-click started ONE load').toBe(1)
+      await release()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await window.waitForTimeout(500)
+      await expect(window.getByRole('heading', { name: 'Layers (1)' }), 'still one reference layer a moment later').toBeVisible()
+      expect(await added(), 'one toast').toBe(1)
+
+      // ── two separate presses (not a double-click) while the picture is still loading: the claim refuses the second ──
+      await window.locator('a[href="/home"], a[href="#/home"]').first().click({ force: true })
+      await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+      await window.locator('a', { hasText: 'References' }).first().click()
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible({ timeout: 15_000 })
+      await moodBoardTab(window).click()
+      await window.evaluate(() => {
+        ;(window as unknown as { __holdSlow: boolean }).__holdSlow = true
+      })
+      await toCanvas.click()
+      await expect.poll(parked, { timeout: 10_000 }).toBe(1)
+      await window.waitForTimeout(700)
+      // T-155 (1): the button is `aria-disabled` while a send is out, which Playwright's click waits out; a person's press lands (and is told, "Still adding the last picture").
+      await toCanvas.click({ force: true })
+      await window.waitForTimeout(500)
+      expect(await parked(), 'the second press during the load started nothing').toBe(1)
+      await release()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+      await window.waitForTimeout(500)
+      await expect(window.getByRole('heading', { name: 'Layers (2)' })).toBeVisible()
+      expect(await added(), 'two toasts in all: one per send').toBe(2)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a real double-click on a tile ✕ removes ONE picture from the board file, and two separate presses while the removal is out remove one', async () => {
+    test.setTimeout(150_000)
+    const fx = makeFixture('refs-t154-remove')
+    seedBoard(fx, 5)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      const remove = window.getByRole('button', { name: 'Remove item' })
+      await expect(remove).toHaveCount(5)
+      const items = (): string[] => readBoardsFromDisk(fx.boardsDir).flatMap((b) => b.items.map((i) => i.id))
+      expect(items()).toHaveLength(5)
+
+      // ── a real double-click on the first tile's ✕ (the second tile's ✕ is under the pointer once the grid reflows) ──
+      // After the half second App swallows repeats for on a route change (T-153 (3)), or the second press never arrives and the test proves nothing.
+      await window.waitForTimeout(800)
+      await remove.first().dblclick()
+      await expect.poll(items, { timeout: 15_000 }).toHaveLength(4)
+      await window.waitForTimeout(800)
+      expect(items(), 'one picture removed, the first').toEqual(['fiveboarditem1', 'fiveboarditem2', 'fiveboarditem3', 'fiveboarditem4'])
+      await expect(remove).toHaveCount(4)
+      // The same press twice (the write is still out when the second lands) is a second "remove" of the same picture: it raised "Couldn't remove" and pushed a no-op
+      // undo step that ate the first Ctrl+Z. One press, one undo step.
+      expect((await readToastLog(window)).filter((t) => /Couldn't remove/.test(t)), 'no refusal from the repeated press').toEqual([])
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => items().length, { timeout: 15_000, message: 'ONE Ctrl+Z brings the picture back' }).toBe(5)
+      await expect(remove).toHaveCount(5)
+
+      // ── a slow double-click: the first press's removal is DONE (the grid has reflowed, the neighbour's ✕ is under the pointer) when the second, counted as a repeat, lands ──
+      const box = await remove.first().boundingBox()
+      if (!box) throw new Error('the first ✕ has no box')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await window.mouse.down({ clickCount: 1 })
+      await window.mouse.up({ clickCount: 1 })
+      await expect(remove).toHaveCount(4)
+      await expect.poll(() => items().length, { timeout: 15_000 }).toBe(4)
+      await window.waitForTimeout(300)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await window.waitForTimeout(800)
+      expect(items(), 'the repeat press removed nothing more').toHaveLength(4)
+      await expect(remove).toHaveCount(4)
+      await window.keyboard.press('Control+z')
+      await expect.poll(() => items().length, { timeout: 15_000, message: 'ONE Ctrl+Z brings that one back too' }).toBe(5)
+      await expect(remove).toHaveCount(5)
+
+      // ── two separate presses while the removal's write is slow: the claim refuses the second ──
+      await app.evaluate((_electron, delay) => {
+        const getBuiltin = (process as unknown as { getBuiltinModule: (id: string) => unknown }).getBuiltinModule
+        const fsp = getBuiltin('node:fs/promises') as { writeFile: (...a: unknown[]) => Promise<unknown> }
+        const mod = getBuiltin('node:module') as { syncBuiltinESMExports: () => void }
+        const real = fsp.writeFile
+        fsp.writeFile = async (...a: unknown[]) => {
+          if (/moodboards/.test(String(a[0]))) await new Promise((resolve) => setTimeout(resolve, delay))
+          return real(...a)
+        }
+        mod.syncBuiltinESMExports()
+      }, 1200)
+      await remove.first().click()
+      await window.waitForTimeout(300)
+      await remove.nth(1).click({ force: true })
+      await expect.poll(items, { timeout: 15_000 }).toHaveLength(4)
+      await window.waitForTimeout(1800)
+      expect(items(), 'the second press during the removal removed nothing').toHaveLength(4)
+      await expect(remove).toHaveCount(4)
+      expect((await readToastLog(window)).filter((t) => /Couldn't remove/.test(t)), 'and raised no error').toEqual([])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-155 (1): one stalled "→ Canvas" load no longer silences every other "→ Canvas" press
+// ═══════════════════════════════════════════════════════════════════════════
+// The send claim (T-154 (1)) is held across the picture's load, and the load had no deadline: a tile whose cached thumbnail is gone falls back to its source address, and a host that
+// accepts and never answers held the claim for ever, so every other tile's "→ Canvas" returned in silence. Now the load gives up after 10 s with a sentence, every "→ Canvas" shows
+// that a send is out (aria-disabled + a title), and a press says "Still adding the last picture". The renderer's CSP (`img-src https:`) bars a loopback HTTP host, so the stalled host is
+// the page-side hold the T-154 case uses, never released: an image whose address says "stall-thumb" is simply never started, which is what a host that never answers looks like to the page.
+// The 10 s is the shipped constant (no env hook), so this case waits it out (~12 s).
+test.describe('T-155 (1): a stalled "→ Canvas" load says so, gives up with a sentence, and gives the other tiles back', () => {
+  test('while a load is out every "→ Canvas" shows it and a press says "Still adding the last picture"; at the deadline the failure sentence shows and the second tile then adds its layer', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t155-stalled-send')
+    writeFileSync(path.join(fx.thumbsDir, 'fast-thumb-1.png'), Buffer.from(PNG_8x6, 'base64'))
+    const board = boardOwning('sendboard', 'Send board', fx.thumbsDir, ['stall-thumb-0.png', 'fast-thumb-1.png'])
+    // Item 0's cache is gone (Clear thumbnail cache): its tile falls back to the address the picture came from.
+    delete board.items[0]?.cachedThumbPath
+    writeFileSync(path.join(fx.boardsDir, 'sendboard.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await window.evaluate(() => {
+        const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+        if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+        const { get, set } = desc
+        Object.defineProperty(HTMLImageElement.prototype, 'src', {
+          configurable: true,
+          enumerable: true,
+          get() {
+            return get.call(this)
+          },
+          set(value: string) {
+            if (!String(value).includes('stall-thumb')) set.call(this, value)
+          }
+        })
+      })
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      await expect(toCanvas).toHaveCount(2)
+      const ADDED = "Added to canvas as a reference — it won't be in your export"
+      const FAILED = "That picture didn't load. Try again, or save it to the board again."
+      const BUSY = 'Still adding the last picture'
+      await expect(toCanvas.nth(0), 'idle: not marked busy').not.toHaveAttribute('aria-disabled', 'true')
+      await expect(toCanvas.nth(1), 'idle: no busy title').not.toHaveAttribute('title', /.+/)
+
+      // ── the stalled send ──
+      await window.waitForTimeout(800) // past T-153's half-second repeat swallow after the route change
+      await toCanvas.nth(0).click()
+      for (const i of [0, 1]) {
+        await expect(toCanvas.nth(i), `tile ${i}: a send is out`).toHaveAttribute('aria-disabled', 'true')
+        await expect(toCanvas.nth(i), `tile ${i}: the title says what it is waiting for`).toHaveAttribute('title', 'Adding the last picture…')
+      }
+      // ── a press on the other tile during the stall: told, not ignored, and nothing is added ──
+      // (`force`: Playwright treats aria-disabled as not actionable and would wait the stall out; a person's click lands.)
+      await toCanvas.nth(1).click({ force: true })
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toContain(BUSY)
+      await expect(window.locator('h1', { hasText: 'References' }), 'still on References').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED), 'nothing was added').toEqual([])
+
+      // ── the deadline: the finished sentence, and the claim is given back ──
+      await expect.poll(() => readToastLog(window), { timeout: 20_000, intervals: [500] }).toContain(FAILED)
+      await expect(toCanvas.nth(0), 'the busy mark is gone').not.toHaveAttribute('aria-disabled', 'true')
+      await expect(toCanvas.nth(1)).not.toHaveAttribute('title', /.+/)
+
+      // ── the second tile now works ──
+      await toCanvas.nth(1).click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED), 'one reference added, by the second tile').toHaveLength(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+  test('a held Enter on a cached tile\'s "→ Canvas" adds ONE reference layer', async () => {
+    test.setTimeout(90_000)
+    const fx = makeFixture('refs-t155-held-enter')
+    writeFileSync(path.join(fx.thumbsDir, 'fast-thumb-0.png'), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, 'heldsend.json'), JSON.stringify(boardOwning('heldsend', 'Held send', fx.thumbsDir, ['fast-thumb-0.png'])), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await window.waitForTimeout(800)
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      // The first down is the press, the next are the key's auto-repeats (a person's hold spans the picture's load).
+      await window.keyboard.down('Enter')
+      for (let i = 0; i < 6; i++) {
+        await window.waitForTimeout(40)
+        await window.keyboard.down('Enter')
+      }
+      await window.keyboard.up('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await window.waitForTimeout(800)
+      await expect(window.getByRole('heading', { name: 'Layers (1)' }), 'still one reference layer a moment later').toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-156 (4) / (5): a send a tab change cannot re-arm, and one sentence for a picture that fails at once
+// ═══════════════════════════════════════════════════════════════════════════
+// (4) The send claim and the busy flag were the panel's own (`useRef` / `useState`) and the studio renders its tabs conditionally, so Mood Boards -> Asset Library -> Mood Boards remounted the
+// panel with the claim given back while the first send was still out. They are a module store now. (5) `loadImage` rejects a picture that fails at once with a bare "Decode failed" that
+// `userFacingError` does not show, so it read "Couldn't add that image to the canvas."; every load failure inside the send is the stalled picture's sentence. The stall is the T-155 page-side
+// hold (an image whose address says "stall-thumb" is never started); the fast failure is the same hold firing the image's `error` at once for an address that says "fail-thumb" (the CSP
+// bars a loopback host, and a real offline fetch is not deterministic).
+test.describe('T-156 (4) / (5): the send claim survives a tab change, and a picture that fails at once says one sentence', () => {
+  const ADDED = "Added to canvas as a reference — it won't be in your export"
+  const FAILED = "That picture didn't load. Try again, or save it to the board again."
+  const BUSY = 'Still adding the last picture'
+  const GENERIC = "Couldn't add that image to the canvas."
+
+  async function installSrcHold(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const desc = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, 'src')
+      if (!desc || !desc.set || !desc.get) throw new Error('no src accessor')
+      const { get, set } = desc
+      Object.defineProperty(HTMLImageElement.prototype, 'src', {
+        configurable: true,
+        enumerable: true,
+        get() {
+          return get.call(this)
+        },
+        set(value: string) {
+          const v = String(value)
+          if (v.includes('stall-thumb')) return
+          if (v.includes('fail-thumb')) {
+            setTimeout(() => (this as HTMLImageElement).dispatchEvent(new Event('error')), 0)
+            return
+          }
+          set.call(this, value)
+        }
+      })
+    })
+  }
+
+  test('a stalled send, then Asset Library and back: every "→ Canvas" is still busy, a press says so, and the deadline gives one sentence and no layer; then the claim is free', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t156-remount-send')
+    writeFileSync(path.join(fx.thumbsDir, 'fast-thumb-1.png'), Buffer.from(PNG_8x6, 'base64'))
+    const board = boardOwning('sendboard', 'Send board', fx.thumbsDir, ['stall-thumb-0.png', 'fast-thumb-1.png'])
+    delete board.items[0]?.cachedThumbPath
+    writeFileSync(path.join(fx.boardsDir, 'sendboard.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await installSrcHold(window)
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      await expect(toCanvas).toHaveCount(2)
+      await window.waitForTimeout(800) // past T-153's half-second repeat swallow after the route change
+      await toCanvas.nth(0).click()
+      await expect(toCanvas.nth(0)).toHaveAttribute('aria-disabled', 'true')
+
+      // ── leave the Mood Boards tab and come back: the panel is a new mount, the send is still out ──
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      await expect(window.getByRole('button', { name: /Canvas/ })).toHaveCount(0)
+      await moodBoardTab(window).click()
+      await expect(toCanvas).toHaveCount(2)
+      for (const i of [0, 1]) {
+        await expect(toCanvas.nth(i), `tile ${i}: still marked busy after the remount`).toHaveAttribute('aria-disabled', 'true')
+        await expect(toCanvas.nth(i), `tile ${i}: still says what it waits for`).toHaveAttribute('title', 'Adding the last picture…')
+      }
+      await window.waitForTimeout(800)
+      await toCanvas.nth(1).click({ force: true })
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toContain(BUSY)
+      await expect(window.locator('h1', { hasText: 'References' }), 'the press added nothing and went nowhere').toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED), 'no layer yet').toEqual([])
+
+      // ── the deadline: one sentence, never two, and no layer ──
+      await expect.poll(() => readToastLog(window), { timeout: 20_000, intervals: [500] }).toContain(FAILED)
+      await expect(toCanvas.nth(0), 'the busy mark is gone').not.toHaveAttribute('aria-disabled', 'true')
+      await window.waitForTimeout(1500)
+      const log = await readToastLog(window)
+      expect(log.filter((t) => t === FAILED), 'one failure sentence').toHaveLength(1)
+      expect(log.filter((t) => t === ADDED), 'no reference layer from the stalled send or the refused press').toEqual([])
+
+      // ── and the claim is free again: the second tile adds exactly one layer ──
+      await toCanvas.nth(1).click()
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 15_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      expect((await readToastLog(window)).filter((t) => t === ADDED)).toHaveLength(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a picture that fails to load at once says "That picture didn\'t load. Try again, or save it to the board again." and the button is pressable again at once', async () => {
+    test.setTimeout(90_000)
+    const fx = makeFixture('refs-t156-fast-fail')
+    const board = boardOwning('failboard', 'Fail board', fx.thumbsDir, ['fail-thumb-0.png'])
+    delete board.items[0]?.cachedThumbPath
+    writeFileSync(path.join(fx.boardsDir, 'failboard.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await installSrcHold(window)
+      const toCanvas = window.getByRole('button', { name: /Canvas/ })
+      await window.waitForTimeout(800)
+      await toCanvas.click()
+      await expect.poll(() => readToastLog(window), { timeout: 5000 }).toContain(FAILED)
+      expect(await readToastLog(window), 'not the bare fallback').not.toContain(GENERIC)
+      await expect(toCanvas, 'pressable again at once').not.toHaveAttribute('aria-disabled', 'true')
+      await expect(toCanvas).not.toHaveAttribute('title', /.+/)
+      await expect(window.locator('h1', { hasText: 'References' })).toBeVisible()
+      // A second press is a new send (it fails the same way, once more), not a refusal.
+      await toCanvas.click()
+      await expect.poll(async () => (await readToastLog(window)).filter((t) => t === FAILED).length, { timeout: 5000 }).toBe(2)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-160 (5): BRANDING_GUIDE, Destruction verbs: Delete "says so when Ctrl+Z can bring it back". The board question used to end at "?" while the toast after it named Ctrl+Z.
+test.describe('T-160 (5): Delete board names Ctrl+Z, and Ctrl+Z brings the board back', () => {
+  test('the question says Ctrl+Z brings it back; after accepting, Ctrl+Z restores the board with both its items', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t160-delete')
+    const board = boardOwning('t160board', 'Two item board', fx.thumbsDir, ['t160a.png', 't160b.png'])
+    for (const f of ['t160a.png', 't160b.png']) writeFileSync(path.join(fx.thumbsDir, f), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, 't160board.json'), JSON.stringify(board), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Two item board')
+
+      const dialogs: string[] = []
+      window.once('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.accept()
+      })
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect.poll(() => dialogs).toEqual(['confirm: Delete "Two item board" and all 2 items? Ctrl+Z brings it back.'])
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
+
+      await window.keyboard.press('Control+z')
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(window.locator('h3.text-lg')).toHaveText('Two item board')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([board])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-161 (8): the Delete board question read "and all 0 items" / "and all 1 item". The wording follows the count; the dialog is captured as T-160 (5) does.
+test.describe('T-161 (8): the Delete board question reads right for an empty board and a one-item board', () => {
+  async function questionFor(label: string, id: string, name: string, files: string[]): Promise<string[]> {
+    const fx = makeFixture(label)
+    for (const f of files) writeFileSync(path.join(fx.thumbsDir, f), Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(path.join(fx.boardsDir, `${id}.json`), JSON.stringify(boardOwning(id, name, fx.thumbsDir, files)), 'utf8')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await expect(window.locator('h3.text-lg')).toHaveText(name)
+      const dialogs: string[] = []
+      window.once('dialog', (d) => {
+        dialogs.push(`${d.type()}: ${d.message()}`)
+        void d.dismiss()
+      })
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect.poll(() => dialogs).toHaveLength(1)
+      return dialogs
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  }
+
+  test('an empty board\'s question is the bare form', async () => {
+    test.setTimeout(120_000)
+    expect(await questionFor('refs-t161-empty', 't161empty', 'Empty board', [])).toEqual(['confirm: Delete "Empty board"? Ctrl+Z brings it back.'])
+  })
+
+  test('a one-item board\'s question names "the 1 item in it"', async () => {
+    test.setTimeout(120_000)
+    expect(await questionFor('refs-t161-one', 't161one', 'Lone board', ['t161a.png'])).toEqual([
+      'confirm: Delete "Lone board" and the 1 item in it? Ctrl+Z brings it back.'
+    ])
+  })
+})
+
+// ── T-164 (9): the Asset Library's tiles lay their content from the top ────────────────────────────────────────────────────────────────────
+// A <button> in a stretched grid cell centres its content, so a tile with a longer description started its preview lower than its neighbour's (about 8 px
+// at 1024 wide). At the narrowest window, the previews of one row share a top (client rects), every row of every category.
+test.describe('T-164 (9): Asset Library tile previews line up across a row', () => {
+  test('at the narrowest window the previews of each row start at the same top', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t164-tiles')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      const { MIN_WINDOW, setWindowSize } = await import('./layout')
+      await setWindowSize(app, window, MIN_WINDOW)
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      const tiles = window.locator('button.card')
+      await expect(tiles).toHaveCount(ASSET_CATALOG.length)
+      const rows = await tiles.evaluateAll((els) => {
+        const out: Array<{ tileTop: number; previewTops: number[]; names: string[] }> = []
+        for (const el of els) {
+          const top = el.getBoundingClientRect().top
+          const previewTop = (el.firstElementChild as HTMLElement).getBoundingClientRect().top
+          const name = el.querySelector('.font-medium')?.textContent ?? ''
+          const row = out.find((r) => Math.abs(r.tileTop - top) <= 1)
+          if (row) {
+            row.previewTops.push(previewTop)
+            row.names.push(name)
+          } else out.push({ tileTop: top, previewTops: [previewTop], names: [name] })
+        }
+        return out
+      })
+      expect(rows.some((r) => r.previewTops.length >= 2), 'the grid has a row of two or more tiles').toBe(true)
+      for (const r of rows) {
+        const spread = Math.max(...r.previewTops) - Math.min(...r.previewTops)
+        expect(spread, `the previews of the row [${r.names.join(' | ')}] start at ${r.previewTops.map((n) => n.toFixed(1)).join(', ')}`).toBeLessThanOrEqual(1)
+      }
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-166 (4): a right-click in a text box offers Cut, Copy, Paste and Select all ──────────────────────────────────────────────────────────
+//
+// Electron has no built-in context menu, so the right-click a Windows streamer reaches for (paste a chat log or a name) showed nothing. The spec is the Reference Search box, the
+// quickest text field to reach, and the end state is the box holding the clipboard's text. Only the native popup itself is not drawn: `Menu.prototype.popup` is wrapped in MAIN to record
+// the items of the menu it was asked to show and to keep it, and the Paste item is then clicked in main exactly as the OS menu would click it (the OS draws and dispatches a native menu
+// outside any page a test can see; this is the OS boundary named in INTERACTION_COVERAGE.md).
+test.describe('T-166 (4): right-click in a text box', () => {
+  test('right-click the focused Search box: Undo, Redo, Cut, Copy, Paste, Select all pop; Paste puts the clipboard in the box; a right-click on bare page pops nothing', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t166-ctx')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(({ Menu, clipboard }) => {
+        const g = globalThis as unknown as { __ctxMenus?: Array<{ roles: string[] }>; __lastMenu?: unknown }
+        g.__ctxMenus = []
+        Menu.prototype.popup = function (this: Electron.Menu) {
+          g.__ctxMenus?.push({ roles: this.items.map((i) => (i.type === 'separator' ? 'separator' : String(i.role))) })
+          g.__lastMenu = this
+          return this
+        } as typeof Menu.prototype.popup
+        clipboard.writeText('a title pasted with the mouse')
+      })
+      const menus = () =>
+        app.evaluate(() => (globalThis as unknown as { __ctxMenus: Array<{ roles: string[] }> }).__ctxMenus)
+
+      const box = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await box.click()
+      await expect(box).toBeFocused()
+      await expect(box).toHaveValue('')
+      await box.click({ button: 'right' })
+      await expect.poll(async () => (await menus()).length, { timeout: 10_000 }).toBe(1)
+      // Electron lowercases a menu item's `role` once the item is built ('selectAll' is read back as 'selectall'), so the order is compared in lower case.
+      expect((await menus())[0]?.roles).toEqual(['undo', 'redo', 'separator', 'cut', 'copy', 'paste', 'separator', 'selectall'])
+
+      // The end state: its Paste item, clicked, puts the clipboard's text in the box.
+      await app.evaluate(({ BrowserWindow }) => {
+        const menu = (globalThis as unknown as { __lastMenu: Electron.Menu }).__lastMenu
+        const win = BrowserWindow.getAllWindows()[0]!
+        const paste = menu.items.find((i) => i.role === 'paste')
+        if (!paste) throw new Error('the popped menu has no Paste item')
+        paste.click(undefined as never, win, win.webContents)
+      })
+      await expect(box, 'Paste put the clipboard text in the box').toHaveValue('a title pasted with the mouse')
+
+      // Control: a right-click on page that is not a text box, with nothing selected, pops no menu (a menu that pops everywhere would fail here).
+      await window.locator('h1', { hasText: 'References' }).click({ button: 'right' })
+      await window.waitForTimeout(500)
+      expect((await menus()).length, 'a right-click on bare page popped a menu').toBe(1)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-167 (5): a context menu opened from the keyboard pops at the field, not at the mouse pointer ─────────────────────────────────────────
+//
+// The Menu key or Shift+F10 on a focused text box raises the same `context-menu` event with the FIELD's x/y and `menuSourceType: 'keyboard'`; `popup({ window })` alone opens at the
+// cursor, so the menu appeared wherever the pointer was parked. The key is the real one (Playwright's `keyboard.press('Shift+F10')` is a CDP key event the renderer turns into the
+// event), so nothing is emitted by hand. As in T-166 (4), `Menu.prototype.popup` is wrapped in MAIN (the OS draws the native menu outside any page a test can see): it records the OPTIONS
+// popup was given, and a second `context-menu` listener records the params main was handed, so the two are compared.
+test.describe('T-167 (5): the keyboard opens the context menu at the field', () => {
+  test('Shift+F10 on the focused Search box pops the menu with the params\' x, y and sourceType keyboard; a right-click is sourceType mouse', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t167-ctx')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(({ BrowserWindow, Menu }) => {
+        const g = globalThis as unknown as {
+          __popups?: Array<{ x?: number; y?: number; sourceType?: string }>
+          __params?: Array<{ x: number; y: number; menuSourceType: string }>
+        }
+        g.__popups = []
+        g.__params = []
+        Menu.prototype.popup = function (this: Electron.Menu, options?: Electron.PopupOptions) {
+          g.__popups?.push({ x: options?.x, y: options?.y, sourceType: options?.sourceType })
+          return this
+        } as typeof Menu.prototype.popup
+        BrowserWindow.getAllWindows()[0]!.webContents.on('context-menu', (_event, params) => {
+          g.__params?.push({ x: params.x, y: params.y, menuSourceType: params.menuSourceType })
+        })
+      })
+      const read = () =>
+        app.evaluate(() => {
+          const g = globalThis as unknown as {
+            __popups: Array<{ x?: number; y?: number; sourceType?: string }>
+            __params: Array<{ x: number; y: number; menuSourceType: string }>
+          }
+          return { popups: g.__popups, params: g.__params }
+        })
+
+      const box = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await box.click()
+      await expect(box).toBeFocused()
+      // Park the pointer far from the field: the old call opened the menu here.
+      await window.mouse.move(5, 5)
+      await window.keyboard.press('Shift+F10')
+      await expect.poll(async () => (await read()).popups.length, { timeout: 10_000 }).toBe(1)
+      const keyboard = await read()
+      expect(keyboard.params[0]?.menuSourceType, 'the event came from the keyboard').toBe('keyboard')
+      expect(keyboard.popups[0], 'popup was given the params\' own place and source type').toEqual({
+        x: keyboard.params[0]?.x,
+        y: keyboard.params[0]?.y,
+        sourceType: 'keyboard'
+      })
+      // And that place is the field's, not the pointer's (5, 5).
+      const rect = await box.boundingBox()
+      expect(rect, 'the Search box is on screen').not.toBeNull()
+      const px = keyboard.popups[0]?.x as number
+      const py = keyboard.popups[0]?.y as number
+      expect(px, 'x is within the field').toBeGreaterThanOrEqual((rect?.x ?? 0) - 2)
+      expect(px).toBeLessThanOrEqual((rect?.x ?? 0) + (rect?.width ?? 0) + 2)
+      expect(py, 'y is within the field').toBeGreaterThanOrEqual((rect?.y ?? 0) - 2)
+      expect(py).toBeLessThanOrEqual((rect?.y ?? 0) + (rect?.height ?? 0) + 2)
+
+      // Control: a right-click is a mouse event at the click, so the source type is not hard-coded.
+      await box.click({ button: 'right', position: { x: 12, y: 8 } })
+      await expect.poll(async () => (await read()).popups.length, { timeout: 10_000 }).toBe(2)
+      const mouse = await read()
+      expect(mouse.params[1]?.menuSourceType).toBe('mouse')
+      expect(mouse.popups[1]).toEqual({ x: mouse.params[1]?.x, y: mouse.params[1]?.y, sourceType: 'mouse' })
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-169: an edit that changes nothing is not an edit; a held Enter is one search; the grid says how to Save ────────────────────────────────
+test.describe('T-169: References', () => {
+  // T-170 (4): with no board yet (this fixture has none) the line says the first Save starts one.
+  const HOVER_HINT = 'Hover a picture and click Save to start a new mood board.'
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  /** `search:images` answered in MAIN: counts every call, answers `nothing` with no results and anything else with one data: picture. */
+  async function stubCountingSearch(app: ElectronApplication): Promise<() => Promise<string[]>> {
+    await app.evaluate(async ({ ipcMain }, pixel) => {
+      const g = globalThis as unknown as { __t169Calls: string[] }
+      g.__t169Calls = []
+      ipcMain.removeHandler('search:images')
+      ipcMain.handle('search:images', (_e, query: unknown) => {
+        g.__t169Calls.push(String(query))
+        return {
+          query: String(query),
+          provider: 'duckduckgo',
+          results: query === 'nothing' ? [] : [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'local', title: `answer to ${String(query)}` }]
+        }
+      })
+    }, PIXEL)
+    return () => app.evaluate(() => (globalThis as unknown as { __t169Calls: string[] }).__t169Calls)
+  }
+
+  test('Mood Boards: renaming a board to the name it has records nothing, closes the dialog, and keeps Redo (the same name, padded, too)', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t169-rename')
+    writeFileSync(
+      path.join(fx.boardsDir, 'renameboard.json'),
+      JSON.stringify({ id: 'renameboard', name: 'Original name', createdAt: 1700000000000, items: [] }),
+      'utf8'
+    )
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const detailTitle = window.locator('h3.text-lg')
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      const redo = window.getByRole('button', { name: 'Redo', exact: true })
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(undo).toBeDisabled()
+
+      // The dialog is pre-filled: Enter without typing is the same name.
+      await openRename.click()
+      await expect(field).toHaveValue('Original name')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(undo, 'the same name is not an edit: nothing to undo').toBeDisabled()
+
+      // One real rename and an Undo, so Redo is held ...
+      await openRename.click()
+      await field.fill('Renamed board')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Renamed board')
+      await undo.click()
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(redo).toBeEnabled()
+      await expect(undo).toBeDisabled()
+
+      // ... and the board's own name, with spaces round it, closes the dialog and leaves both as they were.
+      await openRename.click()
+      await field.fill('  Original name  ')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect(detailTitle).toHaveText('Original name')
+      await expect(redo, 'a rename that changed nothing must not empty Redo').toBeEnabled()
+      await expect(undo).toBeDisabled()
+      expect(readBoardsFromDisk(fx.boardsDir).map((b) => b.name)).toEqual(['Original name'])
+
+      // The control: a different name is still a step, and it ends the redo branch.
+      await openRename.click()
+      await field.fill('Another name')
+      await field.press('Enter')
+      await expect(detailTitle).toHaveText('Another name')
+      await expect(undo).toBeEnabled()
+      await expect(redo).toBeDisabled()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('Reference Search: a held Enter after the answer is in sends no second search; two separate presses send two', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t169-held')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      const calls = await stubCountingSearch(app)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+
+      await input.fill('held key')
+      await input.focus()
+      await window.keyboard.down('Enter')
+      await expect(window.locator('img[alt="answer to held key"]')).toBeVisible({ timeout: 10_000 })
+      await expect(window.getByRole('button', { name: 'Search', exact: true })).toBeEnabled()
+      // The key is STILL down: the second keydown is its auto-repeat (`repeat` is set), arriving after the first search has settled.
+      await window.keyboard.down('Enter')
+      await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(600)
+      expect(await calls(), 'the held key sent one search').toEqual(['held key'])
+
+      // The control, so the case discriminates: separate presses, each after the last settled, are separate searches.
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['held key', 'held key'])
+      await input.press('Enter')
+      await expect.poll(calls, { timeout: 10_000 }).toEqual(['held key', 'held key', 'held key'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('Reference Search: the hover hint shows with results and not before a search or after one that found nothing', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t169-hint')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await stubCountingSearch(app)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      const hint = window.getByText(HOVER_HINT, { exact: true })
+
+      await expect(hint, 'before any search').toHaveCount(0)
+      await input.fill('nothing')
+      await input.press('Enter')
+      await expect(window.getByText('No results.')).toBeVisible({ timeout: 10_000 })
+      await expect(hint, 'a search that found nothing has no picture to hover').toHaveCount(0)
+
+      await input.fill('mountains')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="answer to mountains"]')).toBeVisible({ timeout: 10_000 })
+      await expect(hint).toBeVisible()
+      await expect(hint).toHaveClass(/text-ink-dim/)
+
+      // The sentence is true: the picture's Save is revealed by hovering it.
+      const save = window.getByRole('button', { name: 'Save', exact: false })
+      await expect(save).toHaveCount(1)
+      const tile = window.locator('div.group', { has: window.locator('img[alt="answer to mountains"]') })
+      const scrim = tile.locator('div.absolute.inset-0')
+      await expect(scrim, 'Save is drawn at opacity 0 until the pointer is over the picture').toHaveCSS('opacity', '0')
+      await tile.hover()
+      await expect(scrim).toHaveCSS('opacity', '1')
+      await expect(save).toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-170 (4): the hint above the results says where Save goes ─────────────────────────────────────────────────────────────────────────────
+// The line said "a mood board" while Save goes to the board selected on the Mood Boards tab, named only afterwards in a 2 s toast. It names the board
+// now (truncated, with the whole sentence as its title), and with no board it says the first Save starts one.
+test.describe('T-170 (4): the Reference Search hint names the board Save goes to', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+  const NEW_BOARD = 'Hover a picture and click Save to start a new mood board.'
+  const sentence = (board: string): string => `Hover a picture and click Save to add it to "${board}".`
+
+  async function stubOnePicture(app: ElectronApplication): Promise<void> {
+    await app.evaluate(async ({ ipcMain }, pixel) => {
+      ipcMain.removeHandler('search:images')
+      ipcMain.handle('search:images', (_e, query: unknown) => ({
+        query: String(query),
+        provider: 'duckduckgo',
+        results: [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'local', title: 'A picture' }]
+      }))
+    }, PIXEL)
+  }
+
+  test('with two boards the hint names the selected one (not the first), follows a new selection, and a Save lands where it says', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t170-hint')
+    // "Layouts" is the newer board, so it is the one the store selects by default; "Colors" is older and has to be picked.
+    for (const [id, name, createdAt] of [['colorsboard', 'Colors', 1700000000000], ['layoutsboard', 'Layouts', 1700000100000]] as const) {
+      writeFileSync(path.join(fx.boardsDir, `${id}.json`), JSON.stringify({ id, name, createdAt, items: [] }), 'utf8')
+    }
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await stubOnePicture(app)
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Colors, 0 items' }).click()
+      await window.getByRole('button', { name: 'Reference Search', exact: true }).click()
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('anything')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible({ timeout: 10_000 })
+
+      const hint = window.getByText(sentence('Colors'), { exact: true })
+      await expect(hint).toBeVisible()
+      await expect(hint).toHaveAttribute('title', sentence('Colors'))
+      await expect(hint).toHaveClass(/truncate/)
+      await expect(window.getByText(NEW_BOARD)).toHaveCount(0)
+
+      // The Save lands on the board the line names.
+      const tile = window.locator('div.group', { has: window.locator('img[alt="A picture"]') })
+      await tile.hover()
+      await tile.getByRole('button', { name: 'Save' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Saved to "Colors"')
+      await expect
+        .poll(() => Object.fromEntries(readBoardsFromDisk(fx.boardsDir).map((b) => [b.name, b.items.length])))
+        .toEqual({ Colors: 1, Layouts: 0 })
+
+      // Another board picked on the Mood Boards tab: the line follows.
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Layouts, 0 items' }).click()
+      await window.getByRole('button', { name: 'Reference Search', exact: true }).click()
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible()
+      await expect(window.getByText(sentence('Layouts'), { exact: true })).toBeVisible()
+      await expect(window.getByText(sentence('Colors'), { exact: true })).toHaveCount(0)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('control: with no board the line says the first Save starts a new mood board, and the Save asks for its name', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t170-noboard')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await stubOnePicture(app)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('anything')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible({ timeout: 10_000 })
+      await expect(window.getByText(NEW_BOARD, { exact: true })).toBeVisible()
+      await expect(window.getByText('add it to "', { exact: false })).toHaveCount(0)
+      const tile = window.locator('div.group', { has: window.locator('img[alt="A picture"]') })
+      await tile.hover()
+      await tile.getByRole('button', { name: 'Save' }).click()
+      await expect(window.getByRole('dialog').getByText('Name your first mood board').first()).toBeVisible()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-171 Track A (2): the rename dialog selects the whole name every time it opens ───────────────────────────────────────────────────────────────────────
+//
+// `NameDialog` keeps `value` across opens. Its open-effect ran `setValue(initialValue)` and then `select()` on the stale DOM text, and React's re-render assigned `input.value` after it - an IDL value
+// change moves the cursor to the end and unselects (HTML spec), so Rename -> type -> Cancel -> Rename, and renaming a second board after a first, opened with NOTHING selected and typing appended to the old
+// name. The first open (the case above) was fine, which is why the pin that existed never saw it.
+test.describe('T-171 Track A (2): Rename opens with the whole name selected, every time', () => {
+  const selection = (window: Page): Promise<{ tag: string; start: number; end: number; length: number }> =>
+    window.evaluate(() => {
+      const el = document.activeElement as HTMLInputElement | null
+      return { tag: el?.tagName ?? '', start: el?.selectionStart ?? -1, end: el?.selectionEnd ?? -1, length: el?.value.length ?? -1 }
+    })
+  function boards(fx: ReturnType<typeof makeFixture>): void {
+    // "Layouts" is the newer board, so it is the one the store selects by default; "Colors" is older and has to be picked.
+    for (const [id, name, createdAt] of [['colorsboard', 'Colors', 1700000000000], ['layoutsboard', 'Layouts', 1700000100000]] as const) {
+      writeFileSync(path.join(fx.boardsDir, `${id}.json`), JSON.stringify({ id, name, createdAt, items: [] }), 'utf8')
+    }
+  }
+
+  test('Rename, type, Cancel, Rename: the field is selected whole and typing replaces it', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t171-reselect')
+    boards(fx)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      await window.getByRole('button', { name: 'Colors, 0 items' }).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+
+      await openRename.click()
+      await expect(field).toHaveValue('Colors')
+      await window.keyboard.type('zz')
+      await expect(field, 'the typing replaced the name (the board shown at mount was another one)').toHaveValue('zz')
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+      await expect(dialog).toHaveCount(0)
+
+      await openRename.click()
+      await expect(field).toHaveValue('Colors')
+      expect(await selection(window), 'the whole of "Colors" is selected, not a cursor at the end').toEqual({ tag: 'INPUT', start: 0, end: 'Colors'.length, length: 'Colors'.length })
+      await window.keyboard.type('New')
+      await expect(field, 'typing replaces the name').toHaveValue('New')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort()).toEqual(['Layouts', 'New'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('after one board is renamed, Rename on the next board opens with ITS name selected whole', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t171-second')
+    boards(fx)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await moodBoardTab(window).click()
+      const dialog = window.getByRole('dialog')
+      const field = dialog.getByRole('textbox')
+      const openRename = window.getByRole('button', { name: 'Rename', exact: true })
+
+      await window.getByRole('button', { name: 'Colors, 0 items' }).click()
+      await openRename.click()
+      await field.fill('Colors renamed')
+      await field.press('Enter')
+      await expect(dialog).toHaveCount(0)
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir).map((b) => b.name).sort()).toEqual(['Colors renamed', 'Layouts'])
+
+      await window.getByRole('button', { name: 'Layouts, 0 items' }).click()
+      await openRename.click()
+      await expect(field).toHaveValue('Layouts')
+      expect(await selection(window), 'the second board\'s name is selected whole').toEqual({ tag: 'INPUT', start: 0, end: 'Layouts'.length, length: 'Layouts'.length })
+      await window.keyboard.type('Two')
+      await expect(field, 'typing replaces it, it does not append to it').toHaveValue('Two')
+      await dialog.getByRole('button', { name: 'Cancel' }).click()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// T-172 Track B (item 6): the Asset Library card is the shared SpecCard, with its license line.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('T-172 Track B - the Asset Library card is the shared SpecCard', () => {
+  test('every asset card shows its thumbnail (a checkerboard for a clear one, the fill for a filled one), name, description, size and license line', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t172-speccard')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await window.getByRole('button', { name: 'Asset Library', exact: true }).click()
+      await expect(window.locator('button.card').first()).toBeVisible({ timeout: 15_000 })
+
+      const cards = await window.evaluate(() => {
+        return Array.from(document.querySelectorAll('button.card')).map((b) => {
+          const thumb = b.children[0] as HTMLElement
+          return {
+            name: b.children[1]?.textContent ?? '',
+            description: b.children[2]?.textContent ?? '',
+            size: b.children[3]?.textContent ?? '',
+            license: b.children[4]?.textContent ?? '',
+            licenseClass: b.children[4]?.className ?? '',
+            childCount: b.children.length,
+            aspect: thumb.style.aspectRatio,
+            background: thumb.style.background,
+            checker: thumb.style.background.includes('repeating-conic-gradient')
+          }
+        })
+      })
+      expect(cards).toHaveLength(ASSET_CATALOG.length)
+      let checkers = 0
+      for (const a of ASSET_CATALOG) {
+        const c = cards.find((x) => x.name === a.name)
+        expect(c, `a card for ${a.name}`).toBeTruthy()
+        if (!c) continue
+        expect(c.description).toBe(a.description)
+        expect(c.size).toBe(`${a.doc.width} × ${a.doc.height}`)
+        expect(c.license, `${a.name}: the license line`).toBe(a.license)
+        expect(c.licenseClass).toContain('italic')
+        expect(c.childCount, 'thumbnail, name, description, size, license').toBe(5)
+        expect(c.aspect).toBe(`${a.doc.width} / ${a.doc.height}`)
+        expect(c.checker, `${a.name}: checkerboard exactly when the document is transparent`).toBe(a.doc.background === 'transparent')
+        if (c.checker) checkers++
+        else expect(c.background, `${a.name}: a filled document shows its fill`).not.toBe('')
+      }
+      expect(checkers, 'the catalog has transparent assets, so the checkerboard is exercised').toBeGreaterThan(0)
+      expect(checkers).toBeLessThan(ASSET_CATALOG.length)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ---------------------------------------------------------------------------------------------------------------------------------------
+// round 131 Track A (T-182 (1)): a mood-board Undo whose disk write is refused says so and can be pressed again.
+// The refusal is made by the filesystem, with no product hook: once the board is deleted, a NON-EMPTY DIRECTORY is put where its `<id>.json` would be written
+// (the T-178 trick), so main's rename of the tmp over it fails for real. Removing the directory lets the same Undo land.
+// ---------------------------------------------------------------------------------------------------------------------------------------
+test.describe('round 131 Track A (T-182 (1)): a refused mood-board Undo says so and is offered again', () => {
+  test('a directory where the board file goes: Undo raises the toast and stays enabled; clear it and the same Undo brings the board back', async () => {
+    test.setTimeout(180_000)
+    const fx = makeFixture('refs-t182-undo-refused')
+    const seeded = boardOwning('refusedboard', 'Refused board', fx.thumbsDir, [])
+    writeFileSync(path.join(fx.boardsDir, 'refusedboard.json'), JSON.stringify(seeded), 'utf8')
+
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const undo = window.getByRole('button', { name: 'Undo', exact: true })
+      const redo = window.getByRole('button', { name: 'Redo', exact: true })
+      await expect(window.locator('h3.text-lg')).toHaveText('Refused board')
+
+      window.once('dialog', (d) => void d.accept())
+      await window.getByRole('button', { name: 'Delete', exact: true }).click()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([])
+      await expect(undo).toBeEnabled()
+
+      // The filesystem refuses the board's name: a non-empty directory cannot be renamed over by a file.
+      const blocker = path.join(fx.boardsDir, 'refusedboard.json')
+      mkdirSync(blocker)
+      writeFileSync(path.join(blocker, 'keep.txt'), 'x', 'utf8')
+
+      await undo.click()
+      await expect
+        .poll(async () => (await readToastLog(window)).filter((t) => t.startsWith("Couldn't undo that.")).length, { timeout: 15_000 })
+        .toBe(1)
+      // The toast is on screen too, and the step was not spent: Undo is still lit, Redo is not, and the board is still gone.
+      await expect(window.getByText(/^Couldn't undo that\./)).toBeVisible()
+      await expect(window.getByRole('heading', { name: 'Boards (0)' })).toBeVisible()
+      await expect(undo).toBeEnabled()
+      await expect(redo).toBeDisabled()
+
+      // The cause is cleared; the same press now lands, on screen and on disk.
+      rmSync(blocker, { recursive: true, force: true })
+      await undo.click()
+      await expect(window.getByRole('heading', { name: 'Boards (1)' })).toBeVisible()
+      await expect(window.locator('h3.text-lg')).toHaveText('Refused board')
+      await expect.poll(() => readBoardsFromDisk(fx.boardsDir)).toEqual([seeded])
+      expect((await readToastLog(window)).filter((t) => t.startsWith("Couldn't undo that."))).toHaveLength(1)
+      await expect(redo).toBeEnabled()
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-184 (1): the Reference Search tile's hover scrim is `bg-black/60` over the thumbnail, and its source line was `text-ink-dim`: 1.84:1 over a white picture (T-110 (l), sweep 12). It is ink-base now (4.58:1 over white).
+test.describe('T-184 (1): the Reference Search tile\'s source line is ink-base', () => {
+  const PIXEL = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=='
+
+  test('the source line under a hovered tile is drawn in ink-base, as the title above it is', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t184-source')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(async ({ ipcMain }, pixel) => {
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', (_e, query: unknown) => ({
+          query: String(query),
+          provider: 'duckduckgo',
+          results: [{ id: 'r1', thumbnail: pixel, fullUrl: pixel, source: 'example.test', title: 'A picture' }]
+        }))
+      }, PIXEL)
+      const input = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await input.fill('anything')
+      await input.press('Enter')
+      await expect(window.locator('img[alt="A picture"]')).toBeVisible({ timeout: 10_000 })
+      const tile = window.locator('div.group', { has: window.locator('img[alt="A picture"]') })
+      await tile.hover()
+      const source = tile.getByText('example.test', { exact: true })
+      await expect(source).toBeVisible()
+      const rgb = (hex: string): string => `rgb(${[1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16)).join(', ')})`
+      const colour = (el: Locator): Promise<string> => el.evaluate((n) => getComputedStyle(n).color)
+      expect(await colour(source), 'the source line is ink-base').toBe(rgb(INK_BASE))
+      expect(await colour(tile.getByText('A picture', { exact: true })), 'the same ink as the title above it').toBe(rgb(INK_BASE))
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// ── T-190 (5), sent back: a search failure's words can be selected and copied ──────────────────────────────────────────────────────────────────────────────────
+//
+// The error card holds the failure's own sentence ("Search failed. ..."): a person searches it or pastes it into a message. A double-click selects a word, and a right-click pops Copy
+// alone (`Menu.prototype.popup` wrapped in main, as T-166 (4) does). The search answer is a stand-in handler in main, so the card is the panel's real one.
+test.describe('T-190 (5), sent back: the Reference Search error card', () => {
+  test('a word of the failure is selected and its right-click pops Copy alone', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t190-err')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(({ Menu, ipcMain }) => {
+        const g = globalThis as unknown as { __ctxMenus?: Array<{ roles: string[] }> }
+        g.__ctxMenus = []
+        Menu.prototype.popup = function (this: Electron.Menu) {
+          g.__ctxMenus?.push({ roles: this.items.map((i) => (i.type === 'separator' ? 'separator' : String(i.role))) })
+          return this
+        } as typeof Menu.prototype.popup
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', async () => {
+          throw new Error('the stand-in search failed')
+        })
+      })
+      const box = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await box.fill('rejected')
+      await box.press('Enter')
+      const card = window.locator('.border-danger-strong\\/40')
+      await expect(card).toContainText('Search failed.')
+      // A repeat press is swallowed for half a second after a route change (T-153 (3)); the word is measured after that wait, not before it, so
+      // a card still settling cannot move it from under the point (round 139's merged-tree run).
+      await window.waitForTimeout(800)
+      const at = await card.evaluate((node) => {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+        for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+          const i = (t.textContent ?? '').indexOf('Search')
+          if (i < 0) continue
+          const range = document.createRange()
+          range.setStart(t, i)
+          range.setEnd(t, i + 'Search'.length)
+          const r = range.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }
+        return null
+      })
+      if (!at) throw new Error('"Search" is not drawn in the card')
+      await window.mouse.dblclick(at.x, at.y)
+      expect(await window.evaluate(() => (window.getSelection()?.toString() ?? '').trim()), 'a word of the failure is selected (red on the base: empty)').toBe('Search')
+      await window.mouse.click(at.x, at.y, { button: 'right' })
+      await expect
+        .poll(() => app.evaluate(() => (globalThis as unknown as { __ctxMenus: unknown[] }).__ctxMenus.length), { timeout: 10_000 })
+        .toBe(1)
+      expect(await app.evaluate(() => (globalThis as unknown as { __ctxMenus: Array<{ roles: string[] }> }).__ctxMenus[0]?.roles)).toEqual(['copy'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})
+
+// T-191 (3): a tile uses its cached file until its `<img>` fires `onError` (T-79), which a tile already drawn never does for a file it decoded before the clear. "Clear thumbnail
+// cache" marked nothing, so "→ Canvas" on a tile still on screen loaded the deleted file: "That picture didn't load", the same on a retry, and re-saving answered "Already on".
+// After a clear that succeeded every item of every board uses the address it came from at once; a refused clear marks nothing. The source thumbnails here are data: URLs, so the
+// fallback loads without the network.
+test.describe('References - Clear thumbnail cache sends every board\'s tiles to their source (T-191 (3))', () => {
+  const REMOTE = `data:image/png;base64,${PNG_8x6}`
+
+  /** A board of one item: the thumbnail is a data URL (loads offline), the cached copy is a real file in `thumbsDir`. */
+  function boardWithCachedThumb(fx: Fixture, id: string, name: string, title: string, createdAt: number): string {
+    const cachedThumbPath = path.join(fx.thumbsDir, `${id}-thumb.png`)
+    writeFileSync(cachedThumbPath, Buffer.from(PNG_8x6, 'base64'))
+    writeFileSync(
+      path.join(fx.boardsDir, `${id}.json`),
+      JSON.stringify({
+        id,
+        name,
+        createdAt,
+        items: [
+          {
+            id: `${id}item`,
+            collectionId: id,
+            thumbnail: REMOTE,
+            fullUrl: 'https://example.invalid/full.png',
+            source: 'example.invalid',
+            title,
+            cachedThumbPath,
+            addedAt: createdAt
+          }
+        ]
+      }),
+      'utf8'
+    )
+    return cachedThumbPath
+  }
+
+  /** How many pictures the Stream Graphics stage draws, and the decoded width of the first. */
+  function drawnImages(window: Page): Promise<{ count: number; width: number }> {
+    return window.evaluate(() => {
+      const stage = (window as unknown as { __imagiiStage?: unknown }).__imagiiStage as
+        | { children: Array<{ children: Array<{ attrs: { name?: string }; getClassName(): string; image?: () => HTMLImageElement }> }> }
+        | undefined
+      const nodes = (stage?.children[0]?.children ?? []).filter((n) => n.attrs.name !== 'background' && n.getClassName() === 'Image' && n.image)
+      return { count: nodes.length, width: nodes[0] ? (nodes[0].image as () => HTMLImageElement)().naturalWidth : 0 }
+    })
+  }
+
+  /** Records every `src` an `<img>` is given from now on (added with one, or changed), in `window.__t191Srcs`. */
+  async function recordImageSrcs(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const log: string[] = ((window as unknown as { __t191Srcs?: string[] }).__t191Srcs = [])
+      const note = (n: Node): void => {
+        if (n instanceof HTMLImageElement) log.push(`${n.alt}|${n.getAttribute('src')}`)
+        else if (n instanceof Element) n.querySelectorAll('img').forEach((i) => log.push(`${i.alt}|${i.getAttribute('src')}`))
+      }
+      new MutationObserver((records) => {
+        for (const r of records) {
+          if (r.type === 'attributes') note(r.target)
+          else r.addedNodes.forEach(note)
+        }
+      }).observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['src'] })
+    })
+  }
+  const recordedSrcs = (window: Page): Promise<string[]> => window.evaluate(() => (window as unknown as { __t191Srcs: string[] }).__t191Srcs.slice())
+
+  test('after Clear thumbnail cache, "→ Canvas" on a tile already drawn adds the reference layer', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t191-send-after-clear')
+    const cached = boardWithCachedThumb(fx, 'sendboard', 'Send board', 'Sent reference', 1700000000000)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const tile = window.locator('img[alt="Sent reference"]')
+      await expect(tile).toHaveAttribute('src', pathToImagiiFileUrl(cached))
+      await expect.poll(() => tile.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 }).toBe(8)
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+      await expect(tile, 'the tile is on its source address at once (red on the base: still the deleted file)').toHaveAttribute('src', REMOTE)
+
+      await window.getByRole('button', { name: /Canvas/ }).focus()
+      await window.keyboard.press('Enter')
+      await expect(window.locator('h1', { hasText: 'Stream Graphics' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByRole('heading', { name: 'Layers (1)' })).toBeVisible()
+      await expect.poll(async () => (await drawnImages(window)).count, { timeout: 15_000 }).toBe(1)
+      expect((await drawnImages(window)).width).toBe(8)
+      expect((await readToastLog(window)).join(' | '), 'no "didn\'t load" (red on the base: the toast)').not.toContain("That picture didn't load")
+      // The board is untouched: the item still names its (now empty) cache path, which is what a re-download replaces.
+      expect(readBoardsFromDisk(fx.boardsDir)[0]?.items[0]?.cachedThumbPath).toBe(cached)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a clear marks the boards that are not open too: a second board\'s tile never asks for its deleted file', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t191-other-board')
+    boardWithCachedThumb(fx, 'firstboard', 'First board', 'First reference', 1700000000000)
+    const cachedB = boardWithCachedThumb(fx, 'secondboard', 'Second board', 'Second reference', 1700000001000)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      await expect(window.getByRole('heading', { name: 'Boards (2)' })).toBeVisible()
+      await window.getByRole('button', { name: 'First board, 1 item' }).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('First board')
+      await expect(window.locator('img[alt="First reference"]')).toBeVisible()
+
+      await recordImageSrcs(window)
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect.poll(() => readToastLog(window)).toContain('Thumbnail cache cleared')
+      await expect.poll(() => readdirSync(fx.thumbsDir), { timeout: 30_000 }).toEqual([])
+
+      await window.getByRole('button', { name: 'Second board, 1 item' }).click()
+      await expect(window.locator('h3.text-lg')).toHaveText('Second board')
+      const second = window.locator('img[alt="Second reference"]')
+      await expect(second).toHaveAttribute('src', REMOTE)
+      await expect.poll(() => second.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 }).toBe(8)
+      const seen = (await recordedSrcs(window)).filter((s) => s.startsWith('Second reference|'))
+      expect(seen.length, 'the observer saw the tile mount').toBeGreaterThan(0)
+      expect(seen, 'it never asked for the file the clear deleted (red with the update limited to the open board)').not.toContain(`Second reference|${pathToImagiiFileUrl(cachedB)}`)
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+
+  test('a refused clear leaves the tile on its cached file', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('t191-refused-clear')
+    const cached = boardWithCachedThumb(fx, 'keptboard', 'Kept board', 'Kept reference', 1700000000000)
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await installToastLog(window)
+      await moodBoardTab(window).click()
+      const tile = window.locator('img[alt="Kept reference"]')
+      await expect(tile).toHaveAttribute('src', pathToImagiiFileUrl(cached))
+      await expect.poll(() => tile.evaluate((el) => (el as HTMLImageElement).naturalWidth), { timeout: 15_000 }).toBe(8)
+      await app.evaluate(({ ipcMain }) => {
+        ipcMain.removeHandler('moodboard:clearThumbs')
+        ipcMain.handle('moodboard:clearThumbs', () => {
+          throw new Error('the clear was refused by the test')
+        })
+      })
+
+      await window.getByRole('button', { name: 'Clear thumbnail cache' }).click()
+      await expect
+        .poll(async () => (await readToastLog(window)).join(' | '), { timeout: 15_000, intervals: [200] })
+        .toContain("Couldn't clear the thumbnail cache.")
+      expect(readdirSync(fx.thumbsDir), 'the cache is as it was').toEqual(['keptboard-thumb.png'])
+      await expect(tile, 'a refusal marks nothing: the tile is still the cached file (red if the mark runs on a refusal too)').toHaveAttribute('src', pathToImagiiFileUrl(cached))
+    } finally {
       await app.close()
       rmSync(fx.root, { recursive: true, force: true })
     }

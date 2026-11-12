@@ -1,8 +1,9 @@
-import { useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react'
 import { assert } from '@shared/assert'
 import type { TutorialDef, TutorialStep } from '../tutorials/types'
 import { useFocusTrap } from '../hooks/useFocusTrap'
 import { Icon } from './Icon'
+import { isRepeatPress, swallowRepeatClicks } from '../lib/repeatPress'
 import { ACCENT } from '../styles/tokens'
 
 /** A box in viewport coordinates — the thing a step points at. */
@@ -41,6 +42,16 @@ export function sameRect(a: Rect | null, b: Rect | null): boolean {
   )
 }
 
+/**
+ * T-119: how the coachmark brings a step's target into view. `scrollIntoView({ behavior })` is an explicit
+ * option, and CSS `scroll-behavior` - what the `prefers-reduced-motion` block in index.css sets - does not
+ * govern an explicit one, so the page used to glide to every step's target under the OS "Reduce motion"
+ * setting, the thing that setting exists to stop. Reduce motion gets an instant jump.
+ */
+export function tutorialScrollBehavior(reduceMotion: boolean): 'auto' | 'smooth' {
+  return reduceMotion ? 'auto' : 'smooth'
+}
+
 interface TutorialProps {
   def: TutorialDef
   /** Called for every way out — Done, Skip, Esc. They are one act (T-86): the
@@ -72,6 +83,20 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   const nextBtnRef = useRef<HTMLButtonElement | null>(null)
   useEffect(() => {
     nextBtnRef.current?.focus()
+  }, [stepIndex])
+
+  // T-147 (6a): focus stays on the SAME Next button across steps and a dialog's changed name is not re-announced, so steps after the first were
+  // silent to a screen reader. The card is described by its body, and a polite live region says "Step N of M: title. body" when the step CHANGES.
+  // Not on mount: the dialog's own name covers step 1, and a region that arrives with its text is not reliably read (empty until the first change).
+  const bodyId = useId()
+  const [stepAnnouncement, setStepAnnouncement] = useState('')
+  const announcedStep = useRef(stepIndex)
+  useEffect(() => {
+    if (announcedStep.current === stepIndex) return
+    announcedStep.current = stepIndex
+    const s = def.steps[stepIndex]
+    if (s) setStepAnnouncement(`Step ${stepIndex + 1} of ${def.steps.length}: ${s.title}. ${s.body}`)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stepIndex])
 
   // T-34: the geometry places a card of a known size, so measure the real
@@ -129,7 +154,11 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
       if (scrolled) return
       scrolled = true
       try {
-        ;(el as HTMLElement).scrollIntoView({ block: 'center', behavior: 'smooth' })
+        const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches
+        ;(el as HTMLElement).scrollIntoView({
+          block: 'center',
+          behavior: tutorialScrollBehavior(reduceMotion)
+        })
       } catch {
         /* ignore */
       }
@@ -150,15 +179,16 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
       // Escape that would otherwise dismiss the tour behind it.
       if (!isTopmost()) return
       const onButton = e.target instanceof HTMLElement && e.target.tagName === 'BUTTON'
-      const intent = tutorialKeyIntent({ key: e.key, onButton })
+      const intent = tutorialKeyIntent({ key: e.key, onButton, repeat: e.repeat })
       if (intent === 'none') return
       // The key is ours, so the browser must not also run its default action
       // against whatever is focused once the step has changed — see
-      // tutorialKeyIntent for the double-advance that produced (T-34).
+      // tutorialKeyIntent for the double-advance that produced (T-34). A 'hold'
+      // (T-132 (6)) is the same cancel with nothing after it.
       e.preventDefault()
       if (intent === 'close') onClose()
       else if (intent === 'next') next()
-      else prev()
+      else if (intent === 'prev') prev()
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
@@ -173,6 +203,17 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   function prev(): void {
     if (stepIndex > 0) setStepIndex(stepIndex - 1)
   }
+
+  // T-131 (6): the buttons and the scrim step once per DISCRETE press. A double-click on Next advanced twice and skipped a step (steps that
+  // share a target and a placement keep Next where it was, so the second press lands on it), and from the penultimate step the second press
+  // was Done and closed the tour. A repeat is not another decision; the keys (detail 0) are not touched.
+  const stepOnce = (go: () => void) => (e: { detail: number }): void => {
+    if (isRepeatPress(e)) return
+    go()
+  }
+
+  // T-131 (8): and when the tour ends on a double-click of Skip or Done, the second press must not land on the page the card stood over.
+  useEffect(() => swallowRepeatClicks, [])
 
   // Defensive: stepIndex should always be in range, but a malformed
   // tutorial def or stale state could land us out of bounds. Return null
@@ -211,7 +252,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           height="100%"
           fill="rgba(12, 8, 8, 0.78)"
           mask="url(#tutorial-mask)"
-          onClick={() => next()}
+          onClick={stepOnce(next)}
         />
         {targetRect ? (
           <rect
@@ -235,7 +276,11 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
         role="dialog"
         aria-modal="true"
         aria-label={`${def.title} tutorial — step ${stepIndex + 1} of ${def.steps.length}: ${step.title}`}
+        aria-describedby={bodyId}
       >
+        <div className="sr-only" aria-live="polite">
+          {stepAnnouncement}
+        </div>
         <div className="flex items-center justify-between mb-2">
           <span className="text-xs uppercase tracking-wide text-accent font-semibold">
             {def.title} · {stepIndex + 1} of {def.steps.length}
@@ -249,12 +294,12 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           </button>
         </div>
         <h3 className="text-lg font-semibold mb-2">{step.title}</h3>
-        <p className="text-sm text-ink-base leading-relaxed">{step.body}</p>
+        <p id={bodyId} className="text-sm text-ink-base leading-relaxed">{step.body}</p>
         <div className="flex items-center gap-2 mt-5">
           {stepIndex > 0 ? (
             <button
               className="btn-ghost px-3 py-1.5 text-sm inline-flex items-center gap-1.5"
-              onClick={prev}
+              onClick={stepOnce(prev)}
             >
               <Icon name="arrow-left" size={14} /> Back
             </button>
@@ -263,7 +308,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
           <button
             ref={nextBtnRef}
             className="btn-primary px-4 py-1.5 text-sm inline-flex items-center gap-1.5"
-            onClick={next}
+            onClick={stepOnce(next)}
           >
             {stepIndex === def.steps.length - 1 ? (
               <>
@@ -281,7 +326,7 @@ export function Tutorial({ def, onClose }: TutorialProps): JSX.Element | null {
   )
 }
 
-export type TutorialKeyIntent = 'next' | 'prev' | 'close' | 'none'
+export type TutorialKeyIntent = 'next' | 'prev' | 'close' | 'hold' | 'none'
 
 /**
  * What a window-level keydown means for the coachmark.
@@ -298,9 +343,15 @@ export type TutorialKeyIntent = 'next' | 'prev' | 'close' | 'none'
  *
  * Deferring and preventing are mutually exclusive by construction: 'none' is
  * exactly the case the button handles itself.
+ *
+ * T-132 (6): a HELD key is not a series of decisions. Focus is put on Next after every step, so a held Enter's auto-repeats were each a click
+ * on the next step's Next and the tour walked to Done in a second (and Done persists "seen", so it never came back): the mechanism
+ * the Fix wizard guards with `ignoreHeldEnter` (T-120). The same holds for the arrows, which step by the same `next` and `prev`. A repeat of
+ * those keys is 'hold': the caller cancels its default action (the button's click) and does nothing else.
  */
-export function tutorialKeyIntent(e: { key: string; onButton: boolean }): TutorialKeyIntent {
+export function tutorialKeyIntent(e: { key: string; onButton: boolean; repeat?: boolean }): TutorialKeyIntent {
   if (e.key === 'Escape') return 'close'
+  if (e.repeat && (e.key === 'Enter' || e.key === 'ArrowRight' || e.key === 'ArrowLeft')) return 'hold'
   if (e.key === 'ArrowRight') return 'next'
   if (e.key === 'ArrowLeft') return 'prev'
   if (e.key === 'Enter' && !e.onButton) return 'next'

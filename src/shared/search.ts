@@ -39,6 +39,13 @@ export interface MoodBoardItem {
   addedAt: number
 }
 
+/**
+ * The longest a mood board's name may be (T-135 (8)). Main refuses anything longer (it THROWS, `ipc/search.ts`), so the two name boxes - the
+ * "New board name" field and the `NameDialog` of Rename and the first save - take no more than this: a cap the person meets while typing, not
+ * a refusal they meet after pressing the button. One number for the three places.
+ */
+export const MAX_BOARD_NAME = 200
+
 export interface MoodBoardCollection {
   id: string
   name: string

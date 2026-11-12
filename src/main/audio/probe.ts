@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process'
 import { stat } from 'node:fs/promises'
 import { ffprobePath } from '../ffmpeg/paths'
-import type { AudioProbe } from '../../shared/audio'
+import { NO_AUDIO_STREAM_MESSAGE, NoUsableDurationError, type AudioProbe } from '../../shared/audio'
 
 interface FfprobeStream {
   codec_type: 'video' | 'audio' | 'subtitle' | 'data'
@@ -9,6 +9,8 @@ interface FfprobeStream {
   sample_rate?: string
   channels?: number
   bit_rate?: string
+  /** `attached_pic` is 1 for cover art, which ffprobe reports as a video stream. */
+  disposition?: { attached_pic?: number }
 }
 
 interface FfprobeFormat {
@@ -26,7 +28,7 @@ interface FfprobeOutput {
 export async function probeAudio(filePath: string): Promise<AudioProbe> {
   const args = ['-v', 'error', '-print_format', 'json', '-show_format', '-show_streams', filePath]
   const data = await new Promise<FfprobeOutput>((resolve, reject) => {
-    const p = spawn(ffprobePath, args)
+    const p = spawn(ffprobePath, args, { windowsHide: true })
     let out = ''
     let err = ''
     p.stdout.on('data', (b) => (out += String(b)))
@@ -46,7 +48,7 @@ export async function probeAudio(filePath: string): Promise<AudioProbe> {
   })
 
   const audio = data.streams?.find((s) => s.codec_type === 'audio')
-  if (!audio) throw new Error('No audio stream found in file')
+  if (!audio) throw new Error(NO_AUDIO_STREAM_MESSAGE)
 
   // Bug-fix (audit round 7): a malformed or partial ffprobe response can
   // produce an audio stream object with no `duration` field in `format`.
@@ -54,9 +56,14 @@ export async function probeAudio(filePath: string): Promise<AudioProbe> {
   // 0:00 → 0:00 clip ranges downstream instead of a clean error message.
   // Refuse the probe if duration is missing or non-positive — the user
   // will see a clearer "failed to probe" toast.
+  //
+  // T-126 (7): a picture is a video stream that is not cover art. T-127 (10): read BEFORE the duration is judged, because the
+  // streams were read either way, and a refusal for the missing length used to throw that answer away (a durationless audio-only
+  // WebM was then classified by its extension).
+  const hasVideo = (data.streams ?? []).some((s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1)
   const duration = Number(data.format?.duration ?? 0)
   if (!Number.isFinite(duration) || duration <= 0) {
-    throw new Error('ffprobe returned no usable duration for the audio stream')
+    throw new NoUsableDurationError(hasVideo)
   }
 
   let sizeBytes = Number(data.format?.size ?? 0)
@@ -71,6 +78,7 @@ export async function probeAudio(filePath: string): Promise<AudioProbe> {
 
   return {
     duration,
+    hasVideo,
     sampleRate: Number(audio.sample_rate ?? 0),
     channels: audio.channels ?? 0,
     codec: audio.codec_name ?? 'unknown',
@@ -78,4 +86,27 @@ export async function probeAudio(filePath: string): Promise<AudioProbe> {
     format: data.format?.format_name ?? 'unknown',
     sizeBytes
   }
+}
+
+/**
+ * T-161 (3): the channel count ffmpeg will extract from a file, or null when it cannot be read. The MOST channels of any audio stream, which is the stream ffmpeg picks
+ * when it is not told which UNLESS one is flagged default (ffmpeg 7 prefers the default-flagged stream: a mono default plus a stereo track extracts the mono one while this
+ * reads 2; T-110 (ap) holds that mixed-track case). Deliberately not `probeAudio`: that one refuses a file with no LENGTH, and a Record take (MediaRecorder WebM) has none.
+ * Any failure is null - the caller extracts as it always did.
+ */
+export async function probeAudioChannels(filePath: string): Promise<number | null> {
+  const args = ['-v', 'error', '-select_streams', 'a', '-show_entries', 'stream=channels', '-of', 'csv=p=0', filePath]
+  return new Promise<number | null>((resolve) => {
+    let out = ''
+    const p = spawn(ffprobePath, args, { windowsHide: true })
+    p.stdout.on('data', (b) => (out += String(b)))
+    p.on('error', () => resolve(null))
+    p.on('close', (code) => {
+      const counts = out
+        .split(/\r?\n/)
+        .map((l) => Number.parseInt(l.trim(), 10))
+        .filter((n) => Number.isInteger(n) && n > 0)
+      resolve(code === 0 && counts.length > 0 ? Math.max(...counts) : null)
+    })
+  })
 }

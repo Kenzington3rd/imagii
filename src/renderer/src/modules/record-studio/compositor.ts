@@ -11,7 +11,9 @@ import { assert } from '@shared/assert'
  *      need actual HTMLVideoElement instances because canvas.drawImage()
  *      accepts those but not MediaStreams directly.
  *   2. Create a hidden canvas at the screen's natural resolution.
- *   3. Wait for both videos to report `playing` so width/height are real.
+ *   3. Start both videos and wait for each to show its first picture (`play()` on a stream stays pending until the first frame) and
+ *      report its metadata, so width/height are real. Each wait ends at the same 10 s limit: a source that sends no picture rejects
+ *      with a `NoPictureError` naming it, instead of leaving the setup pending.
  *   4. Start a requestAnimationFrame loop drawing screen-full + webcam-corner.
  *   5. canvas.captureStream(fps) returns a MediaStream the recorder uses.
  *
@@ -22,6 +24,22 @@ import { assert } from '@shared/assert'
  *
  * Audio mixing is the caller's concern — this module is video-only.
  */
+
+/**
+ * A source that opened but sent no picture within START_TIMEOUT_MS. The message is a finished sentence (userFacingError keeps one
+ * whole), so a toast can show it as it is. `source` lets the caller tell a camera (the take can go on without it) from the screen
+ * (it cannot).
+ */
+export class NoPictureError extends Error {
+  constructor(readonly source: 'camera' | 'screen') {
+    super(
+      source === 'camera'
+        ? 'The camera sent no picture for 10 seconds.'
+        : 'The screen capture sent no picture for 10 seconds. Pick another screen or window, then press Start again.'
+    )
+    this.name = 'NoPictureError'
+  }
+}
 
 export type WebcamCorner = 'top-left' | 'top-right' | 'bottom-left' | 'bottom-right'
 
@@ -83,6 +101,21 @@ export function computeCornerRect(
 }
 
 /**
+ * Pure geometry (T-153 (10)). The rectangle a `srcW` x `srcH` picture fills when it is fitted INSIDE a `canvasW` x `canvasH` canvas
+ * without distortion (contain): scaled to the smaller of the two ratios, centred, the rest left for black bars. The same aspect is
+ * the full canvas, a wider picture has bars above and below, a taller one beside. A picture with no size yet (a video element
+ * that has not reported one) falls back to the full canvas, which is what the compositor drew before.
+ */
+export function computeContainRect(srcW: number, srcH: number, canvasW: number, canvasH: number): CornerRect {
+  assert(canvasW > 0 && canvasH > 0, 'canvas dimensions must be positive')
+  if (!(srcW > 0 && srcH > 0)) return { x: 0, y: 0, w: canvasW, h: canvasH }
+  const scale = Math.min(canvasW / srcW, canvasH / srcH)
+  const w = Math.min(canvasW, Math.round(srcW * scale))
+  const h = Math.min(canvasH, Math.round(srcH * scale))
+  return { x: Math.round((canvasW - w) / 2), y: Math.round((canvasH - h) / 2), w, h }
+}
+
+/**
  * Drawing helper used inside the rAF loop. Pulled out for clarity + tests.
  * The aspect-preserve logic keeps the webcam from being stretched even
  * when the source camera's native aspect differs from 16:9.
@@ -95,10 +128,17 @@ export function drawFrame(
   canvasW: number,
   canvasH: number
 ): void {
-  // Screen as base, stretched to canvas dimensions. Canvas was sized to
-  // match the screen's natural width/height at start, so this is 1:1.
+  // Screen as base, fitted into the fixed canvas by its size RIGHT NOW (T-153 (10)). The canvas is pinned at the size the screen
+  // had at start; a window source resized mid-take reports a new videoWidth/videoHeight, and a stretch to the canvas recorded the
+  // rest of the take distorted. At the start size this is the full canvas (1:1); otherwise it is centred with black bars.
   if (screen.readyState >= 2) {
-    ctx.drawImage(screen, 0, 0, canvasW, canvasH)
+    const fit = computeContainRect(screen.videoWidth, screen.videoHeight, canvasW, canvasH)
+    if (fit.w < canvasW || fit.h < canvasH) {
+      // Bars: clear what an earlier, larger frame left under them. (A full-canvas draw covers everything, so it needs no clear.)
+      ctx.fillStyle = 'black' // the bars of a video's letterbox, not a palette color
+      ctx.fillRect(0, 0, canvasW, canvasH)
+    }
+    ctx.drawImage(screen, fit.x, fit.y, fit.w, fit.h)
   }
   if (!webcam || webcam.readyState < 2) return
 
@@ -186,7 +226,7 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   let ctx: CanvasRenderingContext2D
   let canvas: HTMLCanvasElement
   try {
-    await Promise.all([screenVid.play(), camVid.play()])
+    await Promise.all([playWithin(screenVid, 'screen'), playWithin(camVid, 'camera')])
     await waitForMetadata(screenVid)
     await waitForMetadata(camVid)
 
@@ -214,9 +254,20 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
 
   let rafHandle: number | null = null
   let running = true
-  function frame(): void {
+  // T-155 (bt) / T-156 (1): `captureStream(fps)` keeps at most `fps` frames a second, but rAF ticks at the display's rate (144 Hz drew four
+  // frames for every one kept). A tick that is not yet due draws nothing and still re-arms. The schedule keeps its PHASE (`nextDueMs` steps
+  // by one interval, it is not re-anchored to the draw), so the average is `fps` on any display at or above it: re-anchoring on the draw
+  // floored the rate to the first refresh tick past the interval (25 fps on 75 or 100 Hz). The 2 ms is the tick's jitter, so a display that
+  // is an exact multiple of `fps` is not read as "too early" every other tick. A tick more than one interval late (a stall, a hidden tab)
+  // resyncs to `now` instead of bursting to catch up.
+  const intervalMs = 1000 / fps
+  let nextDueMs = -Infinity
+  function frame(now: DOMHighResTimeStamp): void {
     if (!running) return
-    drawFrame(ctx, screenVid, camVid, cornerRect, canvasW, canvasH)
+    if (now >= nextDueMs - 2) {
+      drawFrame(ctx, screenVid, camVid, cornerRect, canvasW, canvasH)
+      nextDueMs = now - nextDueMs > intervalMs ? now + intervalMs : nextDueMs + intervalMs
+    }
     rafHandle = requestAnimationFrame(frame)
   }
   rafHandle = requestAnimationFrame(frame)
@@ -237,15 +288,77 @@ export async function startCompositor(opts: CompositorOptions): Promise<Composit
   return { outputStream, stop }
 }
 
-/** Max wait for a video element to report metadata before we give up. */
-const METADATA_TIMEOUT_MS = 10000
+/** Max wait for a source's first picture (`play()`) or its metadata before we give up. */
+const START_TIMEOUT_MS = 10000
+
+/**
+ * `v.play()` on a MediaStream-backed video stays pending until the first frame arrives, so a source that opens and sends nothing
+ * would leave `startCompositor` pending for good. Races it against START_TIMEOUT_MS; on the limit it rejects with a NoPictureError
+ * naming `who`. The timer is cleared on either outcome.
+ */
+function playWithin(v: HTMLVideoElement, who: 'camera' | 'screen', endsOn: MediaStreamTrack[] = []): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const settle = (): void => {
+      clearTimeout(timer)
+      for (const t of endsOn) t.removeEventListener('ended', onEnded)
+    }
+    // T-174 (2): a track in `endsOn` that ends during the wait ends it quietly (resolves): the source went away, it did not "send no picture".
+    const onEnded = (): void => {
+      settle()
+      resolve()
+    }
+    const timer = setTimeout(() => {
+      settle()
+      reject(new NoPictureError(who))
+    }, START_TIMEOUT_MS)
+    for (const t of endsOn) t.addEventListener('ended', onEnded)
+    v.play().then(
+      () => {
+        settle()
+        resolve()
+      },
+      (err: unknown) => {
+        settle()
+        reject(err)
+      }
+    )
+  })
+}
+
+/**
+ * T-174 (2): waits for `stream` to show its first picture, for a take whose picture is the raw screen with no compositor (the webcam off, or the
+ * camera fell back). `startCompositor` runs this same race for the screen, so only a start with the webcam on was protected; with it off a screen that
+ * sent nothing opened a take of nothing. Rejects with `NoPictureError('screen')` at START_TIMEOUT_MS. A hidden muted <video> is appended like the
+ * compositor's (a detached element may not decode) and torn down on every outcome; `teardownOffscreen` pauses it and clears its `srcObject`, and
+ * never stops the stream's tracks, which the recorder still needs. A track that has ended is not waited for: a stream with no live video track resolves
+ * at once, and one that ends during the wait resolves then (the listener is removed on every outcome), so a window that closed while the start was opening
+ * reaches the start's own ended-track check and the take ends at once (T-124 (1)) instead of saying "no picture" about a window that is gone.
+ */
+export async function waitForFirstPicture(stream: MediaStream): Promise<void> {
+  // A track that has ended is not waited for (T-124 (1)): a window that closed while the start was opening sends no picture and never will, and the
+  // start's own check of the track (when the recorder is running) ends the take at once. Only a LIVE track that sends nothing is the 10 s sentence.
+  const tracks = stream.getVideoTracks()
+  if (tracks.every((t) => t.readyState === 'ended')) return
+  const v = document.createElement('video')
+  v.srcObject = stream
+  v.muted = true
+  v.playsInline = true
+  v.style.display = 'none'
+  document.body.appendChild(v)
+  try {
+    await playWithin(v, 'screen', tracks)
+  } finally {
+    teardownOffscreen([v])
+  }
+}
 
 /**
  * Resolves once the video element has reported `loadedmetadata` so
  * videoWidth/videoHeight are real numbers, not zero. Rejects after
- * METADATA_TIMEOUT_MS so a stream that produces a track but never emits
+ * START_TIMEOUT_MS so a stream that produces a track but never emits
  * `loadedmetadata` cannot leave `startCompositor` pending forever — the
  * setup-phase try/catch then runs `teardownOffscreen` and propagates.
+ * (A source that never sends a picture is caught earlier, by `playWithin`.)
  */
 function waitForMetadata(v: HTMLVideoElement): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -267,8 +380,8 @@ function waitForMetadata(v: HTMLVideoElement): Promise<void> {
     }
     timer = setTimeout(() => {
       cleanup()
-      reject(new Error(`video metadata did not arrive within ${METADATA_TIMEOUT_MS} ms`))
-    }, METADATA_TIMEOUT_MS)
+      reject(new Error(`video metadata did not arrive within ${START_TIMEOUT_MS} ms`))
+    }, START_TIMEOUT_MS)
     v.addEventListener('loadedmetadata', onReady)
   })
 }

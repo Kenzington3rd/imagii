@@ -1,10 +1,10 @@
-import { useState } from 'react'
-import type { ChainSpec } from '@shared/audio'
-import { DEFAULT_CHAIN_SPEC } from '@shared/audio'
-import { countOf } from '@shared/plural'
+import { useEffect, useState } from 'react'
 import { HomeLink } from '../../components/HomeLink'
 import { Icon } from '../../components/Icon'
 import { useAudioStore } from './state/audioStore'
+import { useAudioExport } from './state/audioExport'
+import { AudioJobRunning } from './AudioJobRunning'
+import { confirmAudioClose, exportKeepsGoingSentence } from './audioClose'
 import { AudioImporter } from './AudioImporter'
 import { WaveformView } from './WaveformView'
 import { CleanupPanel } from './CleanupPanel'
@@ -18,57 +18,25 @@ import { TutorialButton } from '../../components/TutorialButton'
 import { useTutorial } from '../../hooks/useTutorial'
 import { useUndoRedoHotkeys } from '../../hooks/useUndoRedoHotkeys'
 import { audioTutorial } from '../../tutorials/audioTutorial'
+import { dropSwapPress, recordSwapPress } from '../../lib/swapFocus'
 
-/**
- * T-19: what a Close would throw away. Everything here is unrecoverable —
- * clearSource() resets the chain AND drops the undo history with it.
- */
-export function audioCloseMessage(chain: ChainSpec): string | null {
-  const cuts = chain.cutRegions.length
-  const hasSecondary = chain.secondaryTrack !== null
-  const chainEdited = chainDiffersFromDefault(chain)
-  if (!cuts && !hasSecondary && !chainEdited) return null
-  const parts: string[] = []
-  if (chainEdited) parts.push('your cleanup settings')
-  if (cuts > 0) parts.push(countOf(cuts, 'cut'))
-  if (hasSecondary) parts.push('the second track')
-  // Mirrors VideoStudio.tsx's confirm copy: name what is lost, then say it
-  // is discarded.
-  const list = parts.join(', ')
-  return `Close this audio? ${list.charAt(0).toUpperCase()}${list.slice(1)} will be discarded.`
-}
-
-/** Field-by-field so a re-ordered object literal can't read as "edited". */
-function chainDiffersFromDefault(chain: ChainSpec): boolean {
-  const keys = Object.keys(DEFAULT_CHAIN_SPEC) as Array<keyof ChainSpec>
-  return keys.some((key) => {
-    if (key === 'cutRegions' || key === 'secondaryTrack') return false
-    return JSON.stringify(chain[key]) !== JSON.stringify(DEFAULT_CHAIN_SPEC[key])
-  })
-}
-
-/**
- * T-19: Video Studio has confirmed its Close since round 18; Audio Studio
- * silently discarded chain edits, cut regions, and a loaded second track.
- * Split out from the component so the accept AND decline branches are unit
- * testable in the node-env layer.
- */
-export function confirmAudioClose(chain: ChainSpec, ask: (message: string) => boolean): boolean {
-  const message = audioCloseMessage(chain)
-  if (message === null) return true
-  return ask(message)
-}
+// T-112: the close-confirm helpers live in `audioClose.ts` so Video Studio's "Clean
+// audio" can ask the same question without importing this component. Re-exported here
+// because this is where the Close button, and AudioStudio.test.ts, have always found them.
+export { audioCloseMessage, confirmAudioClose } from './audioClose'
 
 export function AudioStudio(): JSX.Element {
   const source = useAudioStore((s) => s.source)
+  const waveform = useAudioStore((s) => s.waveform)
   const chain = useAudioStore((s) => s.chain)
   const clearSource = useAudioStore((s) => s.clearSource)
   const undo = useAudioStore((s) => s.undo)
   const redo = useAudioStore((s) => s.redo)
   const canUndo = useAudioStore((s) => s.canUndo())
   const canRedo = useAudioStore((s) => s.canRedo())
-  // T-86: held until there is audio loaded — see VideoStudio.
-  const tutorial = useTutorial(audioTutorial, source !== null)
+  // T-86: held until there is audio loaded — see VideoStudio. T-197 (1): loaded means its WAVEFORM has arrived, not that the file opened (the T-132 (11) rule): the
+  // waveform is read after the open (T-129), a sound main refuses opened the tour over the importer and Skip used it up, and the tour's steps point at the waveform.
+  const tutorial = useTutorial(audioTutorial, source !== null && waveform !== null)
   const [showFixWizard, setShowFixWizard] = useState(false)
 
   // B11 fix (round 15): HotkeyOverlay documented Ctrl+Z / Ctrl+Y for Audio
@@ -77,10 +45,19 @@ export function AudioStudio(): JSX.Element {
   // studios.
   useUndoRedoHotkeys(undo, redo)
 
-  function handleClose(): void {
+  // T-192 (3): a pick's record of "this control had focus" lives until the waveform's Play can take it; a studio that goes away first (a trip to Home while the
+  // waveform is read) must not leave it for the next sound that opens.
+  useEffect(() => () => dropSwapPress('audio-play'), [])
+
+  function handleClose(hadFocus: boolean): void {
     // The button only renders with a source loaded, so "a source is loaded"
     // is already true here.
-    if (!confirmAudioClose(chain, (message) => confirm(message))) return
+    // T-146: Close does not stop an export that is running - it takes the Export panel away, and the closed-sound card (`AudioJobRunning`) keeps the Cancel on
+    // screen. The question says so (even with no edits to lose), so a person who closes the sound does not believe they stopped it. Read when Close is pressed.
+    const keepsGoing = exportKeepsGoingSentence(useAudioExport.getState().running)
+    if (!confirmAudioClose(chain, (message) => confirm(message), 'close', keepsGoing)) return
+    // T-192 (3): Close takes itself away with the sound, and focus goes to the importer's Choose file… when Close held it (read at the press, before the confirm).
+    recordSwapPress('audio-choose', hadFocus)
     clearSource()
   }
 
@@ -108,10 +85,10 @@ export function AudioStudio(): JSX.Element {
               >
                 <Icon name="redo" size={15} /> Redo
               </button>
-              <span className="ml-3 text-ink-muted truncate max-w-[40ch]">
+              <span className="ml-3 text-ink-muted truncate max-w-[40ch]" title={source.fileName}>
                 {source.fileName}
               </span>
-              <button className="btn-ghost px-3 py-1.5 ml-2" onClick={handleClose}>
+              <button className="btn-ghost px-3 py-1.5 ml-2" onClick={(e) => handleClose(document.activeElement === e.currentTarget)}>
                 Close
               </button>
             </>
@@ -119,6 +96,8 @@ export function AudioStudio(): JSX.Element {
           <TutorialButton onClick={tutorial.start} />
         </div>
       </header>
+
+      <AudioJobRunning />
 
       {source ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(300px,18%,460px)] gap-5">
@@ -140,6 +119,11 @@ export function AudioStudio(): JSX.Element {
             </div>
           </div>
           <div className="flex flex-col gap-4">
+            {/* T-124 (19): none of the panels below changes what the player plays: the waveform is the original sound, and every
+                setting is applied when you export (BRANDING: a control with no live preview says so in one line). */}
+            <p className="text-xs text-ink-dim">
+              Changes here are applied when you export. The player plays your original sound.
+            </p>
             <div data-tutorial="audio-cleanup">
               <CleanupPanel />
             </div>

@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   captureDocument,
   defaultExportScale,
+  jpgTransparencyNote,
   outputPixels,
   thumbnailSizeNote
 } from './ExportDialog'
@@ -99,6 +100,15 @@ describe('captureDocument', () => {
       if (value === undefined) return this.shown
       this.shown = value
     }
+    // T-112: the canvas draws a hint's words dimmed by giving the node a lower opacity.
+    // The capture must neither depend on it nor change it.
+    dimmed = 1
+    opacityTouched = 0
+    opacity(value?: number): number | void {
+      if (value === undefined) return this.dimmed
+      this.opacityTouched += 1
+      this.dimmed = value
+    }
   }
 
   /**
@@ -119,6 +129,15 @@ describe('captureDocument', () => {
     visible(value?: boolean): boolean | void {
       if (value === undefined) return this.shown
       this.shown = value
+    }
+    // T-112: the canvas draws a hint's words dimmed by giving the node a lower opacity.
+    // The capture must neither depend on it nor change it.
+    dimmed = 1
+    opacityTouched = 0
+    opacity(value?: number): number | void {
+      if (value === undefined) return this.dimmed
+      this.opacityTouched += 1
+      this.dimmed = value
     }
   }
 
@@ -316,6 +335,24 @@ describe('captureDocument', () => {
     expect(alreadyOff.visible()).toBe(false)
   })
 
+  // T-112. A hint's words are drawn at 40% on the canvas so the person can see they are not
+  // in the file. The dim is the node's opacity — a thing the capture could in principle
+  // inherit — so this holds the other half of the promise: the dimmed node is OFF while the
+  // file is drawn (it cannot reach the output at any opacity), and the capture neither reads
+  // nor writes the opacity, so the canvas is exactly as dim afterwards.
+  it('a dimmed hint node is off for the capture and keeps its dim after it', () => {
+    const dimmedHint = new FakeNode('Handle', 'hint')
+    dimmedHint.dimmed = 0.4
+    const other = new FakeNode('Accent bar', '')
+    const f = fakeStage(1, { nodes: [dimmedHint, other] })
+    captureDocument(f.stage, 1280, 720, PNG_OPTS)
+    expect(f.nodesAtCapture).toEqual([['Accent bar']])
+    expect(dimmedHint.visible()).toBe(true)
+    expect(dimmedHint.dimmed).toBe(0.4)
+    expect(dimmedHint.opacityTouched).toBe(0)
+    expect(other.dimmed).toBe(1)
+  })
+
   it('restores the hint nodes even when the capture throws', () => {
     const nodes = hintNodes()
     const f = fakeStage(2.5, {
@@ -367,30 +404,63 @@ describe('outputPixels', () => {
 })
 
 describe('thumbnailSizeNote', () => {
-  const NOTE = "Bigger than YouTube's thumbnail size (1280x720)."
+  const NOTE = "Bigger than YouTube's thumbnail size (1280×720)."
+  const SOLID = { background: '#120c0c' }
+  const CLEAR = { background: 'transparent' }
 
   it('stays quiet at YouTube\'s own size and below', () => {
-    expect(thumbnailSizeNote(1280, 720, false)).toBeNull()
-    expect(thumbnailSizeNote(640, 360, false)).toBeNull()
+    expect(thumbnailSizeNote(1280, 720, SOLID)).toBeNull()
+    expect(thumbnailSizeNote(640, 360, SOLID)).toBeNull()
   })
 
   it('speaks up for a 16:9 export that is bigger', () => {
-    expect(thumbnailSizeNote(2560, 1440, false)).toBe(NOTE)
-    expect(thumbnailSizeNote(3840, 2160, false)).toBe(NOTE)
-    expect(thumbnailSizeNote(1920, 1080, false)).toBe(NOTE)
+    expect(thumbnailSizeNote(2560, 1440, SOLID)).toBe(NOTE)
+    expect(thumbnailSizeNote(3840, 2160, SOLID)).toBe(NOTE)
+    expect(thumbnailSizeNote(1920, 1080, SOLID)).toBe(NOTE)
   })
 
   it('stays quiet for a shape that is not a thumbnail: square, vertical, wide banner', () => {
-    expect(thumbnailSizeNote(1080, 1080, false)).toBeNull()
-    expect(thumbnailSizeNote(1080, 1920, false)).toBeNull()
-    expect(thumbnailSizeNote(2560, 423, false)).toBeNull()
+    expect(thumbnailSizeNote(1080, 1080, SOLID)).toBeNull()
+    expect(thumbnailSizeNote(1080, 1920, SOLID)).toBeNull()
+    expect(thumbnailSizeNote(2560, 423, SOLID)).toBeNull()
   })
 
   it('stays quiet for a transparent document — that is a stream overlay, not a thumbnail', () => {
-    expect(thumbnailSizeNote(1920, 1080, true)).toBeNull()
+    expect(thumbnailSizeNote(1920, 1080, CLEAR)).toBeNull()
   })
 
   it('does not divide by zero', () => {
-    expect(thumbnailSizeNote(0, 0, false)).toBeNull()
+    expect(thumbnailSizeNote(0, 0, SOLID)).toBeNull()
+  })
+})
+
+// T-147 (4): a JPG has no alpha and the capture composites it onto black; the overlay and emote templates are transparent.
+describe('jpgTransparencyNote', () => {
+  const NOTE = 'JPG has no transparency: the clear parts come out black. Choose PNG to keep them clear.'
+
+  it('speaks up for a transparent document exported as JPG', () => {
+    expect(jpgTransparencyNote('jpg', true)).toBe(NOTE)
+  })
+
+  it('stays quiet for PNG, which keeps the clear parts clear', () => {
+    expect(jpgTransparencyNote('png', true)).toBeNull()
+  })
+
+  it('stays quiet for a filled document in either format', () => {
+    expect(jpgTransparencyNote('jpg', false)).toBeNull()
+    expect(jpgTransparencyNote('png', false)).toBeNull()
+  })
+})
+
+describe('thumbnailSizeNote knows channel art (T-172 (3))', () => {
+  const NOTE = "Bigger than YouTube's thumbnail size (1280×720)."
+
+  it('is null for the channel banner: 2560x1440 like a 2K thumbnail, but not one', () => {
+    expect(thumbnailSizeNote(2560, 1440, { background: '#120c0c', kind: 'channel-art' })).toBeNull()
+    expect(thumbnailSizeNote(5120, 2880, { background: '#120c0c', kind: 'channel-art' })).toBeNull()
+  })
+
+  it('still speaks up for the same size without the kind (control)', () => {
+    expect(thumbnailSizeNote(2560, 1440, { background: '#120c0c' })).toBe(NOTE)
   })
 })
