@@ -10205,11 +10205,16 @@ IMG-PREC.
      `swallowRepeatClicks` only on a route change and Modal only on its close. The T-139 (9) class (Welcome's "Let's
      go" double-clicked onto a Home card), at a site no disposition names. Fix: `swallowRepeatClicks()` when Clear,
      Later or Dismiss removes the banner (the window-level rule for "what this covered moves under the pointer"); the
-     buttons' own presses are unchanged.
+     buttons' own presses are unchanged. **Restore too** (measured on the base by the Track C worker): an autosave
+     whose route is Home, or that has none, applies with no route change, so App's swallow never runs, the banner
+     goes, and a double-click at Restore's lower edge opens Video Studio. Restore calls `swallowRepeatClicks()` where
+     `restore()` marks the autosave applied (a failed restore keeps its banner and swallows nothing).
   Covering tests: e2e (home-chrome.spec.ts NEW describe) - with an autosave on disk at launch, a real `dblclick` on
   Clear, on Later and (a damaged autosave) on Dismiss leaves the route on Home and opens no studio (red on the base:
   measure it at the default window; if the second press lands on no card there, find the window size and button
-  where it does, state it, and pin that); a single click on each still does what it did (controls). Docs: IC rows; a
+  where it does, state it, and pin that); a single click on each still does what it did (controls); a double-click on Restore (an autosave on Home) at
+  its lower edge applies the autosave once and leaves the route on Home (red on the base: `#/video`), with a single
+  click as its control. Docs: IC rows; a
   "Dispositions - round 141, Track C" section; LESSONS at the TOP; TESTING paragraph.
 - **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
