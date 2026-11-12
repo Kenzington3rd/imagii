@@ -10531,17 +10531,22 @@ IMG-PREC.
 
 ## T-197 — sweep-84 fix (round 146)
 
-- **Spec:** the eighty-fourth sweep's verified finding (candidate clean pass #1 on d1ffc3e, the T-196 tree; the count
+- **Spec:** the eighty-fourth sweep's verified findings (candidate clean pass #1 on d1ffc3e, the T-196 tree; the count
   stays at 0). Item 1 found by UX reader 1 from source and measured by the expediter in the built app; a sibling of
-  T-132 (11)'s rule (whoever celebrates a file asks `waveformArrived` first) at a site it did not name. Twelve readers
-  clean, no send-backs (design reader 1 and the ffmpeg reader were still out when this ticket was written; a finding
-  from either joins this track). Not counted: a collapsed chat-log disclosure still weighting the highlight scan (the
-  person added the log; collapsing is not removing); 'Could not read file path' beside the app's 'Couldn't' (BRANDING
-  has no contraction rule: polish); the ledgered T-110 letters and earlier dispositions each reader named. One worker
-  track: audio-studio/AudioStudio.tsx (and hooks/useTutorial.ts only if the class check needs it), with a describe in
+  T-132 (11)'s rule (whoever celebrates a file asks `waveformArrived` first) at a site it did not name. Item 2 found
+  and measured by design reader 1 in the built app, confirmed by the expediter in source. Twelve readers clean, no
+  send-backs (the ffmpeg reader was still out when item 2 was added; a finding from it joins Track B). Not counted: a
+  collapsed chat-log disclosure still weighting the highlight scan (the person added the log; collapsing is not
+  removing); 'Could not read file path' beside the app's 'Couldn't' (BRANDING has no contraction rule: polish); the
+  tutorial Skip tooltip's '(Esc)' (a tooltip, not a dismiss label); Record's Start and its locked-cards line below the
+  fold at 1024x640 (the page scrolls); the crash screen's paragraph measure, the Restore button 2 px shorter than its
+  ghost neighbours and LayerPanel's small action hit areas (polish); Modal's sr-only title beside each dialog's
+  visible h2 (a project-wide pattern); the ledgered T-110 letters and earlier dispositions each reader named. Two
+  worker tracks, disjoint product files: A audio-studio/AudioStudio.tsx (and hooks/useTutorial.ts only if the class
+  check needs it); B audio-studio/ExportDialog.tsx and @shared/audio; each with its own describe at the end of
   audio.spec.ts.
 
-  **The one track — the Audio tour waits for the waveform (item 1).**
+  **Track A — the Audio tour waits for the waveform (item 1).**
   1. **[LOW] A first sound that opens and is then refused opens the Audio tour over the importer, and Skip uses it up**
      (audio-studio/AudioStudio.tsx:37 `useTutorial(audioTutorial, source !== null)`: the first-run tour opens when the
      sound OPENS, and its waveform is read after that (T-129), so a sound main refuses (an unknown WAV format) opens the
@@ -10562,6 +10567,30 @@ IMG-PREC.
   first sound opens the tour (green on the base). Unit or wiring pin: the Audio tour's readiness reads the waveform.
   Docs: IC rows for the Audio tour (revised in place), LESSONS at the TOP, TESTING paragraph, STYLE_GUIDE's T-132 (11)
   sentence names the tour.
+
+  **Track B — a finished Audio Export row says what it wrote (item 2).**
+  2. **[LOW] A finished Audio Export row still reads 'Rendering…'** (audio-studio/ExportDialog.tsx:214 labels the row
+     and names its bar with `audioPassLabel(job.pass, job.plan)` whatever the job's end; `useAudioExport.done()`
+     (state/audioExport.ts:55-58) sets only `percent: 100` and `outputPath`, so the pass stays the last one the export
+     reported; measured by design reader 1 in the built app at 1024x640: a finished WAV or MP3 export's row reads
+     'Rendering… [bar] 100% Show in folder', a re-attach ends on 'Step 2 of 2 — attaching to video' at 100%, and a
+     canceled single-pass row reads 'Rendering… 37% Canceled'; the export queue's finished rows carry no pass and show
+     the file they wrote (T-112), and STYLE_GUIDE keeps the audio row after its job for its 'Failed', 'Canceled' and
+     'Show in folder', not for a verb that says it is still working). Fix: the row names a pass as in progress only
+     while the export runs. A finished row (an `outputPath`, no `error`) shows the file it wrote in the pass slot -
+     its `basename`, truncated, the whole path as its `title`, the T-112 rule the queue follows - and its bar is named
+     the same; a stopped row (an `error`) keeps the step it stopped in without the running ellipsis ('Rendering',
+     'Step 2 of 2 — rendering' as today), the word 'Canceled' or 'Failed' beside it unchanged; a running row is
+     unchanged. Class check: every other progress row or card that can outlive its job (the export queue, the
+     single-job panels' rows, `AudioJobRunning`, `VideoJobsRunning`, Record's conversion line, Clip Kit) - name
+     whether a finished or stopped one still shows a running verb, and fix the same way any that does.
+  Covering tests: unit (@shared/audio beside the T-100 cases: the stopped form of a single-pass and a multi-pass
+  label; red on the base); e2e (NEW describe at the end of audio.spec.ts) - a plain WAV export run to its end: the row
+  shows the written file's name with the whole path as its title, the bar is named the same, and the row contains no
+  'Rendering' (red on the base); a re-attach run to its end: no 'Step 2 of 2'; a canceled single-pass export:
+  'Rendering' without '…' beside 'Canceled'; a running export still reads its pass (green on the base). Docs: IC rows
+  for the Audio Export row (revised in place), LESSONS at the TOP, TESTING paragraph, STYLE_GUIDE's T-108 kept-row
+  sentence says what a kept row reads.
 - **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
