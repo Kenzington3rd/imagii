@@ -10117,7 +10117,8 @@ IMG-PREC.
   (UX only); the Fix wizard summary without Close (sweep 75); the ledgered T-110 letters each reader named. Three worker
   tracks, disjoint files: Track A = items 2, 3 and 5 (audio-studio/WaveformView.tsx, AudioStudio.tsx,
   AudioImporter.tsx; video-studio/VideoStudio.tsx, Importer.tsx, Player.tsx; image-studio/ImportPanel.tsx,
-  ImageStudio.tsx, LayerPanel.tsx); Track B = item 1 (image-studio/state/canvasStore.ts and a unit pin); Track C = item
+  ImageStudio.tsx, LayerPanel.tsx); Track B = items 1 and 6 (image-studio/state/canvasStore.ts and a unit pin;
+  main/sidecars/whisperManager.ts and its abort test file); Track C = item
   4 (components/AutosaveRestore.tsx). The ffmpeg reader was still out when this ticket was written; a finding from it
   joins Track C.
 
@@ -10166,7 +10167,7 @@ IMG-PREC.
   Track A" section (both class greps); STYLE_GUIDE's swap rule names the new sites and the module-scope flag; LESSONS at the TOP; TESTING
   paragraph.
 
-  **Track B — the default Ellipse is drawn in the accent (item 1).**
+  **Track B — the default Ellipse is drawn in the accent; a model download ends with one outcome (items 1 and 6).**
   1. **[LOW] Stream Graphics' default Ellipse is drawn in `accent-muted`** (image-studio/state/canvasStore.ts:380-381:
      `fill: withAlpha(ACCENT_MUTED, 0.4)`, `stroke: ACCENT_MUTED`), while T-191 (4)'s DESIGN_GUIDE row says accent-muted
      is "Hover state of accent elements - and nothing else" (1.08:1 from `accent`, which the Rectangle default beside it
@@ -10178,6 +10179,22 @@ IMG-PREC.
   are the accent's (red on the base); unit (NEW describe at the end of tests/unit/designTokensInSync.test.ts) - the
   accent-muted rule above (red on the base: canvasStore.ts). Docs: the DESIGN_GUIDE row stays true (name the pin);
   IC row for the Ellipse tool if it names the colour; LESSONS at the TOP; TESTING paragraph.
+  6. **[LOW] A model download that ends with a write in flight reports a second outcome, and an early Cancel leaves its
+     partial** (main/sidecars/whisperManager.ts `runInstall`; found by the expediter in this round, when T-191 (6)'s
+     abort file failed 5 of 30 runs on the T-191 tree under four CPU burners). (a) Every path that ends the transfer
+     destroys the write stream, and Node emits 'error' (ERR_STREAM_DESTROYED) when a destroy lands while a write is in
+     flight - nearly always, on a 141 MB download - so the stream's listener reported a second "failed" after the real
+     one, or settled a Cancel with the raw Node text instead of "Download canceled". (b) A Cancel in the first moments
+     of a download, while the stream's open() is still pending, found no partial to remove and settled; the open then
+     created the file, which stayed. Fix: the stream's 'error' listener returns when `me.cancelled || settled` (the
+     install's own destroy); `cleanupPartial` waits for the stream's 'close' before it removes the partial (which also
+     makes its Windows EBUSY comment true). In the test file the fake request emits nothing after 'abort' or 'error', as
+     Electron's ClientRequest does (probed in sweep 79), and every wait is on a named condition, never a clock.
+  Covering tests: unit (NEW describe at the end of whisperInstallAbort.test.ts) - Cancel, a response error and
+  (control) ENOSPC with a 1 MiB write in flight each report exactly one outcome with their own text; a Cancel whose
+  partial removal is held until the stream's own error has fired is still exactly "Download canceled" (kills a
+  `settled`-only guard); a Cancel while the stream's open is held leaves no partial (red on the base). Expediter bar:
+  no failure in 30 runs of the file under four CPU burners. Docs: LESSONS at the TOP; TESTING paragraph.
   **Track C — the autosave banner's buttons drop a double-click's second press (item 4).**
   4. **[LOW] A double-click on the autosave banner's Clear opens the studio under it** (components/AutosaveRestore.tsx:
      188-213 `clearAutosave`, the Clear, Later and Dismiss buttons at :237-250 and :270-283; nothing there calls
