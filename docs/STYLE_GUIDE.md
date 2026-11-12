@@ -506,7 +506,10 @@ Repeated UI is a component, not copy-paste:
   Captions panel after a transcription or a burn-in, in the `finally` that already resets `running`. A finished job's
   "Done 100%" row with nothing to press is a row for a job that no longer exists; the toast says it finished. (An export
   QUEUE, and the audio export row, keep their finished rows on purpose: they carry "Failed", "Canceled" and "Show in
-  folder".)
+  folder". A kept row never names a pass as in progress (T-197 (2)): the audio export's finished row shows the file it
+  wrote in the pass slot - `basename`, truncated, the whole path as its `title`, its bar named the same, as the queue's
+  rows do (T-112) - and a stopped row keeps the step it stopped in without the running ellipsis ("Rendering", "Step 2 of
+  2 — rendering"), `audioPassLabel(pass, plan, true)`, beside "Failed" or "Canceled".)
 - **A badge that asks main while a control is being dragged waits for the control to stop (T-115).**
   The hook badge (`HookIndicator`) asks `video:analyzeClipHook` for the clip's EXACT start and window, once
   neither has changed for `HOOK_DEBOUNCE_MS` (250 ms, `@shared/highlights`): every change cancels the pending ask
@@ -1165,7 +1168,9 @@ If you write the same markup a third time, extract it.
   asks `waveformRefused(source)` as well, because `waveformArrived` is false for a Close and for another file opened as well as for a
   refusal; a project open whose sound is refused keeps its part as a load that threw does (T-174 (4)). T-196 (1): the give-back
   of a kept part follows the same read, so a part given back to its file is kept again when that file is refused, for as many
-  tries as it takes. Play is `disabled:opacity-50` while the waveform is drawn.
+  tries as it takes. T-197 (1): the Audio tour asks too: `AudioStudio` passes `useTutorial` `source !== null && waveform !== null`, so the first-run
+  tour opens when the waveform has ARRIVED, not when the file opens, and a sound main refuses never opens it or uses it up. Play is
+  `disabled:opacity-50` while the waveform is drawn.
 - **What the Player owns, the Timeline asks for through the store (T-120, T-121).** The Player registers a `PlayerTransport` (`readTime`, the
   element's exact `currentTime`; `togglePlay`, its own play / pause) with `registerTransport` while it is mounted. The Timeline's Space
   calls `togglePlay`, and its arrows, `,` / `.` and I / O read `playheadNow(state)`: the element's time, else the store's `currentTime`, which is

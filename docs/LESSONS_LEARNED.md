@@ -14,6 +14,34 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-12 - T-197 (round 146): whoever celebrates a file asks `waveformArrived` first - and a tour is a celebration too
+
+The eighty-fourth sweep's item 1: a sibling of T-132 (11)'s rule at a site it did not name.
+
+**Bug** - On a first run (tutorialSeen.audio unset), a first sound that OPENS and is then refused (a WAV with an unknown format tag) opened the Audio tour over the importer: 182 ms after the drop the dialog "Audio Studio tutorial - step 1 of 8: Welcome to Audio Studio" stood there, still there 3 s later, its steps pointing at a waveform, Cleanup, Levels and Export that were gone. Skip wrote tutorialSeen.audio, so the readable file opened afterwards brought no tour.
+
+**Root cause** - `AudioStudio` passed `useTutorial(audioTutorial, source !== null)`. `loadSource` resolves once the file is OPEN and its waveform is read after that (T-129), so "a source" is not "main could read it"; the refusal then emptied the studio under a tour that nothing closes when the studio lets go.
+
+**Fix** - The readiness is `source !== null && waveform !== null`: the tour opens when the waveform has arrived. Nothing else changed; the '?' button still opens it on demand. Class check: Video (`source`, no post-open refusal), Stream Graphics (the tour is a dialog claim, so Delete and Ctrl+Z stand down behind it) and References (no gate) cannot let go of what made them ready while the tour is open.
+
+**Test** - audio.spec.ts "T-197 (1)" (a sampler in the page asks every 100 ms from the drop to 3 s after the refusal whether the tour's dialog is on screen; the flag is still unused on disk; the readable file then opens step 1; control: a readable first sound) and interactionWiring.test.ts "T-197 (1)".
+
+**Lesson** - The question "did the thing I am about to react to actually arrive?" belongs to every reaction to an open, not only the toast and the Recent list: a tour, a flag that a Skip spends, a first-run hint. Any one-shot, first-visit state spent on a file's OPEN is spent on a file that may be refused a moment later; gate it on the read. And when an e2e asserts that something never appears, sample it from inside the page: a single look at the end cannot tell "never" from "came and went".
+
+---
+
+## 2026-11-12 - T-197 (2) (round 146): a row that outlives its job must not keep the job's running verb
+
+The eighty-fourth sweep's item 2, found by design reader 1 in the built app at 1024x640.
+
+- **Bug.** A finished WAV or MP3 export's row read "Rendering… [bar] 100% Show in folder"; a re-attach ended on "Step 2 of 2 — attaching to video" at 100%; a canceled single-pass row read "Rendering… 37% Canceled". The row is kept on purpose after its job (it carries "Failed", "Canceled" and "Show in folder"), but it still said the work was going on.
+- **Root cause.** `ExportDialog` labelled the row, and named its progressbar, with `audioPassLabel(job.pass, job.plan)` whatever the job's end. `useAudioExport.done()` sets only `percent: 100` and `outputPath`, so the pass stayed the last one the export reported, and the label is the RUNNING form (a verb with a trailing ellipsis). The export queue's rows never had the problem because they carry no pass and show the file they wrote (T-112).
+- **Fix.** The row's end is read from what the store already holds, with no store change. A finished row (an `outputPath`, no `error`) shows `basename(outputPath)` in the pass slot, truncated, with the whole path as its `title`, and its bar is named the same; a stopped row (an `error`) keeps its step through `audioPassLabel(pass, plan, true)`, which drops the single-pass ellipsis; a running row is unchanged. One computed label feeds both the visible slot and the bar's name, so they cannot drift.
+- **Test.** audio.test.ts "audioPassLabel - a stopped row names its step without the running ellipsis (T-197 (2))"; audio.spec.ts "T-197 (2): a finished or stopped Audio Export row does not say it is still working" (a WAV run to its end, a re-attach run to its end, a stopped single-pass export with a running control); the T-100 re-attach case's last assertion moved from the pass to the file; interactionWiring.test.ts's slot-class pin moved to `truncate`.
+- **Lesson.** A label that names a verb is a statement about the present. When a row is kept after its job ends, every word on it has to be true of the job's END state: derive the label from the end (a file name, "Canceled", "Failed"), not from the last progress event. Review a kept row by asking of each word whether it is still true after the job is gone.
+
+---
+
 ## 2026-11-12 - T-196 (round 145): a kept record is let go when its file is READ, not when the file is OPENED - and a fix for a retry has to survive the retry
 
 The eighty-third sweep's item 1, a new consequence of the round 144 fix (T-195 (2)).

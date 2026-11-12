@@ -327,15 +327,20 @@ export function audioPassPlan(opts: {
  * steps ("Step 2 of 2 — rendering"), which makes the restart read as the next
  * step starting. A single-pass export has no steps to count and just says
  * "Rendering…".
+ *
+ * T-197 (2): `stopped` is for the row of an export that ended without a file (a Failed or Canceled row): the ellipsis says "still going", so the
+ * single-pass form drops it ("Rendering", "Attaching to video"). The multi-pass form has none, so it is the same either way. A running caller
+ * passes nothing.
  */
 export function audioPassLabel(
   pass: AudioJobProgress['pass'],
-  plan: ReadonlyArray<AudioJobProgress['pass']>
+  plan: ReadonlyArray<AudioJobProgress['pass']>,
+  stopped = false
 ): string {
   const step = plan.indexOf(pass) + 1
   if (plan.length < 2 || step === 0) {
     const word = AUDIO_PASS_WORDS[pass]
-    return `${word.charAt(0).toUpperCase()}${word.slice(1)}…`
+    return `${word.charAt(0).toUpperCase()}${word.slice(1)}${stopped ? '' : '…'}`
   }
   return `Step ${step} of ${plan.length} — ${AUDIO_PASS_WORDS[pass]}`
 }

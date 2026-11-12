@@ -10534,17 +10534,18 @@ IMG-PREC.
 - **Spec:** the eighty-fourth sweep's verified findings (candidate clean pass #1 on d1ffc3e, the T-196 tree; the count
   stays at 0). Item 1 found by UX reader 1 from source and measured by the expediter in the built app; a sibling of
   T-132 (11)'s rule (whoever celebrates a file asks `waveformArrived` first) at a site it did not name. Item 2 found
-  and measured by design reader 1 in the built app, confirmed by the expediter in source. Twelve readers clean, no
-  send-backs (the ffmpeg reader was still out when item 2 was added; a finding from it joins Track B). Not counted: a
-  collapsed chat-log disclosure still weighting the highlight scan (the person added the log; collapsing is not
-  removing); 'Could not read file path' beside the app's 'Couldn't' (BRANDING has no contraction rule: polish); the
-  tutorial Skip tooltip's '(Esc)' (a tooltip, not a dismiss label); Record's Start and its locked-cards line below the
-  fold at 1024x640 (the page scrolls); the crash screen's paragraph measure, the Restore button 2 px shorter than its
-  ghost neighbours and LayerPanel's small action hit areas (polish); Modal's sr-only title beside each dialog's
-  visible h2 (a project-wide pattern); the ledgered T-110 letters and earlier dispositions each reader named. Two
-  worker tracks, disjoint product files: A audio-studio/AudioStudio.tsx (and hooks/useTutorial.ts only if the class
-  check needs it); B audio-studio/ExportDialog.tsx and @shared/audio; each with its own describe at the end of
-  audio.spec.ts.
+  and measured by design reader 1 in the built app, confirmed by the expediter in source. Thirteen readers clean (the
+  ffmpeg reader handed back clean after item 2 was added), no send-backs. Not counted: a collapsed chat-log disclosure
+  still weighting the highlight scan (the person added the log; collapsing is not removing); 'Could not read file
+  path' beside the app's 'Couldn't' (BRANDING has no contraction rule: polish); the tutorial Skip tooltip's '(Esc)' (a
+  tooltip, not a dismiss label); Record's Start and its locked-cards line below the fold at 1024x640 (the page
+  scrolls); the crash screen's paragraph measure, the Restore button 2 px shorter than its ghost neighbours and
+  LayerPanel's small action hit areas (polish); Modal's sr-only title beside each dialog's visible h2 (a project-wide
+  pattern); a re-attach with no cuts stream-copying a 4:4:4 picture as it was (the promised untouched-picture path:
+  the panel re-encodes only when parts were removed); a GIF from an odd-height source probing sar=63:64 (GIF carries
+  no honoured pixel aspect); the ledgered T-110 letters and earlier dispositions each reader named. Two worker tracks,
+  disjoint product files: A audio-studio/AudioStudio.tsx (and hooks/useTutorial.ts only if the class check needs it);
+  B audio-studio/ExportDialog.tsx and @shared/audio; each with its own describe at the end of audio.spec.ts.
 
   **Track A — the Audio tour waits for the waveform (item 1).**
   1. **[LOW] A first sound that opens and is then refused opens the Audio tour over the importer, and Skip uses it up**
@@ -10596,7 +10597,7 @@ IMG-PREC.
   standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
   track moves and update each pin in place; the expediter runs the full suite and the real-media suite on the merged
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 146)
+- **Status:** done (round 146 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -11174,6 +11175,50 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 146 — T-197, the two counted items of sweep 84, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones
+(Track A from 1433a3a, Track B from 331e911, the ticket's second item
+added after the first was dispatched), disjoint product files. Track A
+(item 1): the Audio tour is ready when the sound's waveform has
+ARRIVED (`useTutorial(audioTutorial, source !== null && waveform !==
+null)`), not when the file opens, so a first sound main refuses after
+it opens (an unknown WAV format) no longer opens the first-run tour
+over the importer, and Skip no longer uses it up; the first readable
+sound opens it at step 1, over a page that has every target; the '?'
+button still opens it at any time. Class check: Video (no post-open
+refusal clears its source), Stream Graphics (the tour is a dialog
+claim: Delete, Backspace and Ctrl+Z stand down behind it, the scrim
+covers every layer control) and References (no gate) cannot let go of
+what made them ready while the tour is open; unchanged. Track B (item
+2): the Audio Export row names a pass as in progress only while the
+export runs. A finished row shows the file it wrote in the pass slot
+(its name, truncated, the whole path as its title; its progressbar
+named the same), the export queue's rule (T-112); a stopped
+single-pass row keeps its step without the running ellipsis
+('Rendering' beside 'Canceled' or 'Failed', `audioPassLabel(pass,
+plan, true)`); a multi-pass row was already 'Step 2 of 2 — rendering'.
+One label feeds the slot and the bar. Class check: the queue, the
+single-job panels' rows, `AudioJobRunning`, `VideoJobsRunning`,
+Record's conversion card and Clip Kit show no running verb after their
+job; unchanged. Pins moved in place: the IC native-dialog cite for
+Audio's Close (AudioStudio.tsx :56 to :58), the T-149 slot-class
+wiring pin (`truncate`), the T-90 re-attach case's last assertion (the
+file it wrote). Deviations: none. Survivors disclosed, both
+equivalent: Track A's readiness as `waveform !== null` alone (killed
+by the wiring pin; at e2e no state holds a waveform without its
+source), Track B's finished test as `outputPath` alone (a job never
+carries both an `outputPath` and an `error`). Expediter: independent
+mutations, both killed - `useTutorial`'s effect run only on its
+definition (`[def]`, so a studio that becomes ready after it mounts
+never opens its tour: both Track A cases), and the Export row's
+progressbar named by the running pass while the slot shows the file
+(all three Track B cases). Ledger: worker mutation rows 5 of 6 and 5
+of 6 killed (the one survivor in each the equivalent named above),
+every restore identical. Gates on the merged tree: npm run verify
+twice (216 files, 7229 tests), test:media (571 cases: 543 run, 28
+skipped), and the full Playwright suite with the default TMPDIR (989
+tests, 65.2 min: 989 passed).
 
 Round 145 — T-196, the two counted items of sweep 83, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones

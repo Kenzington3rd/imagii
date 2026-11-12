@@ -27,14 +27,16 @@ export { audioCloseMessage, confirmAudioClose } from './audioClose'
 
 export function AudioStudio(): JSX.Element {
   const source = useAudioStore((s) => s.source)
+  const waveform = useAudioStore((s) => s.waveform)
   const chain = useAudioStore((s) => s.chain)
   const clearSource = useAudioStore((s) => s.clearSource)
   const undo = useAudioStore((s) => s.undo)
   const redo = useAudioStore((s) => s.redo)
   const canUndo = useAudioStore((s) => s.canUndo())
   const canRedo = useAudioStore((s) => s.canRedo())
-  // T-86: held until there is audio loaded — see VideoStudio.
-  const tutorial = useTutorial(audioTutorial, source !== null)
+  // T-86: held until there is audio loaded — see VideoStudio. T-197 (1): loaded means its WAVEFORM has arrived, not that the file opened (the T-132 (11) rule): the
+  // waveform is read after the open (T-129), a sound main refuses opened the tour over the importer and Skip used it up, and the tour's steps point at the waveform.
+  const tutorial = useTutorial(audioTutorial, source !== null && waveform !== null)
   const [showFixWizard, setShowFixWizard] = useState(false)
 
   // B11 fix (round 15): HotkeyOverlay documented Ctrl+Z / Ctrl+Y for Audio

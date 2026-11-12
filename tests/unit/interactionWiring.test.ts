@@ -3742,7 +3742,8 @@ describe('T-149 - a double-click on Save is one save; a press that moves focus e
 
   it('the Export row drops the fixed pass slot only while another sound\'s name is drawn, and keeps the pass label on one line', () => {
     const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
-    expect(dialog).toContain("shrink-0 whitespace-nowrap ${otherSoundLabel ? '' : 'w-56'}")
+    // T-197 (2): `truncate` (nowrap plus the ellipsis) so a finished row's long file name is cut inside the same slot.
+    expect(dialog).toContain("shrink-0 truncate ${otherSoundLabel ? '' : 'w-56'}")
     expect(dialog).toMatch(/<span className="min-w-0 flex-1 truncate text-xs" title=\{otherSoundLabel\}>/)
     expect(read('modules/audio-studio/AudioJobRunning.tsx')).not.toContain('Export - voice.wav')
   })
@@ -5567,5 +5568,21 @@ describe('T-195 (1) - Export\'s Re-attach checkbox comes before the controls its
     const toolbar = strip(read('modules/image-studio/Toolbar.tsx'))
     expect(toolbar).toMatch(/import \{ swallowRepeatClicks \} from '\.\.\/\.\.\/lib\/repeatPress'/)
     expect(toolbar).toMatch(/onClick=\{\(\) => \{\s*swallowRepeatClicks\(\)\s*setAdvancedOpen\(true\)\s*\}\}/)
+  })
+})
+
+// T-197 (1): the Audio tour is ready when the sound's waveform has ARRIVED, not when the file opens (T-132 (11)'s rule at a site it did not name). Behavior: audio.spec.ts
+// "T-197 (1)" (the refused first sound opens no tour and leaves it unused, sampled every 100 ms; the readable one opens it at step 1). This is a string-shape pin and says so.
+describe('T-197 (1) - the Audio tour reads the waveform before it opens', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const studio = strip(read('modules/audio-studio/AudioStudio.tsx'))
+
+  it('the readiness is "a source AND its waveform", read from the audio store', () => {
+    expect(studio).toMatch(/const waveform = useAudioStore\(\(s\) => s\.waveform\)/)
+    expect(studio).toMatch(/useTutorial\(audioTutorial, source !== null && waveform !== null\)/)
+  })
+
+  it('and it is the only useTutorial call in the file', () => {
+    expect(studio.match(/useTutorial\(/g)).toHaveLength(1)
   })
 })

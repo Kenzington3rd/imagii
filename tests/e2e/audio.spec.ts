@@ -3189,9 +3189,10 @@ test.describe('imagii Audio Studio', () => {
       // the 3 s source by about the 0.6 s that was marked.
       expect(facts.duration).toBeLessThan(2.9)
       expect(facts.duration).toBeGreaterThan(1.8)
-      // T-100: a re-attach is two passes (render, then put it on the picture),
-      // and the row says which one it ended on.
-      await expect(exportPanel).toContainText('Step 2 of 2 — attaching to video')
+      // T-100: a re-attach is two passes (render, then put it on the picture), and the row said which one it ended on.
+      // T-197 (2): once it has ended the row names the file it wrote, not the pass it last reported.
+      await expect(exportPanel).toContainText('e2e-clip-cleaned.mp4')
+      await expect(exportPanel).not.toContainText('Step 2 of 2')
     } finally {
       await closeStudio(studio)
     }
@@ -7331,6 +7332,214 @@ test.describe('T-195 (1): Re-attach to video stays where it is when it is untick
       for (const p of log) expect(p.what, `${p.type} (detail ${p.detail}) is on the label`).toMatch(/in "Re-attach to"/)
       const done = await rowBoxes(window)
       expect(Math.abs(done.box.x - before.box.x), 'the box is where it was').toBeLessThanOrEqual(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// T-197 (1): the Audio tour opens when the sound's WAVEFORM has arrived, not when the file opens. The waveform is read after the open (T-129), so a first sound main
+// refuses (the unknown-format WAV) opened the tour over the importer, it stood there with steps pointing at a waveform, Cleanup, Levels and Export that were gone, and Skip
+// used the first-run tour up. A sampler in the page asks every 100 ms whether the tour's dialog is on screen, so "never at any moment" is read and not inferred from the end.
+test.describe('T-197 (1): the Audio tour waits for the waveform', () => {
+  const FIRST_RUN = { tutorialSeen: { video: true, audio: false, image: true, ai: true } }
+  const REFUSED = "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as a standard PCM WAV or MP3 and try again."
+
+  const tourSeenOnDisk = (userDataDir: string): boolean | undefined =>
+    (JSON.parse(readFileSync(path.join(userDataDir, 'config.json'), 'utf8')) as { tutorialSeen?: { audio?: boolean } }).tutorialSeen?.audio
+
+  /** Every 100 ms: is a dialog named "Audio Studio tutorial ..." in the page? `samples` proves the sampler ran; `seen` holds each name it found. */
+  async function sampleTour(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __tour: { samples: number; seen: string[] } }
+      w.__tour = { samples: 0, seen: [] }
+      setInterval(() => {
+        w.__tour.samples += 1
+        for (const d of document.querySelectorAll('[role="dialog"]')) {
+          const name = d.getAttribute('aria-label') ?? ''
+          if (name.startsWith('Audio Studio tutorial')) w.__tour.seen.push(name)
+        }
+      }, 100)
+    })
+  }
+  const readTour = (window: Page): Promise<{ samples: number; seen: string[] }> =>
+    window.evaluate(() => (window as unknown as { __tour: { samples: number; seen: string[] } }).__tour)
+
+  const tourDialog = (window: Page) => window.getByRole('dialog', { name: /Audio Studio tutorial.*step 1 of 8: Welcome to Audio Studio/ })
+
+  test('a first sound that is refused opens no tour and leaves it unused; the first readable sound then opens it at step 1', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t197-refused', FIRST_RUN)
+    const { window } = studio
+    try {
+      await sampleTour(window)
+      const odd = path.join(studio.root, 'source', 'unknown-format.wav')
+      writeFileSync(odd, unknownFormatWav())
+      await dropOnImporter(window, odd, 'unknown-format.wav')
+      await expect.poll(() => readToastLog(window), { timeout: 30_000, intervals: [100] }).toContain(REFUSED)
+      await window.waitForTimeout(3000)
+      await expect(window.getByText('Drop audio or video here'), 'the importer is back').toBeVisible()
+      const tour = await readTour(window)
+      expect(tour.samples, 'the sampler ran the whole time (every 100 ms for the open, the refusal and 3 s after it)').toBeGreaterThan(30)
+      expect(tour.seen, `no tour dialog at any sample: ${JSON.stringify(tour.seen.slice(0, 2))}`).toEqual([])
+      expect(tourSeenOnDisk(studio.userDataDir), 'the first-run tour is still unused on disk').not.toBe(true)
+
+      // The way on: a readable sound is the first one that opens the tour, at its first step, over a page that has every target.
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect(tourDialog(window)).toBeVisible({ timeout: 30_000 })
+      await expect(window.locator(WAVEFORM)).toHaveCount(1)
+      await expect(playButton(window), 'its waveform has arrived under the tour').toBeEnabled()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('control: a readable first sound opens the tour at step 1, and Skip uses it up', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t197-control', FIRST_RUN)
+    const { window } = studio
+    try {
+      await expect(window.getByRole('dialog', { name: /Audio Studio tutorial/ }), 'an empty studio shows no tour').toHaveCount(0)
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect(tourDialog(window)).toBeVisible({ timeout: 30_000 })
+      await window.getByRole('button', { name: 'Skip', exact: true }).click()
+      await expect(window.getByRole('dialog', { name: /Audio Studio tutorial/ })).toHaveCount(0)
+      await expect.poll(() => tourSeenOnDisk(studio.userDataDir), { timeout: 10_000, intervals: [200] }).toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-197 (2), round 146 Track B: a finished Audio Export row said "Rendering…" (the pass the export last reported) beside "100%" and "Show in folder"; a re-attach ended on
+// "Step 2 of 2 — attaching to video"; a canceled single-pass row read "Rendering… 37% Canceled". A pass is named as in progress only while the export runs: a finished
+// row shows the file it wrote (the export queue's rule, T-112), a stopped row keeps its step without the running ellipsis.
+test.describe('T-197 (2): a finished or stopped Audio Export row does not say it is still working', () => {
+  const ROW = '.flex.items-center.gap-3.text-sm'
+
+  /** audio:export replaced by one the test holds (as T-100's row test does), so the row is looked at in the state the test chooses. */
+  async function holdExport(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ ipcMain }) => {
+      const g = globalThis as unknown as { __t197Job: { jobId: string; stop: (m: string) => void } }
+      g.__t197Job = { jobId: '', stop: () => undefined }
+      ipcMain.removeHandler('audio:export')
+      ipcMain.handle(
+        'audio:export',
+        (_e, spec: { jobId: string }) =>
+          new Promise((_resolve, reject) => {
+            g.__t197Job = { jobId: spec.jobId, stop: (m) => reject(new Error(m)) }
+          })
+      )
+    })
+  }
+  const heldJobId = (app: ElectronApplication): Promise<string> => app.evaluate(() => (globalThis as unknown as { __t197Job: { jobId: string } }).__t197Job.jobId)
+  const progress = (app: ElectronApplication, percent: number): Promise<void> =>
+    app.evaluate(({ BrowserWindow }, pct) => {
+      const g = globalThis as unknown as { __t197Job: { jobId: string } }
+      BrowserWindow.getAllWindows()[0]?.webContents.send('audio:progress', { jobId: g.__t197Job.jobId, pass: 'render', percent: pct })
+    }, percent)
+  const stopHeld = (app: ElectronApplication, message: string): Promise<void> =>
+    app.evaluate((_e, m) => {
+      ;(globalThis as unknown as { __t197Job: { stop: (m: string) => void } }).__t197Job.stop(m)
+    }, message)
+
+  test('a plain WAV export run to its end: the row shows the file it wrote (the whole path as its title), the bar is named the same, and nothing says Rendering', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t197-finished')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const exportPanel = window.locator(EXPORT)
+      await exportPanel.getByRole('combobox').first().selectOption('wav')
+      const out = path.join(studio.root, 'written-by-t197.wav')
+      await stubSaveDialog(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain('Cleaned audio exported Show in folder')
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
+      expect(existsSync(out), 'the file the row names exists').toBe(true)
+
+      const row = exportPanel.locator(ROW)
+      await expect(row.getByRole('button', { name: 'Show in folder' })).toBeVisible()
+      await expect(row).toContainText('written-by-t197.wav')
+      await expect(row.getByText('written-by-t197.wav', { exact: true }), 'the name sits in the pass slot').toHaveAttribute('title', out)
+      await expect(exportPanel.getByRole('progressbar')).toHaveAccessibleName('written-by-t197.wav')
+      await expect(row).toContainText('100%')
+      await expect(row, 'a finished row names no pass').not.toContainText(/Rendering|Step \d of \d|measuring|attaching/i)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a re-attach run to its end: the row shows the .mp4 it wrote, never "Step 2 of 2"', async () => {
+    test.setTimeout(240_000)
+    const studio = await openStudio('t197-reattach')
+    const { app, window } = studio
+    try {
+      const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+      await makeFixtureMp4(video)
+      await dropOnImporter(window, video, 'e2e-clip.mp4')
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      const exportPanel = window.locator(EXPORT)
+      const out = path.join(studio.root, 'reattached-t197.mp4')
+      await stubRecordingSaveDialog(app, out)
+      await exportPanel.getByRole('button', { name: 'Export', exact: true }).click()
+      await expect
+        .poll(() => readToastLog(window), { timeout: 120_000, intervals: [250] })
+        .toEqual(expect.arrayContaining([expect.stringContaining('Cleaned audio attached to the video')]))
+      await expect(exportPanel.getByRole('button', { name: 'Export', exact: true })).toBeEnabled({ timeout: 30_000 })
+
+      const row = exportPanel.locator(ROW)
+      await expect(row).toContainText('reattached-t197.mp4')
+      await expect(row.getByText('reattached-t197.mp4', { exact: true })).toHaveAttribute('title', out)
+      await expect(exportPanel.getByRole('progressbar')).toHaveAccessibleName('reattached-t197.mp4')
+      await expect(row).not.toContainText(/Step \d of \d|attaching to video|rendering/i)
+      await expect(row.getByRole('button', { name: 'Show in folder' })).toBeVisible()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a single-pass export stopped: "Rendering" without the ellipsis beside Canceled, and beside Failed; a running one still reads "Rendering…"', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t197-stopped')
+    const { app, window } = studio
+    try {
+      await dropAndWaitReady(studio)
+      await stubSaveDialog(app, path.join(studio.root, 'stopped.mp3'))
+      await holdExport(app)
+      const exportPanel = window.locator(EXPORT)
+      const row = exportPanel.locator(ROW)
+      const bar = exportPanel.getByRole('progressbar')
+      const exportButton = exportPanel.getByRole('button', { name: 'Export', exact: true })
+
+      // Control (green on the base): running, the pass is named as in progress.
+      await exportButton.click()
+      await expect.poll(() => heldJobId(app), { timeout: 15_000 }).not.toBe('')
+      await progress(app, 37)
+      await expect(row).toContainText('Rendering…')
+      await expect(row).toContainText('37%')
+      await expect(bar).toHaveAccessibleName('Rendering…')
+
+      // Canceled: the step it stopped in, no ellipsis, and the word.
+      await stopHeld(app, 'imagii:cancelled')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Audio export canceled.')
+      await expect(row.getByText('Canceled', { exact: true })).toBeVisible()
+      await expect(row.getByText('Rendering', { exact: true })).toBeVisible()
+      await expect(row).not.toContainText('…')
+      await expect(row).toContainText('37%')
+      await expect(bar).toHaveAccessibleName(/^Rendering$/)
+
+      // Failed: the same, with its own word.
+      const first = await heldJobId(app)
+      await exportButton.click()
+      await expect.poll(() => heldJobId(app), { timeout: 15_000 }).not.toBe(first)
+      await progress(app, 12)
+      await stopHeld(app, 'FFmpeg exit 1: Conversion failed!')
+      await expect(row.getByText('Failed', { exact: true })).toBeVisible()
+      await expect(row.getByText('Rendering', { exact: true })).toBeVisible()
+      await expect(row).not.toContainText('…')
+      await expect(bar).toHaveAccessibleName(/^Rendering$/)
     } finally {
       await closeStudio(studio)
     }

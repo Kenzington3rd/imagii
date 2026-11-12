@@ -478,3 +478,25 @@ describe('audioPassPlan — a second track that matches the voice measures first
     expect(audioPassPlan({ loudnorm: true, reattach: true, matchLoudness: false })).toEqual(['measure', 'render', 'mux'])
   })
 })
+
+describe('audioPassLabel - a stopped row names its step without the running ellipsis (T-197 (2))', () => {
+  const single = audioPassPlan({ loudnorm: false, reattach: false })
+
+  it('a single-pass label for a stopped export drops the trailing ellipsis', () => {
+    expect(audioPassLabel('render', single, true)).toBe('Rendering')
+    expect(audioPassLabel('mux', ['render'], true)).toBe('Attaching to video')
+    expect(audioPassLabel('measure', ['measure'], true)).toBe('Measuring loudness')
+  })
+
+  it('a multi-pass label is the same stopped or running (it never had an ellipsis)', () => {
+    const plan = audioPassPlan({ loudnorm: true, reattach: true })
+    for (const pass of plan) expect(audioPassLabel(pass, plan, true)).toBe(audioPassLabel(pass, plan))
+    expect(audioPassLabel('render', audioPassPlan({ loudnorm: true, reattach: false }), true)).toBe('Step 2 of 2 — rendering')
+    expect(audioPassLabel('mux', audioPassPlan({ loudnorm: false, reattach: true }), true)).toBe('Step 2 of 2 — attaching to video')
+  })
+
+  it('control: left out (or false), the single-pass label keeps its ellipsis', () => {
+    expect(audioPassLabel('render', single)).toBe('Rendering…')
+    expect(audioPassLabel('render', single, false)).toBe('Rendering…')
+  })
+})
