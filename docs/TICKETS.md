@@ -10102,6 +10102,104 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 140 — see the Done entry)
 
+## T-192 — sweep-79 fixes (round 141)
+
+- **Spec:** the seventy-ninth sweep's verified findings (candidate clean pass #1 on b6466cb, the T-191 tree; the count
+  stays at 0). Item 1 found by design reader 1 (a sibling site of T-191 (4)'s own guide edit); item 2 found and
+  executed by QA renderer reader A (a premise of round 138's class grep that holds for id-keyed rows and not for the
+  index-keyed chip); item 3 found by the a11y reader (sibling sites of the swap rule that no disposition names, beside
+  round 89's found-not-fixed importer pick, which this ticket closes with them); items 4 and 5 found by UX reader 1 (a
+  double-click's second press landing on what a removal or a swap put under the pointer: the T-139 (9) class at a site
+  none names, and a "repeat-tolerant" claim of T-154 (3) that is false for the move arrows). All five confirmed against
+  source. Not counted: a held Enter on "+ Clip" toasting "Already in the Clips list" (named found-not-fixed in round
+  99's Done entry; the store refuses the duplicate); the 2K / 4K bold thumbnails' face hint at a fixed size (a hint layer, never
+  exported); Clear list while Choose file… is disabled (IC, round 89); the Player's Crop checkbox kept between clips
+  (UX only); the Fix wizard summary without Close (sweep 75); the ledgered T-110 letters each reader named. Three worker
+  tracks, disjoint files: Track A = items 2, 3 and 5 (audio-studio/WaveformView.tsx, AudioStudio.tsx,
+  AudioImporter.tsx; video-studio/VideoStudio.tsx, Importer.tsx, Player.tsx; image-studio/ImportPanel.tsx,
+  ImageStudio.tsx, LayerPanel.tsx); Track B = item 1 (image-studio/state/canvasStore.ts and a unit pin); Track C = item
+  4 (components/AutosaveRestore.tsx). The ffmpeg reader was still out when this ticket was written; a finding from it
+  joins Track C.
+
+  **Track A — a held key, a swapped screen and a double-clicked arrow keep their place (items 2, 3 and 5).**
+  2. **[LOW] A held Enter on an Audio Studio cut chip puts back every remaining cut** (audio-studio/WaveformView.tsx:
+     245-252: the chips are `key={i}` and the press calls `removeCutRegion(i)`, so after one is put back React keeps
+     the focused node for key 0 showing the NEXT cut; a held Enter's repeats are keyboard clicks (`detail` 0, which
+     `isRepeatPress` lets through) with no `ignoreHeldEnter`). Executed: one Enter held for three repeats on the first
+     of six chips left two. Each is an Undo step, so the 50-step history can lose real edits. IC's round-138 class grep
+     ruled cut chips "the row goes and no content takes its place" - true for the id-keyed layer and preset rows, not
+     for this list. Fix: `onKeyDown={ignoreHeldEnter}` on the chip (a fresh Enter still puts back the chip now under
+     focus, which is the next cut: the list-row behaviour stays). Class grep: every index-keyed list whose button acts
+     on its own item - name each with what a held Enter does there.
+  3. **[LOW] A press that swaps a studio between its importer and its editor leaves the keyboard on the page**
+     (no `.focus(` in image-studio/ImportPanel.tsx, ImageStudio.tsx, audio-studio/AudioStudio.tsx or
+     video-studio/VideoStudio.tsx). Stream Graphics' template cards (ImportPanel.tsx:267-275), "Start with text"
+     (:301-310) and "Import image" (:298, once the chooser answers) unmount the pressed control when the canvas gets
+     its first layer (ImageStudio.tsx:117-136); the Audio and Video header "Close" (AudioStudio.tsx:82,
+     VideoStudio.tsx:211) sit inside `{source ? ... : null}`; and round 89's found-not-fixed (IC, "a pick that loads
+     a file probably leaves the focus on nothing") is the same swap from the Audio and Video importers' Choose file…
+     and Recent pick. The next Tab starts at the Home link. Fix: STYLE_GUIDE's swap rule at every one of these sites -
+     the new content's primary control takes focus when the press that caused the swap held focus: Stream Graphics ->
+     the Select tool; Audio Studio -> the waveform's Play button; Video Studio -> the Player's Play button; Close ->
+     the importer's "Choose file…". The picks are asynchronous (a native chooser, a conversion) and the importer
+     unmounts, so the press records "this control had focus" in module scope (Record's T-189 press-recorded flag, but
+     it must survive the swap), and the new content's mount effect consumes it, moving focus only while focus is on
+     `<body>` or null. A drop, a mouse press with nothing focused, a project opened from Home and an autosave Restore
+     move nothing.
+  5. **[LOW] A double-click on a layer's Move up or Move down leaves the order as it was, with two Undo steps**
+     (image-studio/LayerPanel.tsx:119-140: neither arrow has `isRepeatPress`, where Duplicate and Remove do, :145,
+     :159). The first press swaps the two rows; the swapped-in layer's same arrow is now under the pointer (the row's
+     actions sit at the same x in every row, on a line of their own at the default column width), and the second
+     press moves it back. T-154 (3), its LESSONS entry and its IC row say the arrows "stay repeat-tolerant", which is
+     false for them. Fix: `if (isRepeatPress(e)) return` in both arrows' handlers, as Duplicate and Remove have (a
+     double-click moves the layer once); correct the three records.
+  Covering tests: e2e (audio.spec.ts NEW describe) - a held Enter on the first of several cut chips puts back exactly
+  one (red on the base: all but one); a fresh Enter then puts back the next (control); a Choose file… pressed with
+  Enter (the dialog stubbed) lands focus on the waveform's Play (red: the body), Close with Enter lands it on Choose
+  file… (red: the body), and the same pick by mouse moves nothing. E2E (image.spec.ts NEW describe) - Enter on a
+  template card, on "Start with text" and on "Import image" (the chooser stubbed) each land focus on the Select tool
+  (red: the body); a real double-click on a middle layer's Move up moves it one row and adds one Undo step (red on the
+  base: the order is unchanged and two steps are added), and the same for Move down. E2E (video-core.spec.ts NEW
+  describe) - Choose file… with Enter lands focus on the Player's Play (red: the body); Close with Enter lands it on
+  Choose file… (red: the body). Docs: IC rows revised in place (round
+  89's found-not-fixed line, round 138's list-row ruling, T-154 (3)'s Layers row) plus a "Dispositions - round 141,
+  Track A" section (both class greps); STYLE_GUIDE's swap rule names the new sites and the module-scope flag; LESSONS at the TOP; TESTING
+  paragraph.
+
+  **Track B — the default Ellipse is drawn in the accent (item 1).**
+  1. **[LOW] Stream Graphics' default Ellipse is drawn in `accent-muted`** (image-studio/state/canvasStore.ts:380-381:
+     `fill: withAlpha(ACCENT_MUTED, 0.4)`, `stroke: ACCENT_MUTED`), while T-191 (4)'s DESIGN_GUIDE row says accent-muted
+     is "Hover state of accent elements - and nothing else" (1.08:1 from `accent`, which the Rectangle default beside it
+     uses); every other use is a hover (index.css `.btn-primary`, Timeline.tsx's trim handles). Fix: the Ellipse default
+     is `withAlpha(ACCENT, 0.4)` / `ACCENT`, like the Rectangle's; the import of ACCENT_MUTED goes; and a unit pin holds
+     the guide's rule: no renderer source outside styles/tokens.ts imports `ACCENT_MUTED`, and every `accent-muted`
+     class in a className or stylesheet is a `hover:` variant (or `@apply`'s under a hover rule).
+  Covering tests: unit (NEW describe at the end of the canvasStore test file) - `makeEllipseLayer`'s fill and stroke
+  are the accent's (red on the base); unit (NEW describe at the end of tests/unit/designTokensInSync.test.ts) - the
+  accent-muted rule above (red on the base: canvasStore.ts). Docs: the DESIGN_GUIDE row stays true (name the pin);
+  IC row for the Ellipse tool if it names the colour; LESSONS at the TOP; TESTING paragraph.
+  **Track C — the autosave banner's buttons drop a double-click's second press (item 4).**
+  4. **[LOW] A double-click on the autosave banner's Clear opens the studio under it** (components/AutosaveRestore.tsx:
+     188-213 `clearAutosave`, the Clear, Later and Dismiss buttons at :237-250 and :270-283; nothing there calls
+     `swallowRepeatClicks` or `isRepeatPress`). The first press removes the banner, Home's card grid (routes/Home.tsx:
+     114-116, the same `max-w-4xl` box) moves up into its place, and the second press of the double-click lands on the
+     card now under the pointer - by the reader's geometry the Video Studio card, a link that ignores `detail` - so
+     Home navigates away. The same holds for Later and for the damaged banner's Dismiss. App calls
+     `swallowRepeatClicks` only on a route change and Modal only on its close. The T-139 (9) class (Welcome's "Let's
+     go" double-clicked onto a Home card), at a site no disposition names. Fix: `swallowRepeatClicks()` when Clear,
+     Later or Dismiss removes the banner (the window-level rule for "what this covered moves under the pointer"); the
+     buttons' own presses are unchanged.
+  Covering tests: e2e (home-chrome.spec.ts NEW describe) - with an autosave on disk at launch, a real `dblclick` on
+  Clear, on Later and (a damaged autosave) on Dismiss leaves the route on Home and opens no studio (red on the base:
+  measure it at the default window; if the second press lands on no card there, find the window size and button
+  where it does, state it, and pin that); a single click on each still does what it did (controls). Docs: IC rows; a
+  "Dispositions - round 141, Track C" section; LESSONS at the TOP; TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); the expediter runs the full suite and the real-media
+  suite on the merged tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 141)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
