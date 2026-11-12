@@ -94,7 +94,7 @@ While a tour or any dialog is open the studio's own keys (the tool letters, **De
 **Ctrl+Z**) wait for it, because the canvas behind is covered; **`?`** still opens the
 shortcuts over a tour.
 
-Right-click in any text box for Undo, Redo, Cut, Copy, Paste and Select all; words selected anywhere else offer Copy.
+Right-click in any text box for Undo, Redo, Cut, Copy, Paste and Select all. Outside a text box you can select words in five places, and a right-click on the selection offers Copy: the transcript in the Captions panel (its time stamps are not part of the words), the two paths in **Captions setup**, the reason on a failed row of the export list, the error card of a Reference Search, and the error text under **Details** on the "Something went wrong in this studio" screen. Everywhere else the page does not select (so dragging on the timeline, the canvas or a waveform never paints a selection), and a message that appears for a few seconds cannot be selected either.
 
 ---
 
@@ -370,7 +370,7 @@ that names the file being converted.)
   captions into a new MP4. Captions are English only. They burn into the
   original video, not the platform exports. The video's sound is written as AAC
   (192 kb/s), so a recording whose sound an MP4 cannot hold (Windows Media or
-  ADPCM, for example) still burns, and a video with no sound stays without one. **Save .srt** keeps the captions for
+  ADPCM, for example) still burns, and a video with no sound stays without one. When the burn finishes, its message carries **Show in folder** for the new video (also when no caption fell in the range and the video was written without any). **Save .srt** keeps the captions for
   the whole video, even with **Burn captions over selected clip range only**
   checked; only **Burn into video** follows that box. The **Preset** buttons set the style
   in one click and the one in use shows as pressed (move any dial and none does); a line
@@ -717,7 +717,7 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    (A link, a browser thumbnail or selected text dragged onto the import bar or the **Or start blank**
    card carries no file. imagii says **No file was dropped. Try the file picker instead.** and adds nothing.)
 2. Edit with the toolbar: **Select**, **Rectangle**, **Ellipse**, and (under
-   **+ More**) **Line** and **Pencil**. Keyboard: `V` `R` `O` `L` `P`.
+   **+ More**) **Line** and **Pencil**; once shown, by **+ More** or by `L` or `P`, they stay. Keyboard: `V` `R` `O` `L` `P`.
    **+ Add text** (and **Start with text**) puts the word "Text" wholly inside the canvas, 60 px in
    from the corner (nearer the corner on a canvas too small for that). It is sized to the canvas
    (32 px on the blank page, 43 px on a 1920×1080 overlay, 86 px on a 4K one, and never under

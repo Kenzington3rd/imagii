@@ -8,6 +8,7 @@ import { useAudioStore } from './state/audioStore'
 import { useGestureEnd } from '../../lib/gestureEnd'
 import { PanelHeader } from '../../components/PanelHeader'
 import { claimFirst } from '../../lib/claimFirst'
+import { ignoreHeldEnter } from '../../lib/repeatPress'
 
 const ROLE_OPTIONS: Array<{
   value: SecondaryTrackRole
@@ -128,6 +129,7 @@ export function SecondaryTrackPanel(): JSX.Element {
                 key={opt.value}
                 ref={i === 0 ? (el) => { primaryRef.current = el } : undefined}
                 onClick={() => pickAndAdd(opt.value)}
+                onKeyDown={ignoreHeldEnter}
                 className="text-left px-3 py-2 rounded border border-ink-dim/30 hover:border-accent hover:bg-bg-hover transition-colors"
               >
                 <div className="font-medium">+ {opt.label}</div>

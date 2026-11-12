@@ -6,6 +6,7 @@ import { assertDefined } from '@shared/assert'
 import { Modal } from '../../components/Modal'
 import { basename } from '../../components/OutputDirLabel'
 import { reportFailure } from '../../lib/reportFailure'
+import { ignoreHeldEnter } from '../../lib/repeatPress'
 import { countOf } from '@shared/plural'
 import { captureDocument, jpgTransparencyNote, outputPixels, thumbnailSizeNote, type ExportStage } from './ExportDialog'
 
@@ -334,7 +335,7 @@ export function ThumbnailVariants({ open, onClose, format, quality, scale, emote
                 >
                   {busy ? 'Generating…' : 'Regenerate'}
                 </button>
-                <button ref={saveAllRef} className="btn-primary px-4 py-1.5 ml-auto" onClick={saveAll}>
+                <button ref={saveAllRef} className="btn-primary px-4 py-1.5 ml-auto" onClick={saveAll} onKeyDown={ignoreHeldEnter}>
                   Save all ({items.length - 1} + original)
                 </button>
               </div>

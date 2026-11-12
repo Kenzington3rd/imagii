@@ -14,6 +14,7 @@ import { landedBesideNote } from '@shared/landedPath'
 import { ERROR_TOAST_MS, isRecordingKeptMessage, userFacingError } from '@shared/userFacingError'
 import { mayLeaveLiveTake, registerLiveTake } from '../../lib/liveTake'
 import { persistSetting } from '../../lib/persistSetting'
+import { ignoreHeldEnter } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
 import { toastKeptTake, toastSaved } from '../../lib/savedToast'
 import { NoPictureError, startCompositor, waitForFirstPicture, type CompositorHandle, type WebcamCorner } from './compositor'
@@ -790,7 +791,7 @@ export function RecordStudio(): JSX.Element {
               <span className="font-mono text-danger inline-flex items-center gap-1.5">
                 <Icon name="record" size={15} /> REC {formatTimer(elapsed / 1000)}
               </span>
-              <button ref={stopRef} className="btn-primary px-4 py-2" onClick={stopRecording}>
+              <button ref={stopRef} className="btn-primary px-4 py-2" onClick={stopRecording} onKeyDown={ignoreHeldEnter}>
                 Stop
               </button>
             </div>
@@ -846,7 +847,7 @@ export function RecordStudio(): JSX.Element {
                 </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-96 overflow-y-auto">
+              <div className="grid grid-cols-[repeat(auto-fill,minmax(14rem,1fr))] gap-2 p-1 max-h-96 overflow-y-auto">
                 {sources.map((s, i) => (
                   <button
                     key={s.id}

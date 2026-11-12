@@ -4133,3 +4133,63 @@ test.describe('T-184 (1): the Reference Search tile\'s source line is ink-base',
     }
   })
 })
+
+// ── T-190 (5), sent back: a search failure's words can be selected and copied ──────────────────────────────────────────────────────────────────────────────────
+//
+// The error card holds the failure's own sentence ("Search failed. ..."): a person searches it or pastes it into a message. A double-click selects a word, and a right-click pops Copy
+// alone (`Menu.prototype.popup` wrapped in main, as T-166 (4) does). The search answer is a stand-in handler in main, so the card is the panel's real one.
+test.describe('T-190 (5), sent back: the Reference Search error card', () => {
+  test('a word of the failure is selected and its right-click pops Copy alone', async () => {
+    test.setTimeout(120_000)
+    const fx = makeFixture('refs-t190-err')
+    const app = await launchApp(fx.userDataDir)
+    try {
+      const window = await app.firstWindow()
+      await openReferences(window)
+      await app.evaluate(({ Menu, ipcMain }) => {
+        const g = globalThis as unknown as { __ctxMenus?: Array<{ roles: string[] }> }
+        g.__ctxMenus = []
+        Menu.prototype.popup = function (this: Electron.Menu) {
+          g.__ctxMenus?.push({ roles: this.items.map((i) => (i.type === 'separator' ? 'separator' : String(i.role))) })
+          return this
+        } as typeof Menu.prototype.popup
+        ipcMain.removeHandler('search:images')
+        ipcMain.handle('search:images', async () => {
+          throw new Error('the stand-in search failed')
+        })
+      })
+      const box = window.getByPlaceholder(searchPlaceholder, { exact: false })
+      await box.fill('rejected')
+      await box.press('Enter')
+      const card = window.locator('.border-danger-strong\\/40')
+      await expect(card).toContainText('Search failed.')
+      // A repeat press is swallowed for half a second after a route change (T-153 (3)); the word is measured after that wait, not before it, so
+      // a card still settling cannot move it from under the point (round 139's merged-tree run).
+      await window.waitForTimeout(800)
+      const at = await card.evaluate((node) => {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+        for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+          const i = (t.textContent ?? '').indexOf('Search')
+          if (i < 0) continue
+          const range = document.createRange()
+          range.setStart(t, i)
+          range.setEnd(t, i + 'Search'.length)
+          const r = range.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }
+        return null
+      })
+      if (!at) throw new Error('"Search" is not drawn in the card')
+      await window.mouse.dblclick(at.x, at.y)
+      expect(await window.evaluate(() => (window.getSelection()?.toString() ?? '').trim()), 'a word of the failure is selected (red on the base: empty)').toBe('Search')
+      await window.mouse.click(at.x, at.y, { button: 'right' })
+      await expect
+        .poll(() => app.evaluate(() => (globalThis as unknown as { __ctxMenus: unknown[] }).__ctxMenus.length), { timeout: 10_000 })
+        .toBe(1)
+      expect(await app.evaluate(() => (globalThis as unknown as { __ctxMenus: Array<{ roles: string[] }> }).__ctxMenus[0]?.roles)).toEqual(['copy'])
+    } finally {
+      await app.close()
+      rmSync(fx.root, { recursive: true, force: true })
+    }
+  })
+})

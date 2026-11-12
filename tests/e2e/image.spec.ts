@@ -8107,3 +8107,125 @@ test.describe('Image Studio - "+ More" keeps focus, and a tool change ends a dra
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-190 (2): a reveal of Line and Pencil is sticky for the Toolbar's life, whichever way it came. L / P made Line active without setting the
+// toolbar's `advancedOpen`, so the next V, R or O hid both tools and brought "+ More" back, and a focused Line was unmounted by the V press
+// (focus to <body>, the T-189 (1) class).
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Image Studio - Line and Pencil stay once revealed (T-190 (2))', () => {
+  test('L then V leaves Line and Pencil shown and "+ More" gone', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t190-sticky-keys')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await expect(toolbar.getByRole('button', { name: 'Line' })).toHaveCount(0)
+      await window.keyboard.press('l')
+      await expect(window.getByText('Tool: Line')).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: '+ More' })).toHaveCount(0)
+      await window.keyboard.press('v')
+      await expect(window.getByText('Tool: Select')).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Line' }), 'Line is still there after V').toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: '+ More' }), '"+ More" did not come back').toHaveCount(0)
+      // P then R: the same for the other key and another tool.
+      await window.keyboard.press('p')
+      await expect(window.getByText('Tool: Pencil')).toBeVisible()
+      await window.keyboard.press('r')
+      await expect(window.getByText('Tool: Rectangle')).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Line' })).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: '+ More' })).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('with Line focused, V leaves the focus on Line, not <body>', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t190-sticky-focus')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await window.keyboard.press('l')
+      const line = toolbar.getByRole('button', { name: 'Line' })
+      await expect(line).toBeVisible()
+      await line.focus()
+      await expect(line).toBeFocused()
+      await window.keyboard.press('v')
+      await expect(window.getByText('Tool: Select')).toBeVisible()
+      await expect(line, 'the V press did not unmount the focused Line').toBeFocused()
+      expect(await window.evaluate(() => document.activeElement === document.body)).toBe(false)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a mouse click on Select keeps Line and Pencil too (a reveal by "+ More" and by L both stay)', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t190-sticky-mouse')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await window.keyboard.press('l')
+      await expect(toolbar.getByRole('button', { name: 'Line' })).toBeVisible()
+      await toolbar.getByRole('button', { name: 'Select' }).click()
+      await expect(window.getByText('Tool: Select')).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Line' }), 'Line stays after a click on Select').toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+      await expect(toolbar.getByRole('button', { name: '+ More' })).toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-190 (1), class sweep: Variants' Generate is replaced by the previews and T-119 (8) puts the focus on "Save all" inside the same event, so a
+// HELD Enter on Generate lands its auto-repeats on "Save all", which opens the folder chooser and writes the set (a repeat ACTS here: the one site of
+// the sweep besides Stop and the role buttons). "Save all" ignores a repeat; a fresh Enter on it still saves.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Image Studio - a held Enter on Generate does not press Save all (T-190 (1), class sweep)', () => {
+  test('the repeats land on Save all and open no chooser, write nothing; a fresh Enter on it saves the set', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t190-variants-held')
+    const { window } = studio
+    try {
+      const t = templateById('yt-thumb-bold')
+      await templateCard(window, t).click()
+      await expectTemplateApplied(window, t)
+      await window.locator(EXPORT).getByRole('button', { name: 'Variants' }).click()
+      const dialog = window.locator('[role="dialog"]')
+      await answerDialogs(studio.app, 'save')
+      clearDownloads(studio)
+      const before = await saveCalls(studio.app)
+
+      const generate = dialog.getByRole('button', { name: 'Generate 3 variants' })
+      await generate.focus()
+      await expect(generate).toBeFocused()
+      // The key goes down and stays down: the first keydown starts the render ...
+      await window.keyboard.down('Enter')
+      await expect(dialog.locator('img')).toHaveCount(4, { timeout: 30_000 })
+      const saveAll = dialog.getByRole('button', { name: 'Save all (3 + original)' })
+      await expect(saveAll, 'the premise: the swap put the focus on Save all (T-119 (8))').toBeFocused()
+      // ... and its auto-repeats land on "Save all".
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(1_000)
+      const after = await saveCalls(studio.app)
+      expect(after.open.length - before.open.length, 'a repeat opened the folder chooser').toBe(0)
+      expect(savedNames(studio), 'a repeat wrote the set').toEqual([])
+      expect(await readToastLog(window)).not.toContain('Saved 4 thumbnails')
+
+      // A fresh Enter is a decision: it saves the set.
+      await window.keyboard.press('Enter')
+      await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Saved 4 thumbnails')
+      expect(savedNames(studio)).toHaveLength(4)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

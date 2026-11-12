@@ -10001,7 +10001,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 139)
+- **Status:** done (round 139 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10579,6 +10579,64 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 139 — T-190, the six counted items of sweep 77, landed in the
+commit that carries this entry (item 6 in 0b44a33, the ticket's own
+commit). Two Sonnet workers in fresh clones of 0b44a33, disjoint
+files. Track A (items 1-3): a held key, a revealed tool and a source
+name stay where the person left them. Record's Stop and the second
+track's role buttons ignore the auto-repeat of an Enter still held
+(`ignoreHeldEnter`), so a held Enter on "Start recording" no longer
+ends the take that T-189's focus put it on, and a held Enter on Remove
+no longer opens the file chooser; the class sweep found a third
+receiver that acts on a repeat, Variants' Save all after a held Enter
+on Generate (it opened the folder chooser and wrote the set), fixed
+the same way. Line and Pencil, once shown by "+ More" or by L / P,
+stay for the toolbar's life, so a later V, R or O cannot hide them or
+unmount a focused Line. Record's source grid keeps one tile size at
+every window (`auto-fill` columns with a 14rem minimum, and `p-1` so
+the selected ring is inside the scroller): 230x178 tiles at 1920x1080
+where they were 704x444 in a 384 px grid, two columns still at the
+1024 minimum, every name visible. Track B (items 4, 5 and item 6's
+docs): a finished burn shows where it went, and read-only words can be
+copied. Both burn outcomes carry Show in folder for the file actually
+written (`toastSaved`, with an optional `icon` that keeps the
+no-captions warning); the transcript, the two Captions Setup paths, a
+failed export row's reason, the Reference Search error card and the
+crash screen's error text can be selected, and a right-click there
+offers Copy alone (T-166 (4)'s branch, live at last); USER_GUIDE names
+the five places. Item 6: package.json's description, which the
+portable NSIS wrapper writes as the downloaded exe's FileDescription,
+is now the BRANDING positioning line, pinned by a docClaims case red
+on the old text. Deviations, accepted: Variants (a fourth Track A
+file, the class sweep's find); ErrorBoundary's inline `userSelect`
+(that screen avoids Tailwind); the selection cases in
+video-pipelines.spec.ts; the transcript's time stamps kept
+unselectable (a double-click took "00spoken"); the no-captions toast
+at the helper's 8 s. Expediter: Track A's mutation (Stop blocking
+every Enter, not only a repeat) was killed by the fresh-Enter control;
+Track B was sent back once, when the expediter's mutation (the burn's
+Show in folder revealing the chosen path, not the one written)
+survived, with the ruling that the failed-export reason and the search
+error card are selectable too (Record's microphone line not counted:
+imagii's own sentence, nothing to search); the held-file burn cases
+now kill it. At merge, STYLE_GUIDE's swap rule was corrected: the
+tour's Next and Done hold a repeat through `tutorialKeyIntent`, not
+`ignoreHeldEnter`. Also at merge, the full suite failed twice on Track
+B's Setup-path selection case while every standalone run passed. The
+paths are `break-all`, and with the default TMPDIR the word "whisper"
+wrapped across two lines, so the centre of its bounding box lay past
+the end of the text and the double-click selected the sentence between
+the two paths. The three selection cases now measure the word after
+the 800 ms wait, on its widest line box, and removing `select-text`
+still fails them (TESTING records it). The ffmpeg reader was clean, so
+there is no Track C. Ledger: every mutation killed at unit or at e2e,
+no survivor left; every restore identical. Gates on the merged tree:
+npm run verify twice (214 files, 7125 tests each), test:media 538
+passed and 28 skipped of 566 (501 s, on the same product code), and
+the full xvfb Playwright suite, 899 passed in 59.0 min, no failures
+(the third full run: the first two each passed 898 and failed the one
+Setup-path selection case, fixed as above).
 
 Round 138 — T-189, the three counted items of sweep 76, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

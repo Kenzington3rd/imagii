@@ -669,7 +669,8 @@ export function ExportPanel(): JSX.Element | null {
                   title — "you can still see which one, and why, after the message
                   fades". A canceled row's reason is the cancel sentence, which the
                   word "Canceled" already says. */}
-              {j.error && !j.canceled ? <p className="text-xs text-danger">{j.error}</p> : null}
+              {/* T-190 (5): the reason is the failure's own words, which a person searches or pastes into a message: selectable (the page is not). */}
+              {j.error && !j.canceled ? <p className="text-xs text-danger select-text">{j.error}</p> : null}
             </div>
           ))}
         </div>

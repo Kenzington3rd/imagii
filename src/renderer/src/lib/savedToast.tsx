@@ -1,3 +1,4 @@
+import type { ReactElement } from 'react'
 import toast from 'react-hot-toast'
 
 /**
@@ -30,9 +31,10 @@ export interface ToastAction {
 /**
  * A success toast with buttons after the sentence. `message` is the
  * completion sentence with no trailing period ("Saved the GIF"); the buttons
- * are the actions the person can take on the result.
+ * are the actions the person can take on the result. T-190 (4): an optional `icon` rides in the toast's options (the success toast's check is replaced), for
+ * the one outcome that is not a plain success but still wrote a file and so still needs the buttons (a burn over a range nobody speaks in: a warning).
  */
-export function toastWithActions(message: string, actions: ReadonlyArray<ToastAction>): void {
+export function toastWithActions(message: string, actions: ReadonlyArray<ToastAction>, icon?: ReactElement): void {
   toast.success(
     <span>
       {message}
@@ -48,7 +50,7 @@ export function toastWithActions(message: string, actions: ReadonlyArray<ToastAc
         </span>
       ))}
     </span>,
-    { duration: ACTION_TOAST_MS }
+    { duration: ACTION_TOAST_MS, ...(icon !== undefined && { icon }) }
   )
 }
 
@@ -56,16 +58,20 @@ export function toastWithActions(message: string, actions: ReadonlyArray<ToastAc
  * "Saved the GIF  Show in folder": a finished file and the way to it, plus any
  * `extra` action (Record's "Edit in Video Studio").
  */
-export function toastSaved(message: string, outputPath: string, extra?: ToastAction): void {
-  toastWithActions(message, [
-    {
-      label: SHOW_IN_FOLDER,
-      onClick: () => {
-        void window.api.video.revealInFolder(outputPath)
-      }
-    },
-    ...(extra ? [extra] : [])
-  ])
+export function toastSaved(message: string, outputPath: string, extra?: ToastAction, icon?: ReactElement): void {
+  toastWithActions(
+    message,
+    [
+      {
+        label: SHOW_IN_FOLDER,
+        onClick: () => {
+          void window.api.video.revealInFolder(outputPath)
+        }
+      },
+      ...(extra ? [extra] : [])
+    ],
+    icon
+  )
 }
 
 /** The product's one dismiss word (BRANDING_GUIDE, "Dismissing a dialog"). */

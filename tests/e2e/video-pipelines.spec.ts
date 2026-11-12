@@ -2189,9 +2189,10 @@ test.describe('CaptionsPanel', () => {
       await expect(card.getByText('Done', { exact: true })).toHaveCount(0)
       // The earlier toast was not reused: exactly one of each, in order.
       const texts = (await readToastLog(window)).filter(
-        (t) => t.startsWith('No captions in this range') || t === 'Captions burned in'
+        (t) => t.startsWith('No captions in this range') || t.startsWith('Captions burned in')
       )
-      expect(texts).toEqual([
+      // T-190 (4): each toast now ends with its "Show in folder" button; the sentence before it is what is compared here.
+      expect(texts.map((t) => t.replace(/ Show in folder$/, ''))).toEqual([
         'No captions in this range — exported without captions',
         'Captions burned in'
       ])
@@ -10191,7 +10192,7 @@ test.describe('T-131: review-gate fixes, sweep 17', () => {
       await window.waitForTimeout(800)
       expect((await chooserCalls(app)).filter((c) => c.save), 'one save dialog, not two').toHaveLength(1)
       expect(mp4sIn(outDir), 'one file').toEqual(['burned-once.mp4'])
-      expect((await readToastLog(window)).filter((t) => t === 'Captions burned in'), 'said once').toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t.startsWith('Captions burned in')), 'said once').toHaveLength(1)
       await expect(burn, 'and the claim is given back').toBeEnabled({ timeout: 30_000 })
     } finally {
       await app.close()
@@ -13413,7 +13414,7 @@ test.describe('T-162 fold: a whole-video burn of a transcript with no speech', (
       const SENTENCE = 'No speech in this transcript — exported without captions'
       await burn.click()
       await expectToast(window, SENTENCE)
-      const entry = (await readToastEntries(window)).find((e) => e.text === SENTENCE)
+      const entry = (await readToastEntries(window)).find((e) => e.text.startsWith(SENTENCE))
       expect(entry?.hasIcon, 'a heads-up with the app\'s own warning icon').toBe(true)
       expect((await readToastLog(window)).join(' | ')).not.toMatch(/in this range|Captions burned in/)
       await expect.poll(() => existsSync(outWhole), { timeout: 60_000 }).toBe(true)
@@ -13426,7 +13427,7 @@ test.describe('T-162 fold: a whole-video burn of a transcript with no speech', (
       await burn.click()
       await expectToast(window, 'No captions in this range — exported without captions')
       await expect.poll(() => existsSync(outRange), { timeout: 60_000 }).toBe(true)
-      expect((await readToastLog(window)).filter((t) => t === SENTENCE)).toHaveLength(1)
+      expect((await readToastLog(window)).filter((t) => t.startsWith(SENTENCE))).toHaveLength(1)
     } finally {
       await app.close()
     }
@@ -15840,6 +15841,404 @@ test.describe('round 133 Track B (T-184 (2)): a long name is shortened to fit an
       await expect.poll(() => readRevealCalls(app), { timeout: 15_000, intervals: [200] }).toEqual([path.join(kitDir, `${prefix}_youtube.mp4`)])
       expect(existsSync(path.join(kitDir, `${prefix}_youtube.mp4`))).toBe(true)
       expect(videoStream(await ffprobeJson(path.join(kitDir, `${prefix}_thumb_2.jpg`))).codec_name, 'a thumbnail under its own tail is a picture').toBe('mjpeg')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-190 (4): a finished burn shows where it went ─────────────────────────────────────────────────────────────────────────────────────────
+//
+// The burn was the one job that writes a file and toasted with no way to it (a plain success / warning toast), so a person who left the studio while it ran had only the folder they picked.
+// Both outcomes (captions burned in; a clip with no captions in its range or none at all, which still writes a file) carry "Show in folder" through toastSaved, and the no-captions one keeps
+// its warning icon (an svg: react-hot-toast's own success check is not one). The burn is ffmpeg-only (no whisper), so it runs for real, as T-89's does; the shell is stubbed in main.
+test.describe('T-190 (4): the burn-in toast carries Show in folder', () => {
+  const cue = (srtPath: string): void => {
+    mkdirSync(path.dirname(srtPath), { recursive: true })
+    // ONE cue, 0.0-0.5 s of the 2 s source.
+    writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,500\nearly words\n', 'utf8')
+  }
+  const clip = (id: string, name: string, startSec: number, endSec: number) => ({
+    id,
+    name,
+    startSec,
+    endSec,
+    cropRect: null,
+    textOverlays: [],
+    selectedPresets: ['youtube']
+  })
+  /** Whether the toast whose text starts with `start` draws an svg beside its message: our Icon does, react-hot-toast's success check does not. */
+  const toastHasSvg = (window: Page, start: string): Promise<boolean> =>
+    window.evaluate((needle) => {
+      const card = Array.from(document.querySelectorAll('[data-rht-toaster] [role="status"]')).find((n) => (n.textContent ?? '').startsWith(needle))
+      if (!card) throw new Error(`no toast reading "${needle}" is on screen`)
+      return card.parentElement?.querySelector('svg') != null
+    }, start)
+
+  test('a whole-video burn: "Captions burned in" ends with Show in folder, which reveals the file that was written', async () => {
+    test.setTimeout(240_000)
+    const { app, window, userDataDir, outDir } = await launchHome('t190burnshow')
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'show.srt')
+      cue(srtPath)
+      const projectPath = path.join(root, `t190burnshow-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: { sourcePath: clipSrc, clips: [], selectedClipId: null, watermark: null, srtPath }
+        }),
+        'utf8'
+      )
+      const out = path.join(outDir, 'show-captioned.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [out] })
+      await stubShellReveal(app)
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await expect(card.getByRole('checkbox'), 'a whole-video burn').not.toBeChecked()
+      await burn.click()
+      await expectToast(window, 'Captions burned in')
+      await expect.poll(() => existsSync(out), { timeout: 60_000 }).toBe(true)
+      expect((await readToastLog(window)).find((t) => t.startsWith('Captions burned in'))).toBe('Captions burned in Show in folder')
+      expect(await toastHasSvg(window, 'Captions burned in'), 'the plain success check, not the warning icon').toBe(false)
+      // The button reveals exactly the file written, and it plays.
+      await expectRevealToast(window, app, out)
+      expect(Number((await ffprobeJson(out)).format?.duration), 'the written file is the video').toBeGreaterThan(1.7)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a ranged burn with no cue in its range keeps its warning icon and carries Show in folder too', async () => {
+    test.setTimeout(240_000)
+    const { app, window, userDataDir, outDir } = await launchHome('t190rangeshow')
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 'rangeshow.srt')
+      cue(srtPath)
+      const projectPath = path.join(root, `t190rangeshow-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: {
+            sourcePath: clipSrc,
+            // Selected: "Late", 1.0-2.0 s, where nobody speaks.
+            clips: [clip('late', 'Late', 1, 2), clip('early', 'Early', 0, 1)],
+            selectedClipId: 'late',
+            watermark: null,
+            srtPath
+          }
+        }),
+        'utf8'
+      )
+      const out = path.join(outDir, 'late-captioned.mp4')
+      await stubDialogs(app, { open: [projectPath], save: [out] })
+      await stubShellReveal(app)
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      await card.getByRole('checkbox').check()
+      await burn.click()
+      await expectToast(window, 'No captions in this range — exported without captions')
+      await expect.poll(() => existsSync(out), { timeout: 60_000 }).toBe(true)
+      expect((await readToastLog(window)).find((t) => t.startsWith('No captions in this range'))).toBe('No captions in this range — exported without captions Show in folder')
+      expect(await toastHasSvg(window, 'No captions in this range'), 'the warning icon the toast kept (red if the icon is dropped: the success check is not an svg)').toBe(true)
+      await expectRevealToast(window, app, out)
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-190 (5): read-only words a person would copy can be selected, and a right-click on a selection offers Copy ────────────────────────────────────────────
+//
+// USER_GUIDE promised "words selected anywhere else offer Copy", but `body { user-select: none }` left nothing outside a text box selectable, so contextMenuTemplate's Copy-alone branch
+// (T-166 (4)) was dead. The Captions Setup panel's two paths and the transcript region now carry `select-text`; the global none stays (the control: a heading's word is not selectable and a
+// right-click on it pops no menu). As in T-166 (4) (references.spec.ts: that spec cannot open a video with the Captions panel, so this one is here, beside the Setup panel's cases),
+// `Menu.prototype.popup` is wrapped in MAIN, which records the roles it was asked to show and keeps the menu, and the Copy item is clicked in main exactly as the OS menu would click it.
+test.describe('T-190 (5): selected read-only words offer Copy', () => {
+  async function wrapPopup(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ Menu, clipboard }) => {
+      const g = globalThis as unknown as { __ctxMenus?: Array<{ roles: string[] }>; __lastMenu?: unknown }
+      g.__ctxMenus = []
+      Menu.prototype.popup = function (this: Electron.Menu) {
+        g.__ctxMenus?.push({ roles: this.items.map((i) => (i.type === 'separator' ? 'separator' : String(i.role))) })
+        g.__lastMenu = this
+        return this
+      } as typeof Menu.prototype.popup
+      clipboard.writeText('nothing copied yet')
+    })
+  }
+  const menus = (app: ElectronApplication): Promise<Array<{ roles: string[] }>> =>
+    app.evaluate(() => (globalThis as unknown as { __ctxMenus: Array<{ roles: string[] }> }).__ctxMenus)
+  async function clickPoppedCopy(app: ElectronApplication): Promise<void> {
+    await app.evaluate(({ BrowserWindow }) => {
+      const menu = (globalThis as unknown as { __lastMenu: Electron.Menu }).__lastMenu
+      const win = BrowserWindow.getAllWindows()[0]!
+      const copy = menu.items.find((i) => i.role === 'copy')
+      if (!copy) throw new Error('the popped menu has no Copy item')
+      copy.click(undefined as never, win, win.webContents)
+    })
+  }
+  /** The centre of `word` as drawn inside `el` (the first text node that holds it). */
+  async function wordCentre(el: Locator, word: string): Promise<{ x: number; y: number }> {
+    await el.scrollIntoViewIfNeeded()
+    const rect = await el.evaluate((node, w) => {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+      for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+        const at = (t.textContent ?? '').indexOf(w)
+        if (at < 0) continue
+        const range = document.createRange()
+        range.setStart(t, at)
+        range.setEnd(t, at + w.length)
+        // The widest LINE box of the word, not the range's bounding box: the Setup paths are `break-all`, so a word can wrap (with the default
+        // TMPDIR "w" ends one line and "hisper" starts the next), and the centre of the box around both lines lies past the end of the text,
+        // where a double-click selects the unselectable sentence between the two paths instead (round 139's merged-tree run).
+        const boxes = Array.from(range.getClientRects())
+        const r = boxes.reduce((wide, b) => (b.width > wide.width ? b : wide), boxes[0] ?? range.getBoundingClientRect())
+        return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+      }
+      return null
+    }, word)
+    if (!rect) throw new Error(`"${word}" is not drawn in the element`)
+    return rect
+  }
+  /**
+   * Double-click `word` inside `el`. Every route change and every closing dialog swallows a repeat press (detail above 1) for half a second (T-153 (3), repeatPress.ts), so a
+   * double-click made at once after the studio opened never reaches the page and selects nothing; the wait is that window, and it is why the control below uses this too.
+   */
+  async function dblclickWord(window: Page, el: Locator, word: string): Promise<{ x: number; y: number }> {
+    await window.waitForTimeout(800)
+    // The word is measured AFTER the wait, and again until two reads 100 ms apart agree: the panel can still be settling (the full suite once
+    // measured, waited, and double-clicked the sentence below the path, which had moved up under the point; round 139's merged-tree run).
+    let at = await wordCentre(el, word)
+    for (let i = 0; i < 20; i++) {
+      await window.waitForTimeout(100)
+      const again = await wordCentre(el, word)
+      if (again.x === at.x && again.y === at.y) break
+      at = again
+    }
+    await window.mouse.dblclick(at.x, at.y)
+    return at
+  }
+  const selection = (window: Page): Promise<string> => window.evaluate(() => (window.getSelection()?.toString() ?? '').trim())
+
+  test('a word double-clicked in the Setup panel\'s engine path is selected; a right-click pops Copy alone; Copy puts the word on the clipboard; a heading\'s word stays unselectable and pops nothing', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchWithVideo('t190selpath')
+    try {
+      await wrapPopup(app)
+      const card = captionsCard(window)
+      await card.getByRole('button', { name: 'Show setup instructions' }).click()
+      const exe = card.locator('div.font-mono.break-all').nth(0)
+      await expect(exe).toHaveText(/whisper-cli\.exe$/)
+      // "whisper" is a whole word of the engine's file name (whisper-cli.exe), between separators on any platform.
+      const at = await dblclickWord(window, exe, 'whisper')
+      expect(await selection(window), 'the word double-clicked in the path is selected (red on 0b44a33: the selection is empty)').toBe('whisper')
+
+      await window.mouse.click(at.x, at.y, { button: 'right' })
+      await expect.poll(async () => (await menus(app)).length, { timeout: 10_000 }).toBe(1)
+      expect((await menus(app))[0]?.roles, 'selected words in plain text get Copy alone').toEqual(['copy'])
+      await clickPoppedCopy(app)
+      await expect.poll(() => systemClipboard(app), { timeout: 10_000 }).toBe('whisper')
+
+      // The model path is selectable too.
+      const model = card.locator('div.font-mono.break-all').nth(1)
+      await dblclickWord(window, model, 'ggml')
+      expect(await selection(window), 'a word of the model path').toBe('ggml')
+
+      // Control: the global none stays. A word of the panel's heading is not selectable, and a right-click on it pops nothing more.
+      const heading = card.getByText('Auto-captions', { exact: true })
+      await window.evaluate(() => window.getSelection()?.removeAllRanges()) // a press on unselectable page leaves a held selection as it was
+      const headAt = await dblclickWord(window, heading, 'captions')
+      expect(await selection(window), 'a heading\'s word is not selectable').toBe('')
+      const before = (await menus(app)).length
+      await window.mouse.click(headAt.x, headAt.y, { button: 'right' })
+      await window.waitForTimeout(500)
+      expect((await menus(app)).length, 'a right-click on unselected page pops no menu').toBe(before)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a word double-clicked in the transcript region is selected and its right-click offers Copy', async () => {
+    test.setTimeout(180_000)
+    const { app, window, userDataDir } = await launchHome('t190seltext')
+    try {
+      const srtPath = path.join(userDataDir, 'captions', 't190.srt')
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,800\nspoken line 1\n', 'utf8')
+      await app.evaluate(({ ipcMain }, srt) => {
+        ipcMain.removeHandler('captions:status')
+        ipcMain.handle('captions:status', () => ({
+          exeInstalled: true,
+          exePath: 'whisper-cli.exe',
+          modelInstalled: true,
+          modelPath: 'model.bin',
+          modelsDir: 'models',
+          ready: true
+        }))
+        ipcMain.removeHandler('captions:transcribe')
+        ipcMain.handle('captions:transcribe', (_e, req: { jobId: string }) => ({
+          jobId: req.jobId,
+          srtPath: srt,
+          segments: [{ startSec: 0, endSec: 0.8, text: 'spoken line 1' }],
+          durationMs: 5
+        }))
+      }, srtPath)
+      await wrapPopup(app)
+      await gotoVideoStudio(window)
+      await dropOnVideoImporter(window, clipSrc, 'seltext.mp4')
+      await expect(exportCard(window).getByRole('button', { name: /^Export/ })).toBeVisible({ timeout: 30_000 })
+      const card = captionsCard(window)
+      await card.getByRole('button', { name: 'Transcribe', exact: true }).click()
+      const preview = card.getByRole('region', { name: 'Transcript preview' })
+      await expect(preview).toBeVisible({ timeout: 30_000 })
+      const at = await dblclickWord(window, preview, 'spoken')
+      expect(await selection(window), 'a word of the transcript is selected (red if select-text is dropped from the region)').toBe('spoken')
+      await window.mouse.click(at.x, at.y, { button: 'right' })
+      await expect.poll(async () => (await menus(app)).length, { timeout: 10_000 }).toBe(1)
+      expect((await menus(app))[0]?.roles).toEqual(['copy'])
+      await clickPoppedCopy(app)
+      await expect.poll(() => systemClipboard(app), { timeout: 10_000 }).toBe('spoken')
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ── T-190 (4), sent back: Show in folder follows the file that LANDED, not the name chosen ─────────────────────────────────────────────────────────────────────
+//
+// `toastSaved(sentence, result.outputPath)` and `toastSaved(sentence, outputPath)` look alike and differ exactly where T-140 (1) kept the video beside a file that was open in another
+// app ("name (2)"): the second reveals the HELD file. Windows' refusal is made in main (`refuseRenamesOnto`), everything else is real: the button, the Save answer and the burn.
+test.describe('T-190 (4), sent back: the burn toast\'s Show in folder reveals the file that landed beside a held one', () => {
+  async function heldBurn(name: string, ranged: boolean): Promise<void> {
+    const { app, window, userDataDir, outDir } = await launchHome(name)
+    try {
+      const srtPath = path.join(userDataDir, 'captions', `${name}.srt`)
+      mkdirSync(path.dirname(srtPath), { recursive: true })
+      writeFileSync(srtPath, '1\n00:00:00,000 --> 00:00:00,500\nearly words\n', 'utf8')
+      const clip = (id: string, label: string, startSec: number, endSec: number) => ({ id, name: label, startSec, endSec, cropRect: null, textOverlays: [], selectedPresets: ['youtube'] })
+      const projectPath = path.join(root, `${name}-${Date.now().toString(36)}.imagii.json`)
+      writeFileSync(
+        projectPath,
+        JSON.stringify({
+          schemaVersion: 2,
+          savedAt: Date.now(),
+          appVersion: '1.0.0',
+          videoStudio: {
+            sourcePath: clipSrc,
+            // Ranged: "Late", 1.0-2.0 s, where nobody speaks.
+            clips: ranged ? [clip('late', 'Late', 1, 2)] : [],
+            selectedClipId: ranged ? 'late' : null,
+            watermark: null,
+            srtPath
+          }
+        }),
+        'utf8'
+      )
+      const held = path.join(outDir, 'held-captioned.mp4')
+      const beside = path.join(outDir, 'held-captioned (2).mp4')
+      writeFileSync(held, 'an earlier burn, open in a player'.repeat(2000))
+      const before = sha256(held)
+      await stubDialogs(app, { open: [projectPath], save: [held] })
+      await stubShellReveal(app)
+      await window.getByRole('button', { name: 'Open project' }).click()
+      await gotoVideoStudio(window)
+      await installToastLog(window)
+      await refuseRenamesOnto(app, held)
+      const card = captionsCard(window)
+      const burn = card.getByRole('button', { name: 'Burn into video' })
+      await expect(burn).toBeEnabled({ timeout: 30_000 })
+      if (ranged) await card.getByRole('checkbox').check()
+      await burn.click()
+      await expectToast(window, ranged ? 'No captions in this range — exported without captions. held-captioned.mp4 is open in another app' : 'Captions burned in. held-captioned.mp4 is open in another app')
+      await expect.poll(() => existsSync(beside), { timeout: 60_000 }).toBe(true)
+      // The button reveals the file that exists, "(2)", and never the held one.
+      await expectRevealToast(window, app, beside)
+      expect(sha256(held), 'the file that was open is byte for byte what it was').toBe(before)
+      expect(Number((await ffprobeJson(beside)).format?.duration), 'the written file is a video').toBeGreaterThan(0.8)
+    } finally {
+      await app.close()
+    }
+  }
+
+  test('a whole-video burn: Show in folder reveals "held-captioned (2).mp4"', async () => {
+    test.setTimeout(240_000)
+    await heldBurn('t190heldwhole', false)
+  })
+
+  test('a ranged burn with no cue in its range: the same', async () => {
+    test.setTimeout(240_000)
+    await heldBurn('t190heldrange', true)
+  })
+})
+
+// ── T-190 (5), sent back: a failed export's reason can be selected and copied ──────────────────────────────────────────────────────────────────────────────────
+//
+// The reason on the failed row is the failure's own words (the T-84 case's source is removed after it was imported). A double-click selects a word of it, a right-click pops Copy alone
+// (`Menu.prototype.popup` wrapped in main as T-166 (4) does), and the page around it stays unselectable.
+test.describe('T-190 (5), sent back: the failed export row\'s reason', () => {
+  test('a word of the reason is selected and its right-click pops Copy alone', async () => {
+    test.setTimeout(300_000)
+    const moved = path.join(root, 'source', `t190moved-${Date.now().toString(36)}.mp4`)
+    copyFileSync(clipSrc, moved)
+    const { app, window, outDir } = await launchWithVideo('t190exportfail', moved)
+    try {
+      await stubDialogs(app, { open: [outDir] })
+      await app.evaluate(({ Menu }) => {
+        const g = globalThis as unknown as { __ctxMenus?: Array<{ roles: string[] }> }
+        g.__ctxMenus = []
+        Menu.prototype.popup = function (this: Electron.Menu) {
+          g.__ctxMenus?.push({ roles: this.items.map((i) => (i.type === 'separator' ? 'separator' : String(i.role))) })
+          return this
+        } as typeof Menu.prototype.popup
+      })
+      const card = exportCard(window)
+      await card.getByRole('button', { name: 'Choose folder…' }).click()
+      rmSync(moved)
+      await card.getByRole('button', { name: 'Export 1' }).click()
+      const reason = card.locator('p.text-danger')
+      await expect(reason).toHaveCount(1, { timeout: 60_000 })
+      const text = (await reason.innerText()).trim()
+      const word = /[A-Za-z]{5,}/.exec(text)?.[0]
+      if (!word) throw new Error(`no word to select in "${text}"`)
+      // A repeat press is swallowed for half a second after a route change or a closing dialog (T-153 (3)); the word is measured after that wait,
+      // not before it, so a row still settling cannot move it from under the point (round 139's merged-tree run).
+      await window.waitForTimeout(800)
+      await reason.scrollIntoViewIfNeeded()
+      const at = await reason.evaluate((node, w) => {
+        const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT)
+        for (let t = walker.nextNode(); t; t = walker.nextNode()) {
+          const i = (t.textContent ?? '').indexOf(w)
+          if (i < 0) continue
+          const range = document.createRange()
+          range.setStart(t, i)
+          range.setEnd(t, i + w.length)
+          const r = range.getBoundingClientRect()
+          return { x: r.x + r.width / 2, y: r.y + r.height / 2 }
+        }
+        return null
+      }, word)
+      if (!at) throw new Error('the word is not drawn')
+      await window.mouse.dblclick(at.x, at.y)
+      expect(await window.evaluate(() => (window.getSelection()?.toString() ?? '').trim()), 'a word of the reason is selected (red on the base: empty)').toBe(word)
+      await window.mouse.click(at.x, at.y, { button: 'right' })
+      await expect
+        .poll(() => app.evaluate(() => (globalThis as unknown as { __ctxMenus: unknown[] }).__ctxMenus.length), { timeout: 10_000 })
+        .toBe(1)
+      expect(await app.evaluate(() => (globalThis as unknown as { __ctxMenus: Array<{ roles: string[] }> }).__ctxMenus[0]?.roles)).toEqual(['copy'])
     } finally {
       await app.close()
     }

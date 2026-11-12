@@ -6699,3 +6699,61 @@ test.describe('Audio Studio - the second-track panel keeps the keyboard\'s place
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-190 (1): Remove swaps the track's controls for the role buttons and T-189 (1) puts the focus on the first one ("Background music") inside the
+// same event, so the auto-repeat of a HELD Enter on Remove landed on it and opened the file chooser (the T-120 / T-141 (4) held-Enter class). A role
+// button ignores a repeat; a fresh Enter on it still opens the chooser.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Audio Studio - a held Enter on Remove opens no chooser (T-190 (1))', () => {
+  /** Count the open-dialog calls in MAIN: the chooser opening IS a call to `showOpenDialog`. */
+  async function stubCountedOpenDialog(app: ElectronApplication, filePath: string): Promise<void> {
+    await app.evaluate(({ dialog }, picked) => {
+      const g = globalThis as unknown as { __t190Opens?: number }
+      g.__t190Opens = 0
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => {
+        g.__t190Opens = (g.__t190Opens ?? 0) + 1
+        return { canceled: false, filePaths: [picked] }
+      }
+    }, filePath)
+  }
+  const opens = (app: ElectronApplication): Promise<number> =>
+    app.evaluate(() => (globalThis as unknown as { __t190Opens?: number }).__t190Opens ?? 0)
+
+  test('Enter held on Remove: focus lands on the first role button, the repeats open no chooser, and a fresh Enter on it opens one', async () => {
+    test.setTimeout(120_000)
+    const studio = await openStudio('t190-held-remove')
+    const { window, app } = studio
+    try {
+      await dropAndWaitReady(studio)
+      const panel = window.locator(MULTITRACK)
+      await stubCountedOpenDialog(app, studio.fixture)
+      await panel.getByRole('button', { name: /Background music/ }).click()
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      expect(await opens(app), 'the premise: the pick opened the chooser once').toBe(1)
+
+      const remove = panel.getByRole('button', { name: /Remove/ })
+      await remove.focus()
+      await expect(remove).toBeFocused()
+      // The key goes down and stays down: the first keydown presses Remove ...
+      await window.keyboard.down('Enter')
+      const music = panel.getByRole('button', { name: /Background music/ })
+      await expect(panel).toContainText('Layer in background music')
+      await expect(music, 'the swap put the focus on the first role button (T-189 (1))').toBeFocused()
+      // ... and its auto-repeats land on that button.
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await window.waitForTimeout(500)
+      expect(await opens(app), 'a repeat opened the file chooser').toBe(1)
+      await expect(panel, 'a repeat picked the track again').toContainText('Layer in background music')
+      await expect(music).toBeFocused()
+
+      // A fresh Enter is a decision: it opens the chooser and adds the track.
+      await window.keyboard.press('Enter')
+      await expect(panel).toContainText('Background music: e2e-tone.wav')
+      expect(await opens(app)).toBe(2)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

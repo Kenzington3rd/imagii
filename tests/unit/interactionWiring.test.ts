@@ -3327,13 +3327,16 @@ describe('T-140 Track A - a save that landed beside the chosen file is reported 
     const panel = strip(read('modules/video-studio/CaptionsPanel.tsx'))
     const burn = panel.slice(panel.indexOf('async function burnIn()'), panel.indexOf('function updateStyle('))
     expect(burn).toMatch(/const note = landedBesideNote\(outputPath, result\.outputPath, 'burn-in'\)/)
-    expect(burn).toMatch(/toast\.success\(note \? `\$\{burnInDoneMessage\(true, ranged\)\}\. \$\{note\}` : burnInDoneMessage\(true, ranged\), note \? \{ duration: ACTION_TOAST_MS \} : undefined\)/)
-    expect(burn).toMatch(/toast\(note \? `\$\{burnInDoneMessage\(false, ranged\)\}\. \$\{note\}` : burnInDoneMessage\(false, ranged\), \{ icon: <Icon name="warning" size=\{18\} \/>, duration: note \? ACTION_TOAST_MS : 6000 \}\)/)
+    // T-190 (4): both outcomes are `toastSaved` (Show in folder to the file that landed), the sentence chosen by the run's own `captioned`, and the second keeps its warning icon.
+    expect(burn).toMatch(/const sentence = note \? `\$\{burnInDoneMessage\(result\.captioned, ranged\)\}\. \$\{note\}` : burnInDoneMessage\(result\.captioned, ranged\)/)
+    expect(burn).toMatch(/if \(result\.captioned\) toastSaved\(sentence, result\.outputPath\)/)
+    expect(burn).toMatch(/else toastSaved\(sentence, result\.outputPath, undefined, <Icon name=\"warning\" size=\{18\} \/>\)/)
+    expect(burn, 'no hand-built burn toast is left').not.toMatch(/\btoast(?:\.success)?\(sentence|\btoast\(note/)
     expect(panel).toMatch(/import \{ landedBesideNote \} from '@shared\/landedPath'/)
     // T-162 fold: the toast is told whether THIS burn was ranged, by the same value that decided whether the request carried a range.
     expect(burn).toMatch(/const ranged = selectedClip !== null/)
     expect(burn).toMatch(/\.\.\.\(ranged && \{\s*startSec: selectedClip\.startSec,\s*endSec: selectedClip\.endSec\s*\}\)/)
-    expect(burn.match(/burnInDoneMessage\(\w+, ranged\)/g) ?? [], 'every call passes the burn\'s own flag').toHaveLength(4)
+    expect(burn.match(/burnInDoneMessage\([\w.]+, ranged\)/g) ?? [], 'every call passes the burn\'s own flag').toHaveLength(2)
     expect(burn, 'never a constant').not.toMatch(/burnInDoneMessage\([^)]*(?:true|false)\)/)
   })
 

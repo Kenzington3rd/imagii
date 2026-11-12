@@ -219,3 +219,18 @@ describe('ErrorBoundary - a navigation leaves the crash screen (T-181 (1))', () 
     expect(renderToStaticMarkup(boundary.render() as React.ReactElement)).toBe('<b>studio</b>')
   })
 })
+
+/**
+ * T-190 (5) - the global `body { user-select: none }` would leave the crash screen's error text uncopyable; the two <pre>s that hold the message and React's component
+ * stack opt back in (inline, since this screen avoids Tailwind), and the sentence, heading and button do not.
+ */
+describe('ErrorBoundary - the error text can be selected and copied (T-190 (5))', () => {
+  it('the message and the component stack are user-select: text', () => {
+    const boundary = new ErrorBoundary({ children: null })
+    boundary.state = { error: new Error('boom'), componentStack: '\n    at Studio' }
+    const html = renderToStaticMarkup(boundary.render() as React.ReactElement)
+    const pres = html.match(/<pre[^>]*>/g) ?? []
+    expect(pres).toHaveLength(2)
+    for (const tag of pres) expect(tag).toMatch(/user-select:text/)
+  })
+})

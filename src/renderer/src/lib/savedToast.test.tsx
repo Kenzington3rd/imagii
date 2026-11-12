@@ -176,3 +176,41 @@ describe('toastKeptTake', () => {
     for (const b of seen.buttons) expect(b.className, b.label).toMatch(/\bpointer-events-auto\b/)
   })
 })
+
+// T-190 (4): a file that was written but is not a plain success (the burn over a range nobody speaks in) keeps its own icon AND the way to the file.
+describe('toastSaved with an icon (T-190 (4))', () => {
+  const ICON = { type: 'svg', props: { 'data-icon': 'warning' } } as unknown as ReactElement
+
+  it('passes the icon into the toast options, beside the long duration', () => {
+    toastSaved('No captions in this range', 'C:/out/clip.mp4', undefined, ICON)
+    expect(success).toHaveBeenCalledTimes(1)
+    const options = success.mock.calls[0]?.[1] as { duration: number; icon?: ReactElement }
+    expect(options.icon).toBe(ICON)
+    expect(options.duration).toBe(ACTION_TOAST_MS)
+  })
+
+  it('still carries Show in folder, which reveals the path it was given', () => {
+    toastSaved('No captions in this range', 'C:/out/clip.mp4', undefined, ICON)
+    const seen = read(success.mock.calls[0]?.[0] as ReactNode)
+    expect(seen.buttons.map((b) => b.label)).toEqual([SHOW_IN_FOLDER])
+    seen.buttons[0]?.click()
+    expect(reveal).toHaveBeenCalledWith('C:/out/clip.mp4')
+  })
+
+  it('an extra action keeps its place after Show in folder when an icon is given', () => {
+    toastSaved('Saved', 'C:/a.mp4', { label: 'Edit in Video Studio', onClick: () => {} }, ICON)
+    expect(read(success.mock.calls[0]?.[0] as ReactNode).buttons.map((b) => b.label)).toEqual([SHOW_IN_FOLDER, 'Edit in Video Studio'])
+  })
+
+  it('with no icon the options carry none (the success check stays), so every other panel is unchanged', () => {
+    toastSaved('Saved the GIF', 'C:/out/clip.gif')
+    expect(Object.keys(success.mock.calls[0]?.[1] as object)).toEqual(['duration'])
+    toastWithActions('Done something', [{ label: 'Undo', onClick: () => {} }])
+    expect(Object.keys(success.mock.calls[1]?.[1] as object)).toEqual(['duration'])
+  })
+
+  it('toastWithActions passes the icon too', () => {
+    toastWithActions('Done', [{ label: 'Undo', onClick: () => {} }], ICON)
+    expect((success.mock.calls[0]?.[1] as { icon?: ReactElement }).icon).toBe(ICON)
+  })
+})

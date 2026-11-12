@@ -96,6 +96,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
           overflowY: 'auto'
         }}
       >
+        {/* T-190 (5): the two <pre>s below are inline `userSelect: 'text'` (this screen avoids Tailwind, see above): the global `body { user-select: none }` would
+            otherwise leave the one message a person would paste into a search or a report uncopyable. */}
         {/* T-84: this screen used to say "imagii hit a render error" and ask
             the user to "copy the message below and report it" — to a channel a
             local-first app does not have. It now says what happened, what is
@@ -123,6 +125,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
               color: '#f87171',
               whiteSpace: 'pre-wrap',
               wordBreak: 'break-word',
+              userSelect: 'text',
               marginTop: '8px',
               marginBottom: '8px'
             }}
@@ -138,7 +141,8 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
                 border: '1px solid #352a2a',
                 borderRadius: '6px',
                 color: '#a59a97',
-                whiteSpace: 'pre-wrap'
+                whiteSpace: 'pre-wrap',
+                userSelect: 'text'
               }}
             >
               {this.state.componentStack}

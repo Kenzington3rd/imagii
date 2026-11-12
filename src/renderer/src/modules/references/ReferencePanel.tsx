@@ -145,7 +145,7 @@ export function ReferencePanel(): JSX.Element {
           found pictures, how many. Empty it is still a flex item with a 16 px gap on each side, so `-mb-4` takes the second gap back. */}
       <div role="status" className={`flex flex-col gap-4${hasOutcome ? '' : ' -mb-4'}`}>
         {error ? (
-          <div className="card p-3 border-danger-strong/40 text-sm text-danger-soft">{error}</div>
+          <div className="card p-3 border-danger-strong/40 text-sm text-danger-soft select-text">{error}</div>
         ) : null}
 
         {response?.notice ? (

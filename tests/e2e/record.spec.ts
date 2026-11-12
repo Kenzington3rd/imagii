@@ -5459,3 +5459,197 @@ test.describe('Record - the keyboard keeps its place across Pick and Start (T-18
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-190 (1): a HELD Enter on "Start recording" must not end the take it just started. T-189 (1) puts the focus on Stop when the phase becomes
+// `recording`, inside the Enter's own event, and the auto-repeats of the key still held are keyboard clicks on whatever has focus: Stop ended the
+// take at once (the T-120 / T-141 (4) held-Enter class). Stop ignores a repeat; a fresh Enter on it still stops the take.
+// ═══════════════════════════════════════════════════════════════════════════
+import { MIN_WINDOW, setWindowSize } from './layout'
+
+test.describe('Record - a held Enter does not end the take it started (T-190 (1))', () => {
+  async function openRecord(label: string): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string }> {
+    ensureScreenshots()
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    seedUserData(userDataDir, SEED)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, null)
+    await gotoRecordFromHome(window)
+    return { app, window, root, userDataDir }
+  }
+
+  async function readyToStart(window: Page): Promise<Locator> {
+    await window.getByRole('checkbox').nth(0).uncheck() // no microphone in this container
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    const start = window.getByRole('button', { name: /Start recording/ })
+    await expect(start).toBeEnabled()
+    return start
+  }
+
+  test('Enter held on Start: the repeats land on Stop and the take keeps recording; a fresh Enter on Stop then stops it', async () => {
+    test.setTimeout(150_000)
+    const { app, window, root, userDataDir } = await openRecord('t190-held-start')
+    try {
+      const start = await readyToStart(window)
+      await start.focus()
+      await expect(start).toBeFocused()
+      // The key goes down and STAYS down: the first keydown starts the take ...
+      await window.keyboard.down('Enter')
+      const stop = window.getByRole('button', { name: 'Stop' })
+      await expect(stop).toBeVisible({ timeout: 30_000 })
+      await expect(stop, 'the premise: the swap put the focus on Stop (T-189 (1))').toBeFocused()
+      // ... and its auto-repeats (Playwright marks a second `down` of a key already down as a repeat) land on Stop.
+      for (let i = 0; i < 6; i++) await window.keyboard.down('Enter')
+      await window.keyboard.up('Enter')
+      await expect(window.getByText(/REC \d/), 'the take is still recording').toBeVisible()
+      await expect(stop).toBeVisible()
+      await expect(window.getByText(/Finishing up/), 'no saving card: the repeats did not press Stop').toHaveCount(0)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toHaveCount(0)
+      await window.waitForTimeout(1000)
+      await expect(window.getByText(/REC \d/)).toBeVisible()
+
+      // A fresh Enter is a decision: it stops the take.
+      await expect(stop).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 30_000 })
+      await expect.poll(() => leftoverTemps(userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-190 (3): the source grid keeps tiles one size at every window. `grid-cols-1 sm:grid-cols-2` stretched a 16:9 thumbnail to 704x444 at 1080p
+// and put every first-row name below the grid's 384 px visible bottom, and the selected tile's `ring-2` (a box-shadow) was clipped by the
+// grid's overflow on the top and left edges. Columns are `auto-fill`, and the grid has 4 px of inner padding.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Record - the source grid shows each tile whole at every window (T-190 (3))', () => {
+  const SIZES = [
+    { name: '1024x640', width: MIN_WINDOW.width, height: MIN_WINDOW.height },
+    { name: '1920x1080', width: 1920, height: 1080 },
+    { name: '2560x1440', width: 2560, height: 1440 }
+  ] as const
+
+  /** What main answers: 16:9 thumbnails at the 320x180 it requests, a screen and windows (the type reads the id's prefix). */
+  async function stubSources16x9(app: ElectronApplication, count: number): Promise<void> {
+    await app.evaluate(
+      async ({ desktopCapturer, nativeImage }, n) => {
+        const thumbnail = nativeImage.createFromBitmap(Buffer.alloc(320 * 180 * 4, 160), { width: 320, height: 180 })
+        const target = desktopCapturer as unknown as { getSources: unknown }
+        target.getSources = async () =>
+          Array.from({ length: n }, (_, i) => ({
+            id: `${i === 0 ? 'screen' : 'window'}:t190-${i}:0`,
+            name: i === 0 ? 'Entire screen' : `Window number ${i} with a longer title`,
+            thumbnail
+          }))
+      },
+      count
+    )
+  }
+
+  interface Geometry {
+    columns: number
+    tileHeight: number
+    tileWidth: number
+    gridHeight: number
+    scrollTop: number
+    outside: string[]
+    ringOutside: string[]
+  }
+
+  async function measure(window: Page): Promise<Geometry> {
+    return window.evaluate(() => {
+      const tiles = Array.from(document.querySelectorAll('button.card')).filter((b) => b.querySelector('img[alt]')) as HTMLElement[]
+      const grid = tiles[0].parentElement as HTMLElement
+      const g = grid.getBoundingClientRect()
+      const left = g.left + grid.clientLeft
+      const top = g.top + grid.clientTop
+      const right = left + grid.clientWidth
+      const bottom = top + grid.clientHeight
+      const first = tiles[0].getBoundingClientRect()
+      const row = tiles.filter((t) => Math.abs(t.getBoundingClientRect().top - first.top) < 1)
+      const outside: string[] = []
+      for (const t of row) {
+        const tr = t.getBoundingClientRect()
+        const parts: Array<[string, Element | null]> = [
+          ['tile', t],
+          ['name', t.querySelector('div.truncate')],
+          ['caption', t.querySelector('div.text-ink-dim')]
+        ]
+        for (const [what, el] of parts) {
+          const r = el!.getBoundingClientRect()
+          if (r.top < top - 0.5 || r.bottom > bottom + 0.5 || r.left < left - 0.5 || r.right > right + 0.5) {
+            outside.push(`${what} "${(el as HTMLElement).innerText.slice(0, 20)}" y ${Math.round(r.top)}-${Math.round(r.bottom)} x ${Math.round(r.left)}-${Math.round(r.right)} in grid y ${Math.round(top)}-${Math.round(bottom)} x ${Math.round(left)}-${Math.round(right)}`)
+          }
+        }
+        void tr
+      }
+      // The selected tile's 2 px ring is a box-shadow: it has to lie inside the scroller's client box.
+      const ringOutside: string[] = []
+      const sel = tiles.find((t) => t.getAttribute('aria-pressed') === 'true')
+      if (sel) {
+        const r = sel.getBoundingClientRect()
+        if (r.left - 2 < left - 0.5) ringOutside.push(`left ${Math.round(r.left - 2)} < ${Math.round(left)}`)
+        if (r.top - 2 < top - 0.5) ringOutside.push(`top ${Math.round(r.top - 2)} < ${Math.round(top)}`)
+        if (r.right + 2 > right + 0.5) ringOutside.push(`right ${Math.round(r.right + 2)} > ${Math.round(right)}`)
+        if (r.bottom + 2 > bottom + 0.5) ringOutside.push(`bottom ${Math.round(r.bottom + 2)} > ${Math.round(bottom)}`)
+      } else ringOutside.push('no selected tile')
+      return {
+        columns: new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().left))).size,
+        tileHeight: Math.round(first.height),
+        tileWidth: Math.round(first.width),
+        gridHeight: Math.round(g.height),
+        scrollTop: grid.scrollTop,
+        outside,
+        ringOutside
+      }
+    })
+  }
+
+  for (const size of SIZES) {
+    test(`at ${size.name}, with 3 and with 12 sources: each first-row tile's name and caption are inside the grid unscrolled, the selected ring is inside its box${size.width === MIN_WINDOW.width ? ', and two columns show' : ''}`, async () => {
+      test.setTimeout(150_000)
+      ensureScreenshots()
+      const root = makeRoot(`t190-grid-${size.name}`)
+      const userDataDir = path.join(root, 'userData')
+      seedUserData(userDataDir, SEED)
+      const app = await launchApp(userDataDir)
+      try {
+        const window = await app.firstWindow()
+        await gotoRecordFromHome(window)
+        await setWindowSize(app, window, size)
+        for (const count of [3, 12]) {
+          await stubSources16x9(app, count)
+          await window.getByRole('button', { name: /Pick a screen or window|Refresh sources/ }).first().click()
+          const tiles = window.locator('button.card').filter({ has: window.locator('img[alt]') })
+          await expect(tiles).toHaveCount(count, { timeout: 20_000 })
+          const first = tiles.first()
+          await first.scrollIntoViewIfNeeded()
+          await first.click()
+          await expect(first).toHaveAttribute('aria-pressed', 'true')
+          await window.mouse.move(0, 0)
+          const m = await measure(window)
+          test.info().annotations.push({
+            type: `${size.name} x ${count}`,
+            description: `${m.columns} columns, tile ${m.tileWidth}x${m.tileHeight}, grid height ${m.gridHeight}`
+          })
+          console.log(`T-190 (3) ${size.name} x ${count}: ${m.columns} columns, tile ${m.tileWidth}x${m.tileHeight}, grid ${m.gridHeight}`)
+          const label = `${size.name} with ${count} sources`
+          expect(m.scrollTop, `${label}: the grid is not scrolled`).toBe(0)
+          expect(m.outside, `${label}: a first-row tile, name or caption lies outside the grid's visible box`).toEqual([])
+          expect(m.tileHeight, `${label}: a whole tile is shorter than the grid`).toBeLessThan(m.gridHeight)
+          expect(m.ringOutside, `${label}: the selected tile's ring is clipped by the grid`).toEqual([])
+          if (size.width === MIN_WINDOW.width) expect(m.columns, `${label}: the minimum window still shows two columns`).toBe(2)
+        }
+      } finally {
+        await app.close()
+        cleanup(root)
+      }
+    })
+  }
+})

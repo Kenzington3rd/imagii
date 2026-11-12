@@ -43,6 +43,11 @@ export function Toolbar(): JSX.Element {
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const activeIsAdvanced = TOOLS.some((t) => t.id === tool && t.advanced === true)
   const showAdvanced = advancedOpen || activeIsAdvanced
+  // T-190 (2): a reveal is sticky for the Toolbar's life, whichever way it came. L / P made Line active without setting `advancedOpen`, so the
+  // next V, R or O hid the tools again, brought "+ More" back, and unmounted a focused Line (focus to <body>, the T-189 (1) class).
+  useEffect(() => {
+    if (activeIsAdvanced) setAdvancedOpen(true)
+  }, [activeIsAdvanced])
 
   // T-189 (1): revealing the tools removes the "+ More" button, and a removed element takes focus to <body> (STYLE_GUIDE's swap rule, T-119):
   // the next Tab started at the top of the window instead of at the Line and Pencil tools the person asked for. That holds for the button

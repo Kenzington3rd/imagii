@@ -646,8 +646,8 @@ Repeated UI is a component, not copy-paste:
   left alone (the drive may come back). A runner never assumes the folder is there: `ensureOutputDir` (`outputPath.ts`) makes it
   (recursive) before the probe and before `nextFreePath`, in the export, GIF, compile (before its first segment), reframe and
   picture-in-picture runners, and a folder that cannot be made is refused in a sentence that NAMES it (`outputFolderRefusal`).
-- **`toastSaved(message, outputPath, extra?)`** (`lib/savedToast.tsx`) — a success
-  toast that carries the only way on from a finished file (T-92). The GIF,
+- **`toastSaved(message, outputPath, extra?, icon?)`** (`lib/savedToast.tsx`) — a success
+  toast (T-190 (4): `icon`, optional, goes into the toast's options for the one outcome that wrote a file and is not a plain success, the caption burn with no captions in it: its warning icon and its Show in folder) that carries the only way on from a finished file (T-92). The GIF,
   picture-in-picture, reframe and compilation panels and Record all raised a
   `toast.success` holding a bare "Show" button, which react-hot-toast removes after
   2 s. The helper gives the toast `ACTION_TOAST_MS` (8 s; T-125 (19): and the two plain toasts that carry a fact the person
@@ -752,7 +752,14 @@ Repeated UI is a component, not copy-paste:
   over content that was already there alone. Where the swap can also come from a key or an undo, the effect moves focus
   only when it was on the removed control: the swap's own render still sees the old DOM, so it reads
   `document.activeElement` there (a ref set in render, used by the effect), and a swap that arrives while focus is on
-  another control moves nothing.
+  another control moves nothing. A focus the swap hands to a control that would ACT on a key repeat meets the
+  held Enter (T-190 (1)): the press's auto-repeats are keyboard clicks on the new focus (the T-120 / T-141 (4) class),
+  so each such receiver carries `onKeyDown={ignoreHeldEnter}` (lib/repeatPress.ts) - Record's **Stop**, the
+  second-track **role buttons**, Variants' **Save all**, the Fix wizard's answers and Apply (a fresh Enter still acts);
+  the tour's Next and Done hold a repeat by their own rule (`tutorialKeyIntent` answers 'hold', T-132 (6)). A
+  receiver whose repeat is an idempotent re-select or does nothing (the Line tool, the first source tile, the Gain
+  slider) or whose focus is the safe answer of a question (`data-initial-focus`) needs none. A reveal is sticky for the control's life (T-190 (2)): the toolbar's Line and Pencil, once shown by "+ More"
+  or by L / P, stay, so a later tool key cannot unmount the focused one.
 - **Smooth scrolling that script asks for reads the Reduce-motion setting itself (T-119).** The `prefers-reduced-motion`
   block in `index.css` sets `scroll-behavior: auto`, which governs scrolling CSS decides but not
   `scrollIntoView({ behavior: 'smooth' })`, an explicit option. The coachmark asks `matchMedia` and passes

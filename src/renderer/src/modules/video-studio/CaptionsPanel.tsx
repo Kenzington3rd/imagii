@@ -33,7 +33,7 @@ import { PanelHeader } from '../../components/PanelHeader'
 import { ProgressTrack } from '../../components/ProgressTrack'
 import { RunningCancel } from '../../components/RunningCancel'
 import { reportFailure } from '../../lib/reportFailure'
-import { ACTION_TOAST_MS } from '../../lib/savedToast'
+import { toastSaved } from '../../lib/savedToast'
 import { formatClock } from '@shared/clockTime'
 
 export function CaptionsPanel(): JSX.Element | null {
@@ -272,11 +272,10 @@ export function CaptionsPanel(): JSX.Element | null {
         // T-140 (1): the video exists at the path main answers. When the chosen file was open in another app it was kept beside it ("name (2)"), and the
         // toast says so (a longer sentence, so it stays up as long as a toast that carries a button does).
         const note = landedBesideNote(outputPath, result.outputPath, 'burn-in')
-        if (result.captioned) {
-          toast.success(note ? `${burnInDoneMessage(true, ranged)}. ${note}` : burnInDoneMessage(true, ranged), note ? { duration: ACTION_TOAST_MS } : undefined)
-        } else {
-          toast(note ? `${burnInDoneMessage(false, ranged)}. ${note}` : burnInDoneMessage(false, ranged), { icon: <Icon name="warning" size={18} />, duration: note ? ACTION_TOAST_MS : 6000 })
-        }
+        // T-190 (4): either outcome wrote a file, so either carries Show in folder (toastSaved: the first file written ALWAYS, T-146); the no-captions one keeps its warning icon.
+        const sentence = note ? `${burnInDoneMessage(result.captioned, ranged)}. ${note}` : burnInDoneMessage(result.captioned, ranged)
+        if (result.captioned) toastSaved(sentence, result.outputPath)
+        else toastSaved(sentence, result.outputPath, undefined, <Icon name="warning" size={18} />)
       } catch (err) {
         reportFailure(err, { failed: 'Burn-in failed.', canceled: 'Burn-in canceled.' })
       } finally {
@@ -395,7 +394,7 @@ export function CaptionsPanel(): JSX.Element | null {
           Open folder
         </button>
       </div>
-      <div className="font-mono break-all">{status?.exePath}</div>
+      <div className="font-mono break-all select-text">{status?.exePath}</div>
       {/* T-102: this is imagii's own data folder, not the app's install
           folder — the portable build unpacks to a temp folder that is
           rebuilt on every launch, so a file placed there would vanish. */}
@@ -417,7 +416,7 @@ export function CaptionsPanel(): JSX.Element | null {
           yourself and save it exactly here:
         </div>
       )}
-      <div className="font-mono break-all">{status?.modelPath}</div>
+      <div className="font-mono break-all select-text">{status?.modelPath}</div>
       {modelIn ? (
         <div>To replace it, delete that file (Show models folder opens its folder), then press Refresh status.</div>
       ) : null}
@@ -539,14 +538,15 @@ export function CaptionsPanel(): JSX.Element | null {
         // T-114: and it is a region, so its name is announced when focus lands (a name on a plain
         // div is not).
         <div
-          className="bg-bg-hover rounded p-2 max-h-40 overflow-y-auto text-xs outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="bg-bg-hover rounded p-2 max-h-40 overflow-y-auto text-xs select-text outline-none focus-visible:ring-2 focus-visible:ring-accent"
           role="region"
           tabIndex={0}
           aria-label="Transcript preview"
         >
           {segments.map((seg, i) => (
             <div key={i} className="py-0.5">
-              <span className="text-ink-dim font-mono mr-2">{formatClock(seg.startSec)}</span>
+              {/* T-190 (5): the clock is not part of the words a person copies: its digits are glued to the first word of the line (a double-click on "spoken" took "00spoken"). */}
+              <span className="text-ink-dim font-mono mr-2 select-none">{formatClock(seg.startSec)}</span>
               {seg.text}
             </div>
           ))}
