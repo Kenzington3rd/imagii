@@ -4,6 +4,17 @@ import path from 'node:path'
 import tailwindConfig from '../../tailwind.config.js'
 import { RENDERER_ROOT } from './routeSources'
 import { sourceFilesUnder } from './renderedStrings'
+import { CANVAS_TEMPLATES } from '../../src/renderer/src/modules/image-studio/templates'
+import {
+  makeEllipseLayer,
+  makeImageLayer,
+  makeLineLayer,
+  makeRectLayer,
+  makeReferenceLayer,
+  makeTextLayer,
+  textLayerFor,
+  useCanvasStore
+} from '../../src/renderer/src/modules/image-studio/state/canvasStore'
 import {
   BG_BASE,
   BG_ELEVATED,
@@ -585,5 +596,99 @@ describe('accent-muted is a hover state and nothing else (T-192 (1))', () => {
     expect(nonHoverAccentMuted("theme('colors.accent.muted')")).toEqual(['accent.muted'])
     expect(nonHoverAccentMuted('className="hover:bg-accent-muted"')).toEqual([])
     expect(nonHoverAccentMuted('className="md:hover:bg-accent-muted bg-accent"')).toEqual([])
+  })
+})
+
+/**
+ * T-193 (3): the sibling of the pin above that it could not see. The "Emote · Blank circle" template drew its ring in `#f52e2e`, accent-muted's VALUE, as a raw hex in
+ * document content (1.08:1 from its `#ff3131` fill: no ring was drawn or exported, and the Stroke field read `#f52e2e` and 2 px). The identifier pin only reads source
+ * that names ACCENT_MUTED, so the value is pinned here: no template layer and no layer factory default (the default document included) holds it, in any case, as a hex or
+ * as its rgb triple. And every template layer that strokes over an opaque fill clears 1.5:1 from that fill (the floor under which a ring is not a ring).
+ */
+const ACCENT_MUTED_VALUE = /#f52e2e|\b245\s*,\s*46\s*,\s*46\b/i
+
+function namesAccentMuted(text: string): boolean {
+  return ACCENT_MUTED_VALUE.test(text)
+}
+
+/** A color the document paints with no see-through: `#rrggbb`, or an `rgba()` at alpha 1. Anything else is not opaque (or not a color). */
+function opaqueHex(color: unknown): string | null {
+  if (typeof color !== 'string') return null
+  if (/^#[0-9a-f]{6}$/i.test(color)) return color.toLowerCase()
+  const m = color.match(/^rgba?\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*(?:,\s*([\d.]+)\s*)?\)$/i)
+  if (!m || (m[4] !== undefined && Number(m[4]) !== 1)) return null
+  return `#${[m[1], m[2], m[3]].map((c) => Number(c).toString(16).padStart(2, '0')).join('')}`
+}
+
+describe('no template layer and no layer default names accent-muted\'s value (T-193 (3))', () => {
+  const factoryDefaults = (): unknown[] => {
+    useCanvasStore.getState().resetDocument()
+    const blank = useCanvasStore.getState().doc
+    return [
+      blank,
+      makeRectLayer(0, 0),
+      makeEllipseLayer(0, 0),
+      makeLineLayer([0, 0, 1, 1]),
+      makeLineLayer([0, 0, 1, 1, 2, 0], 'Pencil'),
+      makeTextLayer(0, 0),
+      textLayerFor(blank),
+      makeImageLayer('data:image/png;base64,AA==', 10, 10),
+      makeReferenceLayer('data:image/png;base64,AA==', 10, 10, 'ref')
+    ]
+  }
+
+  it('no template names it, in any layer field or the document\'s background', () => {
+    const offenders = CANVAS_TEMPLATES.filter((t) => namesAccentMuted(JSON.stringify(t.doc))).map((t) => t.id)
+    expect(offenders).toEqual([])
+  })
+
+  it('no layer factory default (nor the blank document) names it', () => {
+    const defaults = factoryDefaults()
+    expect(defaults.length).toBeGreaterThan(5)
+    expect(defaults.filter((d) => namesAccentMuted(JSON.stringify(d)))).toEqual([])
+  })
+
+  it('the scan is not vacuous: it reads the layers, and the value it refuses is the token\'s', () => {
+    expect(CANVAS_TEMPLATES.flatMap((t) => t.doc.layers).length).toBeGreaterThan(20)
+    expect(namesAccentMuted(JSON.stringify(CANVAS_TEMPLATES.map((t) => t.doc)))).toBe(false)
+    expect(namesAccentMuted(ACCENT_MUTED)).toBe(true)
+  })
+
+  it('control: a hex in either case and the rgb and rgba triples are refused; the accent, the base and a near miss are not', () => {
+    for (const bad of ['#f52e2e', '#F52E2E', '"stroke":"#F52e2E"', 'rgb(245,46,46)', 'rgba(245, 46, 46, 0.4)']) expect(namesAccentMuted(bad), bad).toBe(true)
+    for (const ok of [ACCENT, BG_BASE, '#f52e2f', 'rgba(245, 46, 47, 0.4)', 'rgba(2245, 46, 46, 1)']) expect(namesAccentMuted(ok), ok).toBe(false)
+  })
+
+  it('the Blank circle\'s ring is the base colour and clears 3:1 against its fill (a Stroke edit is visible)', () => {
+    const t = CANVAS_TEMPLATES.find((x) => x.id === 'emote-blank-112')
+    const ring = t?.doc.layers.find((l) => l.name === 'Base circle')
+    expect(ring?.type).toBe('ellipse')
+    const { stroke, fill, strokeWidth } = ring as unknown as { stroke: string; fill: string; strokeWidth: number }
+    expect(strokeWidth).toBeGreaterThan(0)
+    expect(stroke).toBe(BG_BASE)
+    expect(contrast(stroke, fill)).toBeGreaterThan(3)
+  })
+
+  it('every template layer that strokes over an opaque fill clears 1.5:1 from that fill', () => {
+    const rows: Array<{ id: string; layer: string; stroke: string; fill: string; ratio: number }> = []
+    for (const t of CANVAS_TEMPLATES) {
+      for (const l of t.doc.layers) {
+        const { stroke, fill, strokeWidth } = l as unknown as { stroke?: unknown; fill?: unknown; strokeWidth?: number }
+        const s = opaqueHex(stroke)
+        const f = opaqueHex(fill)
+        if (!s || !f || !((strokeWidth ?? 0) > 0)) continue
+        rows.push({ id: t.id, layer: l.name, stroke: s, fill: f, ratio: contrast(s, f) })
+      }
+    }
+    expect(rows.length, 'the scan finds the Blank circle and the POG disc').toBeGreaterThanOrEqual(2)
+    expect(rows.filter((r) => r.ratio < 1.5)).toEqual([])
+  })
+
+  it('control: the rule discriminates (the old ring is under 1.5:1 and the opaque test reads hex, opaque rgba, and nothing else)', () => {
+    expect(contrast('#f52e2e', '#ff3131')).toBeLessThan(1.5)
+    expect(opaqueHex('#FF3131')).toBe('#ff3131')
+    expect(opaqueHex('rgba(18,12,12,1)')).toBe('#120c0c')
+    expect(opaqueHex('rgba(18,12,12,0.85)')).toBeNull()
+    expect(opaqueHex('transparent')).toBeNull()
   })
 })

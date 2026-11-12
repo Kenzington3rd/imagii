@@ -8,7 +8,7 @@ import { basename } from '../../components/OutputDirLabel'
 import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
-import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
+import { dropSwapPress, focusAfterSwap, recordSwapPress, type SwapToken } from '../../lib/swapFocus'
 import { describeFailedOpen, examineDroppedFile } from '@shared/importDiagnostics'
 import {
   VIDEO_EXTENSIONS,
@@ -40,10 +40,14 @@ export function Importer(): JSX.Element {
   useEffect(() => {
     focusAfterSwap('video-choose', chooseRef.current)
   }, [])
-  /** A press that may open a video: the pick's focus is recorded while this row still has it, and dropped by every way the pick ends without one. */
-  function recordPick(): void {
+  /**
+   * A press that may open a video: the pick's focus is recorded while this row still has it, and its token is dropped by every way the pick ends without one.
+   * T-193 (1): only a press that PROCEEDS records (a Recent entry pressed while an import runs is turned away first), and a press drops only its own token, so a
+   * refused press never clears the record of the import that is still running.
+   */
+  function recordPick(): SwapToken | null {
     const active = document.activeElement
-    recordSwapPress('video-play', active !== null && rowRef.current !== null && rowRef.current.contains(active))
+    return recordSwapPress('video-play', active !== null && rowRef.current !== null && rowRef.current.contains(active))
   }
 
   /** Refuses a second import while one runs — it used to start a PARALLEL conversion
@@ -51,8 +55,7 @@ export function Importer(): JSX.Element {
   function refuseIfBusy(): boolean {
     const running = useImportRun.getState().run
     if (running === null) return false
-    // T-192 (3): a refused press swaps nothing.
-    dropSwapPress('video-play')
+    // T-193 (1): drops nothing - the press that is refused holds no record of its own here, and the target's record belongs to the import that is running.
     toast(
       running.converting
         ? 'Still converting the last video. Wait for it to finish.'
@@ -63,19 +66,23 @@ export function Importer(): JSX.Element {
   }
 
   /** `advise`: what the drop has to say about the file ("may not be a supported video"). Said after the kept question (a Cancel says nothing about a file that was not tried) and before the run is claimed. */
-  async function handleFile(filePath: string, advise?: () => void): Promise<void> {
+  async function handleFile(filePath: string, advise?: () => void, token: SwapToken | null = null): Promise<void> {
     if (!filePath) return
-    if (refuseIfBusy()) return
+    // A Choose file… whose chooser was open when another import began lands here refused: it drops its own record (a drop has none: `token` is null).
+    if (refuseIfBusy()) {
+      dropSwapPress('video-play', token)
+      return
+    }
     // T-175 (3): a part kept for a video that could not be opened (clips waiting for an unplugged drive) is let go when a DIFFERENT video opens here. Asked before the
     // run is claimed or anything is said, over the file this opens (`videoKey` of the loaded video: the picked path, converted or not); Cancel opens nothing.
     const keptQuestion = keptPartQuestion('video', filePath, basename(filePath))
     if (keptQuestion !== null && !confirm(keptQuestion)) {
-      dropSwapPress('video-play')
+      dropSwapPress('video-play', token)
       return
     }
     advise?.()
     if (!useImportRun.getState().begin({ filePath, converting: false })) {
-      dropSwapPress('video-play')
+      dropSwapPress('video-play', token)
       return
     }
     // T-136 (2): what the video store held when this import began. The importer is on screen only while no video is open, but the conversion takes
@@ -121,7 +128,7 @@ export function Importer(): JSX.Element {
       const sentence = await describeFailedOpen(err, filePath, 'video', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })
       toast.error(sentence, { duration: 8000 })
     } finally {
-      if (!kept) dropSwapPress('video-play')
+      if (!kept) dropSwapPress('video-play', token)
       useImportRun.getState().end()
     }
   }
@@ -158,16 +165,18 @@ export function Importer(): JSX.Element {
   }
 
   function pickRecent(path: string): void {
-    recordPick()
-    void handleFile(path)
+    // T-193 (1): turned away BEFORE it records, so the refusal cannot touch the running import's record.
+    if (refuseIfBusy()) return
+    void handleFile(path, undefined, recordPick())
   }
 
   async function onPickFile(): Promise<void> {
-    recordPick()
     await claimFirst(pickingRef, async () => {
+      // Recorded once the press holds the claim (a double-click's second press records nothing) and ahead of the chooser's first await, so the focus read is the press's.
+      const token = recordPick()
       const filePath = await window.api.video.pickFile()
-      if (filePath) await handleFile(filePath)
-      else dropSwapPress('video-play')
+      if (filePath) await handleFile(filePath, undefined, token)
+      else dropSwapPress('video-play', token)
     })
   }
 

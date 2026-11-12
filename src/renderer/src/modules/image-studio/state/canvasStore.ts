@@ -1,6 +1,6 @@
 import { create } from 'zustand'
 import { nanoid } from 'nanoid'
-import { ACCENT, BG_BASE, EMBER, INK_BASE, withAlpha } from '../../../styles/tokens'
+import { ACCENT, BG_BASE, INK_BASE, withAlpha } from '../../../styles/tokens'
 import type {
   CanvasDocument,
   CanvasLayer,
@@ -402,7 +402,9 @@ export function makeLineLayer(points: number[], name: 'Line' | 'Pencil' = 'Line'
     scaleY: 1,
     opacity: 1,
     points,
-    stroke: EMBER,
+    // T-193 (4): the accent, the Rectangle's and Ellipse's stroke and the Line tool's draw preview. Ember was 1.67:1 on the default white page, and Line and
+    // Pencil have no colour box (T-186), so the default is the colour a person gets.
+    stroke: ACCENT,
     strokeWidth: 3,
     closed: false
   }

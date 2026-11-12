@@ -30,7 +30,7 @@ import {
   makeRectLayer,
   useCanvasStore
 } from './state/canvasStore'
-import { ACCENT, EMBER, INK_BASE, INK_MUTED, withAlpha } from '../../styles/tokens'
+import { ACCENT, INK_BASE, INK_MUTED, withAlpha } from '../../styles/tokens'
 
 /**
  * What every layer type shares on the stage: where it is, how it is transformed, and the handlers that make it selectable,
@@ -535,7 +535,8 @@ export function Canvas(): JSX.Element {
           {pencilPoints && pencilPoints.length >= 4 ? (
             <Line
               points={pencilPoints}
-              stroke={EMBER}
+              // T-193 (4): the stroke being drawn is the colour the Pencil layer is made in (`makeLineLayer`'s default), so releasing does not change it.
+              stroke={ACCENT}
               strokeWidth={3}
               lineCap="round"
               lineJoin="round"

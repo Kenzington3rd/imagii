@@ -1985,7 +1985,7 @@ test.describe('Image Studio — import', () => {
       await expectShapeCount(window, 1)
       const first = await lastShape(window)
       expect(first.cls).toBe('Image')
-      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:94).
+      // Under the 800px cap, and on a document it fits, the fixture keeps its natural size (`placementFor`, called at ImportPanel.tsx:96).
       expect(first.x).toBe(60)
       expect(first.y).toBe(60)
       expect(await layerNames(window)).toEqual(['dropped-empty.png'])
@@ -8588,6 +8588,78 @@ test.describe('Image Studio - the empty state keeps the keyboard\'s place; a Mov
       await expect.poll(() => layerNames(window)).toEqual(['Subtitle', 'Eyebrow', 'Title', 'Accent stripe'])
       await layerRow(window, 'Eyebrow').getByRole('button', { name: 'Move layer up' }).click()
       await expect.poll(() => layerNames(window)).toEqual(['Eyebrow', 'Subtitle', 'Title', 'Accent stripe'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-193 (1): a paste or a drop that is refused while an Import image ingest is pending leaves that press's focus record alone. Enter on Import image records that its button held
+// focus (`lib/swapFocus.ts`) and the Select tool takes it when the layer lands; `ingestFile`'s refused type and failed decode used to drop the target's record whatever press made
+// it, so a refused paste or drop during the ingest meant the Select tool never took the focus (the body). A paste and a drop record nothing, so they drop nothing. The
+// ingest is held at its first read (`FileReader.readAsDataURL`) and released from the test, so the refusals land while the Import image ingest is still pending.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Image Studio - a refused paste or drop leaves a pending Import image\'s focus record alone (T-193 (1))', () => {
+  const selectTool = (window: Page): Locator => window.locator(TOOLBAR).getByRole('button', { name: 'Select', exact: true })
+
+  test('with an Import image ingest held, a refused-type paste, a paste that will not decode and a refused-type drop each say so, and when the ingest lands focus is on the Select tool', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t193-refused')
+    const { window } = studio
+    try {
+      const choosers: Array<{ setFiles: (f: string) => Promise<void> }> = []
+      window.on('filechooser', (c) => choosers.push(c as unknown as { setFiles: (f: string) => Promise<void> }))
+      // Hold the FIRST read (the Import image's file): its release is kept on `window`. Later reads (the paste that will not decode) pass straight through.
+      await window.evaluate(() => {
+        const w = window as unknown as { __t193Release?: () => void }
+        const read = FileReader.prototype.readAsDataURL
+        let held = false
+        FileReader.prototype.readAsDataURL = function (this: FileReader, blob: Blob) {
+          if (!held) {
+            held = true
+            w.__t193Release = () => read.call(this, blob)
+            return
+          }
+          return read.call(this, blob)
+        }
+      })
+      const pick = window.getByRole('button', { name: 'Import image', exact: true })
+      await pick.focus()
+      await expect(pick).toBeFocused()
+      await window.keyboard.press('Enter')
+      await expect.poll(() => choosers.length, { timeout: 10_000 }).toBe(1)
+      await choosers[0]!.setFiles(studio.fixturePng)
+      await expect.poll(() => window.evaluate(() => typeof (window as unknown as { __t193Release?: unknown }).__t193Release), { timeout: 10_000, message: 'the ingest is started and held' }).toBe('function')
+      await expect(window.getByText('Pick a template to start'), 'no layer yet: the ingest is still held').toBeVisible()
+
+      // A paste carrying a file that is not a picture (named so, typed as one): refused for its type.
+      const paste = (name: string, bytes: number[]): Promise<void> =>
+        window.evaluate(({ name, bytes }) => {
+          const data = new DataTransfer()
+          data.items.add(new File([new Uint8Array(bytes)], name, { type: 'image/png' }))
+          document.body.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }))
+        }, { name, bytes })
+      await paste('notes.txt', [104, 105])
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [200] }).toContain('Unsupported file type')
+      // A paste named like a picture whose bytes are not one: refused when it will not decode.
+      await paste('broken.png', [1, 2, 3, 4, 5, 6, 7, 8])
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [200] }).toContain("Couldn't import that image.")
+      // A drop of a file that is not a picture, on the empty state's drop zone: the same refusal, a second time.
+      const before = (await readToastLog(window)).filter((t) => t === 'Unsupported file type').length
+      await window.getByText('Drop, paste (Ctrl+V), or import a file to edit your own image instead.').evaluate((el) => {
+        const file = new File([new Uint8Array([104, 105])], 'more-notes.txt', { type: '' })
+        const event = new Event('drop', { bubbles: true, cancelable: true })
+        Object.defineProperty(event, 'dataTransfer', { value: { files: [file] } })
+        el.dispatchEvent(event)
+      })
+      await expect.poll(async () => (await readToastLog(window)).filter((t) => t === 'Unsupported file type').length, { timeout: 10_000, intervals: [200] }).toBeGreaterThan(before)
+      await expect(window.getByText('Pick a template to start'), 'no layer yet: the ingest is still held').toBeVisible()
+
+      // The ingest lands.
+      await window.evaluate(() => (window as unknown as { __t193Release: () => void }).__t193Release())
+      await expectLayerCount(window, 1)
+      await expect(selectTool(window), 'the refused paste and drop dropped the Import image\'s record (red on the base: the body)').toBeFocused()
     } finally {
       await closeStudio(studio)
     }

@@ -4344,3 +4344,241 @@ test.describe('Video Studio - a swapped studio keeps the keyboard\'s place (T-19
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-193 (1): a press refused while an import runs leaves the running import's focus record alone. Enter on Choose file… for a file that CONVERTS records that its button held
+// focus (`lib/swapFocus.ts`); a Recent entry or a drop during the conversion is turned away, and used to drop that record, so when the conversion landed Play did not take the
+// focus (the body). A record carries its press now (a token), and a press turned away at once records nothing and drops nothing. The conversion is held in MAIN
+// (`video:convertForImport`'s handler is replaced for the case and released from the test), so the refusal lands while the first import is still running.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Video Studio - a refused press leaves the running import\'s focus record alone (T-193 (1))', () => {
+  const BUSY = 'Still converting the last video. Wait for it to finish.'
+  const chooseButton = (window: Page): Locator => window.getByRole('button', { name: 'Choose file…' })
+  const playButton = (window: Page): Locator => window.locator('[data-tutorial="video-player"]').getByRole('button', { name: 'Play', exact: true })
+
+  /** An flv holding the fixture's streams (stream copy): a container the importer converts before it opens. */
+  let flv = ''
+  test.beforeAll(async () => {
+    flv = path.join(root, 'source', 't193-stream.flv')
+    const made = await runBinary(ffmpegPath, ['-y', '-i', fixture, '-c', 'copy', '-f', 'flv', flv])
+    if (made.code !== 0) throw new Error(`flv fixture ffmpeg exit ${made.code}: ${made.stderr.slice(-400)}`)
+  })
+
+  /** Launch on the empty Video Studio with `fixture` in the Recent list; the OS chooser answers `picked`. */
+  async function launchHeld(name: string): Promise<{ app: ElectronApplication; window: Page }> {
+    const userDataDir = path.join(root, `ud-${name}-${Date.now().toString(36)}`)
+    mkdirSync(userDataDir, { recursive: true })
+    writeFileSync(
+      path.join(userDataDir, 'config.json'),
+      JSON.stringify({ welcomeSeen: true, tutorialSeen: { video: true, audio: true, image: true, ai: true }, recentFiles: { video: [fixture] } }, null, 2),
+      'utf8'
+    )
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await window.waitForLoadState('domcontentloaded')
+    await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 30_000 })
+    await window.locator('a', { hasText: 'Video Studio' }).first().click()
+    await expect(window.getByText('Drop a video here')).toBeVisible({ timeout: 15_000 })
+    await installToastLog(window)
+    await app.evaluate(({ dialog, ipcMain }, picked) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+      // The conversion waits on a gate the test opens, then runs for real.
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args: unknown[]) => Promise<unknown>> })._invokeHandlers
+      const real = handlers.get('video:convertForImport')
+      if (!real) throw new Error('video:convertForImport has no handler to hold')
+      let open!: () => void
+      const gate = new Promise<void>((resolve) => (open = resolve))
+      ;(globalThis as unknown as { __t193Release: () => void }).__t193Release = open
+      ipcMain.removeHandler('video:convertForImport')
+      ipcMain.handle('video:convertForImport', async (...args: unknown[]) => {
+        await gate
+        return real(...args)
+      })
+    }, flv)
+    return { app, window }
+  }
+  const release = (app: ElectronApplication): Promise<void> => app.evaluate(() => (globalThis as unknown as { __t193Release: () => void }).__t193Release())
+
+  /** Enter on Choose file… for the flv, and wait until its conversion is the one running (the button is off and the toast says so). */
+  async function startHeldConversion(window: Page): Promise<void> {
+    const choose = chooseButton(window)
+    await choose.focus()
+    await expect(choose).toBeFocused()
+    await window.keyboard.press('Enter')
+    await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Converting for editing…')
+    await expect(chooseButton(window), 'the conversion is the import that runs').toBeDisabled()
+  }
+
+  test('a Recent entry pressed with Enter during the conversion is refused in its sentence, and when the conversion lands focus is on Play', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchHeld('t193-recent')
+    try {
+      await startHeldConversion(window)
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await window.keyboard.press('Tab')
+      const entry = window.getByRole('button', { name: /video-core\.mp4/ }).first()
+      await expect(entry).toBeFocused()
+      await window.keyboard.press('Enter')
+      // Control: the refusal still says why, and opened nothing.
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [200] }).toContain(BUSY)
+      await expect(window.getByRole('button', { name: 'Export 1' })).toHaveCount(0)
+
+      await release(app)
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 60_000 })
+      await expect(window.locator('header').getByText('t193-stream.flv', { exact: true }), 'the video that opened is the first press\'s').toBeVisible()
+      await expect(playButton(window), 'the refused Recent pick dropped the conversion\'s record (red on the base: the body)').toBeFocused()
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a drop during the conversion is refused in its sentence, and when the conversion lands focus is on Play', async () => {
+    test.setTimeout(180_000)
+    const { app, window } = await launchHeld('t193-drop')
+    try {
+      await startHeldConversion(window)
+      await dropOnVideoImporter(window, fixture, path.basename(fixture))
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [200] }).toContain(BUSY)
+      await expect(window.getByRole('button', { name: 'Export 1' })).toHaveCount(0)
+
+      await release(app)
+      await expect(window.getByRole('button', { name: 'Export 1' })).toBeVisible({ timeout: 60_000 })
+      await expect(window.locator('header').getByText('t193-stream.flv', { exact: true })).toBeVisible()
+      await expect(playButton(window), 'the refused drop dropped the conversion\'s record (red on the base: the body)').toBeFocused()
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-193 (2): nothing in Export's grid moves under a toggle
+// ═══════════════════════════════════════════════════════════════════════════
+// The always-mounted NOTHING_QUEUED region (T-153) sat ABOVE the platform grid and gave up its collapse the moment the last platform was unchecked: a line and a gap
+// (32 px) arrived over the grid and every card moved down, so the second press of a double-click on the only checked card landed on the card above it (TikTok's
+// landed on YouTube). The region is BELOW the grid now, still mounted, still a status region. Row 2 of the 3-column grid is TikTok, X / Twitter and Facebook.
+test.describe('T-193 (2): a toggle in Export\'s grid moves no card', () => {
+  const WHY = 'Check at least one platform below to export.'
+  const exportCardOf = (window: Page): Locator => window.locator('[data-tutorial="video-export"]')
+  const boxOf = (window: Page, id: string): Locator => exportCardOf(window).locator(`[data-export-target="${id}"]`).getByRole('checkbox')
+  const checkedIds = (window: Page): Promise<string[]> =>
+    window.evaluate(() =>
+      [...document.querySelectorAll('[data-tutorial="video-export"] [data-export-target]')]
+        .filter((el) => (el.querySelector('input[type="checkbox"]') as HTMLInputElement).checked)
+        .map((el) => el.getAttribute('data-export-target') as string)
+    )
+  const cardBoxes = async (window: Page): Promise<Array<{ x: number; y: number; width: number; height: number } | null>> => {
+    const cards = await exportCardOf(window).locator('[data-export-target]').all()
+    return Promise.all(cards.map((c) => c.boundingBox()))
+  }
+
+  /** A person's double-click: two presses at one point with a human gap between them (the second a moment after the first lands, the moved page or not). */
+  const doubleClickAtBox = async (window: Page, target: Locator): Promise<void> => {
+    // App drops a repeat press for half a second after a route change (T-153 (3)), and `launchWithVideo` ends a few hundred ms after it on a quiet machine: wait it
+    // out, or the second press is swallowed and the case measures nothing (re-pointed at the merge: it passed only under load; the T-192 (4) cases wait the same way).
+    await expect.poll(() => window.evaluate(() => performance.now()), { timeout: 10_000 }).toBeGreaterThan(2000)
+    const box = await target.boundingBox()
+    if (!box) throw new Error('no box to press')
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    await window.mouse.move(x, y)
+    await window.mouse.down()
+    await window.mouse.up()
+    await window.waitForTimeout(80)
+    await window.mouse.down({ clickCount: 2 })
+    await window.mouse.up({ clickCount: 2 })
+    await window.waitForTimeout(400)
+  }
+
+  test('a double-click on the only checked platform, a row-2 one, leaves no other platform checked (it checked YouTube)', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t193-dblclick')
+    try {
+      await boxOf(window, 'tiktok').check()
+      await boxOf(window, 'youtube').uncheck()
+      expect(await checkedIds(window), 'set up: only TikTok is checked').toEqual(['tiktok'])
+      // The first press unchecks it (nothing is queued, the sentence arrives); the second lands where the first did.
+      await doubleClickAtBox(window, boxOf(window, 'tiktok'))
+      expect(await checkedIds(window), 'two presses on one card: it toggled off and on, and no other card was touched').toEqual(['tiktok'])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('the cards do not move when the last platform is unchecked or checked again, and the sentence arrives under the grid', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t193-boxes')
+    try {
+      const region = exportCardOf(window).locator('[role="status"]')
+      await expect(region).toHaveText('')
+      const before = await cardBoxes(window)
+      expect(before, 'the six built-in cards, no custom preset in the seeded profile').toHaveLength(6)
+      expect(await checkedIds(window), 'set up: YouTube is the one checked').toEqual(['youtube'])
+
+      await boxOf(window, 'youtube').uncheck()
+      await expect(region).toHaveText(WHY)
+      await expect(exportCardOf(window).getByRole('button', { name: 'Export', exact: true })).toBeDisabled()
+      expect(await cardBoxes(window), 'the line arrived and no card moved').toEqual(before)
+      const last = before[before.length - 1]
+      const said = await region.boundingBox()
+      expect(said && last && said.y >= last.y + last.height, 'the sentence is under the last card, not over the first').toBe(true)
+
+      await boxOf(window, 'youtube').check()
+      await expect(region).toHaveText('')
+      expect(await cardBoxes(window), 'and it went without moving them either').toEqual(before)
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('control: the sentence is still announced from the region that was already mounted (T-153) and the Export button says the same', async () => {
+    test.setTimeout(90_000)
+    const { app, window } = await launchWithVideo('t193-announced')
+    try {
+      const region = exportCardOf(window).locator('[role="status"]')
+      await expect(region).toHaveCount(1)
+      const mounted = await region.elementHandle()
+      await boxOf(window, 'youtube').uncheck()
+      await expect(region).toHaveText(WHY)
+      expect(await mounted?.evaluate((el) => el.isConnected), 'the same element, not a new one').toBe(true)
+      await expect(exportCardOf(window).getByRole('button', { name: 'Export', exact: true })).toHaveAttribute('title', WHY)
+    } finally {
+      await app.close()
+    }
+  })
+  // The class grep (the other always-mounted regions with the collapse trick): GIF's length warning sat above the Width / Frame rate / Speed row and a Speed change raises it,
+  // so it moved the Speed select (the control just pressed) 44 px down. It is under the row now. (Compile's, Reference Search's and the Player's are ruled in
+  // INTERACTION_COVERAGE's round 142 Track B section, with their measurements.)
+  test('GIF: Speed to 0.5x on a 10 s clip raises the warning under the three selects and moves none of them (Speed moved 44 px)', async () => {
+    test.setTimeout(150_000)
+    const ten = path.join(root, 'source', 'video-core-t193-10s.mp4')
+    const made = await runBinary(ffmpegPath, ['-y', '-f', 'lavfi', '-i', 'testsrc2=size=160x120:rate=15:duration=10', '-f', 'lavfi', '-i', 'sine=frequency=440:duration=10', '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-shortest', ten])
+    expect(made.code, made.stderr.slice(-400)).toBe(0)
+    const { app, window } = await launchWithVideo('t193-gif', ten)
+    try {
+      const gif = window.locator('div.card', { has: window.getByRole('button', { name: 'Export GIF' }) }).last()
+      const region = gif.locator('[role="status"]')
+      const selects = [gif.getByLabel('Width'), gif.getByLabel('Frame rate'), gif.getByLabel('Speed')]
+      const boxes = (): Promise<Array<{ x: number; y: number; width: number; height: number } | null>> => Promise.all(selects.map((l) => l.boundingBox()))
+      await expect(region).toHaveText('')
+      const before = await boxes()
+      expect(before.every((b) => b !== null), 'the three selects are on the page').toBe(true)
+
+      await gif.getByLabel('Speed').selectOption('0.5')
+      await expect(region).toHaveText('GIF exports over about 10 s get huge. Trim the clip first.')
+      expect(await boxes(), 'the warning arrived and none of the selects moved').toEqual(before)
+      const said = await region.boundingBox()
+      const speed = before[2]
+      expect(said && speed && said.y >= speed.y + speed.height, 'the warning is under the selects, not over them').toBe(true)
+
+      await gif.getByLabel('Speed').selectOption('1')
+      await expect(region).toHaveText('')
+      expect(await boxes(), 'and it went without moving them either').toEqual(before)
+    } finally {
+      await app.close()
+    }
+  })
+})

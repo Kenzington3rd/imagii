@@ -7108,3 +7108,99 @@ test.describe('Audio Studio - a held Enter puts back one cut; a swapped studio k
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-193 (1): a press refused while an import runs leaves the running import's focus record alone. Enter on Choose file… for a video records that its button held focus
+// (`lib/swapFocus.ts`); a Recent entry or a drop during the extraction is turned away, and used to drop that record, so when the extraction landed Play did not take the focus
+// (the body; the sweep's reader executed exactly this). A record carries its press now (a token), and a press turned away at once records nothing and drops nothing. The
+// extraction is held in MAIN (`audio:extractFromVideo`'s handler is replaced for the case and released from the test), so the refusal lands while the first import runs.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Audio Studio - a refused press leaves the running import\'s focus record alone (T-193 (1))', () => {
+  const BUSY = 'Still extracting audio from the last file. Wait for it to finish.'
+  const chooseButton = (window: Page) => window.getByRole('button', { name: 'Choose file…' })
+
+  /** Open the studio with the tone in the Recent list; the OS chooser answers the video, and its extraction waits on a gate the test opens (then runs for real). */
+  async function openHeld(label: string): Promise<Studio> {
+    const studio = await openStudio(label)
+    const { app, window } = studio
+    const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+    await makeFixtureMp4(video)
+    await window.evaluate((p) => window.api.settings.set('recentFiles.audio', [p]), studio.fixture)
+    // The Recent list is read when the importer mounts: a trip Home and back mounts it again.
+    await window.getByRole('link', { name: 'Home' }).click()
+    await expect(window.locator('h1', { hasText: 'imagii' })).toBeVisible({ timeout: 15_000 })
+    await window.locator('a', { hasText: 'Audio Studio' }).first().click()
+    await expect(window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+    await app.evaluate(({ dialog, ipcMain }, picked) => {
+      ;(dialog as unknown as { showOpenDialog: unknown }).showOpenDialog = async () => ({ canceled: false, filePaths: [picked] })
+      const handlers = (ipcMain as unknown as { _invokeHandlers: Map<string, (...args: unknown[]) => Promise<unknown>> })._invokeHandlers
+      const real = handlers.get('audio:extractFromVideo')
+      if (!real) throw new Error('audio:extractFromVideo has no handler to hold')
+      let open!: () => void
+      const gate = new Promise<void>((resolve) => (open = resolve))
+      ;(globalThis as unknown as { __t193Release: () => void }).__t193Release = open
+      ipcMain.removeHandler('audio:extractFromVideo')
+      ipcMain.handle('audio:extractFromVideo', async (...args: unknown[]) => {
+        await gate
+        return real(...args)
+      })
+    }, video)
+    return studio
+  }
+  const release = (studio: Studio): Promise<void> => studio.app.evaluate(() => (globalThis as unknown as { __t193Release: () => void }).__t193Release())
+
+  /** Enter on Choose file… for the video, and wait until its extraction is the one running. */
+  async function startHeldExtraction(window: Page): Promise<void> {
+    const choose = chooseButton(window)
+    await choose.focus()
+    await expect(choose).toBeFocused()
+    await window.keyboard.press('Enter')
+    await expect.poll(() => readToastLog(window), { timeout: 15_000, intervals: [200] }).toContain('Extracting audio…')
+    await expect(window.getByRole('button', { name: 'Loading…' }), 'the extraction is the import that runs').toBeDisabled()
+  }
+
+  test('a Recent entry pressed with Enter during the extraction is refused in its sentence, and when the extraction lands focus is on Play', async () => {
+    test.setTimeout(180_000)
+    const studio = await openHeld('t193-recent')
+    const { window } = studio
+    try {
+      await startHeldExtraction(window)
+      const toggle = window.getByRole('button', { name: 'Recent (1)' })
+      await toggle.focus()
+      await window.keyboard.press('Enter')
+      await expect(toggle).toHaveAttribute('aria-expanded', 'true')
+      await window.keyboard.press('Tab')
+      await expect(window.getByRole('button', { name: /e2e-tone\.wav/ }).first()).toBeFocused()
+      await window.keyboard.press('Enter')
+      // Control: the refusal still says why, and opened nothing.
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [200] }).toContain(BUSY)
+      await expect(window.locator(WAVEFORM)).toHaveCount(0)
+
+      await release(studio)
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true }), 'the sound that opened is the first press\'s').toBeVisible()
+      await expect(playButton(window), 'the refused Recent pick dropped the extraction\'s record (red on the base: the body)').toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a drop during the extraction is refused in its sentence, and when the extraction lands focus is on Play', async () => {
+    test.setTimeout(180_000)
+    const studio = await openHeld('t193-drop')
+    const { window } = studio
+    try {
+      await startHeldExtraction(window)
+      await dropOnImporter(window, studio.fixture, 'e2e-tone.wav')
+      await expect.poll(() => readToastLog(window), { timeout: 10_000, intervals: [200] }).toContain(BUSY)
+      await expect(window.locator(WAVEFORM)).toHaveCount(0)
+
+      await release(studio)
+      await expect(playButton(window)).toBeEnabled({ timeout: 60_000 })
+      await expect(window.locator('header').getByText('e2e-clip.mp4', { exact: true })).toBeVisible()
+      await expect(playButton(window), 'the refused drop dropped the extraction\'s record (red on the base: the body)').toBeFocused()
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

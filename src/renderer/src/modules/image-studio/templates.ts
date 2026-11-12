@@ -377,7 +377,9 @@ export const CANVAS_TEMPLATES: CanvasTemplate[] = [
       height: 112,
       background: 'transparent',
       layers: [
-        ellipseLayer('Base circle', 56, 56, 50, 50, '#ff3131', '#f52e2e', 2)
+        // T-193 (3): the ring is BG_BASE's value (5.29:1 against the fill). It was `#f52e2e`, accent-muted's value, 1.08:1 from the `#ff3131` fill: a person who
+        // selected the layer saw a Stroke and 2 px, and no ring was drawn or exported.
+        ellipseLayer('Base circle', 56, 56, 50, 50, '#ff3131', '#120c0c', 2)
       ]
     }
   },

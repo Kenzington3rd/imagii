@@ -10308,7 +10308,7 @@ IMG-PREC.
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back (with the default TMPDIR); the expediter runs the full suite and the real-media
   suite on the merged tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 142)
+- **Status:** done (round 142 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10886,6 +10886,70 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 142 — T-193, the four counted items of sweep 80, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+6b2f5b6, disjoint files. Track A (item 1): a press refused while an
+import runs no longer clears that import's focus record.
+`lib/swapFocus.ts`'s record now carries its press: `recordSwapPress`
+returns a token (null for a press that held no focus), and
+`dropSwapPress(target, token)` drops only that press's record, `null`
+drops nothing, and the target-wide form stays for the studios' unmount
+cleanups and the waveform's playback error. In both importers a Recent
+entry is turned away before it records, a drop records and drops
+nothing, `refuseIfBusy` drops nothing, and Choose file… records as the
+first statement of its claimed work (so a double-click's second press,
+turned away by the claim, leaves no token) and drops only its own
+token on every way it ends without a swap; Stream Graphics' Import
+image passes its token into `ingestFile`, and a paste or a drop passes
+none. Enter on Choose file… for a file that converts or extracts, then
+a refused Recent entry or drop during it, now ends with focus on Play
+when the import lands, and an Import image whose ingest is held, then
+a refused paste, ends on the Select tool. Track B (items 2-4):
+Export's always-mounted NOTHING_QUEUED region moves below the platform
+grid, so unchecking the last platform moves no card (it moved them 32
+px, and the second press of a double-click on a lone row-2 card
+checked YouTube); the class grep measured the four other collapse
+regions and moved GIF's length warning below its Width, Frame rate and
+Speed selects (it moved the Speed select, the press's own control, 44
+px), ruled Compile's and Reference Search's (nothing under a press
+moves) and the Player's no-picture notice (raised by the element, and
+a second press lands on its own inert text). The "Emote · Blank
+circle" ring is `#120c0c`, 5.29:1 against its fill (it was
+accent-muted's value, 1.08:1), and designTokensInSync.test.ts now
+refuses accent-muted's value in any case or as its rgb triple in every
+template and layer default, with a 1.5:1 floor for an opaque stroke
+over its fill; every template stroke over an opaque fill now clears
+3:1. Line and Pencil default to the accent (3.66:1 on the white page;
+ember was 1.67:1), and the Pencil's draw preview is the same colour,
+so a stroke does not change on release. Deviations, accepted: Choose
+file… records inside its claim; the video hold gates a real conversion
+of a stream-copied flv, the image hold holds the first FileReader
+read; an interactionWiring describe beyond the pins moved; the Pencil
+preview in Canvas.tsx; GIF's region fixed by the class grep; the
+double-click case drives two presses 80 ms apart (Playwright's own
+dblclick reaches the label above without a click and does not
+discriminate). Found, not fixed: two Asset Library scene strokes under
+3:1 over a white page (red over a dark tint, distinct in hue, 5.29:1
+over BG_BASE). Expediter: two independent mutations, both killed -
+every press given the same token (three swapFocus cases) and a
+template fill written as accent-muted's rgb triple (two
+designTokensInSync cases). At merge both tracks' describes appended to
+video-core.spec.ts interleaved under git merge-file on their shared
+tails, so the file was built as the base followed by Track A's tail
+and then Track B's, each checked to extend the base byte for byte. The
+full suite then found the double-click case timing-dependent: it ran
+inside App's half-second repeat swallow after the route change into
+Video Studio (green only under the workers' load), so its helper now
+waits that window out, as the T-192 (4) cases do; red on the base, 20
+of 20 green on the merged build, and video-core.spec.ts then ran
+whole, 80 passed. Ledger: every worker mutation killed (11 and 8);
+every restore identical. Gates on the merged tree: npm run verify
+twice (216 files, 7190 tests), test:media (566 cases: 538 run, 28
+skipped), and the full Playwright suite with the default TMPDIR (961
+tests, 62.3 min: 960 passed, and the one failure was the double-click
+case's timing, fixed above; video-core.spec.ts then ran whole, 80
+passed).
 
 Round 141 — T-192, the five counted items of sweep 79 and three
 sibling sites counted during the round, landed in the commit that

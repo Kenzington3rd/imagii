@@ -1173,9 +1173,9 @@ describe('T-119 — the round-69 fixes are wired where the person reaches them',
     const importer = read('modules/audio-studio/AudioImporter.tsx')
     // T-137 (1): the claim is the import run's `begin()` in the module store (it was a component ref), taken before the first await and given back in a finally.
     expect(importer).toMatch(/useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)/)
-    expect(importer).toMatch(/async function loadFile\(filePath: string, advise\?: \(\) => void\): Promise<void> \{\s*\n\s*if \(refuseIfBusy\(\)\) return/)
+    expect(importer).toMatch(/async function loadFile\(filePath: string, advise\?: \(\) => void, token: SwapToken \| null = null\): Promise<void> \{\s*\n(?:\s*\/\/[^\n]*\n)?\s*if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}/)
     expect(importer).toMatch(/if \(file && refuseIfBusy\(\)\) return\s*\n\s*const diag = examineDroppedFile\(file\)/)
-    expect(importer).toMatch(/if \(refuseIfBusy\(\)\) return\s*\n\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)/)
+    expect(importer).toMatch(/if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)/)
     expect(importer).toMatch(/Still extracting audio from the last file\. Wait for it to finish\./)
     expect(importer).toMatch(/Still loading the last file\. Wait for it to finish\./)
   })
@@ -2833,9 +2833,9 @@ describe('T-136 Track A — the twenty-second sweep', () => {
     expect(importer).toMatch(/const busy = useImportRun\(\(s\) => s\.run !== null\)/)
     expect(importer, 'none of the component-state spellings this replaced').not.toMatch(/busyRef|convertingRef|setBusy\(/)
     const handle = importer.slice(importer.indexOf('async function handleFile('), importer.indexOf('function onDrop('))
-    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('video', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('video-play'\)\s*return\s*\}\s*advise\?\.\(\)\s*if \(!useImportRun\.getState\(\)\.begin\(\{ filePath, converting: false \}\)\) \{\s*dropSwapPress\('video-play'\)\s*return\s*\}\s*const heldBefore = useVideoStore\.getState\(\)\.source/)
+    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('video-play', token\)\s*return\s*\}\s*const keptQuestion = keptPartQuestion\('video', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('video-play', token\)\s*return\s*\}\s*advise\?\.\(\)\s*if \(!useImportRun\.getState\(\)\.begin\(\{ filePath, converting: false \}\)\) \{\s*dropSwapPress\('video-play', token\)\s*return\s*\}\s*const heldBefore = useVideoStore\.getState\(\)\.source/)
     // T-192 (3): a press that did not open the video drops the swap's record.
-    expect(handle).toMatch(/finally \{\s*if \(!kept\) dropSwapPress\('video-play'\)\s*useImportRun\.getState\(\)\.end\(\)\s*\}/)
+    expect(handle).toMatch(/finally \{\s*if \(!kept\) dropSwapPress\('video-play', token\)\s*useImportRun\.getState\(\)\.end\(\)\s*\}/)
     // After the wait, before the load: the same rule as a project open's.
     expect(handle.indexOf('convertForImport(')).toBeLessThan(handle.indexOf('replacedSince(heldBefore, useVideoStore.getState().source)'))
     expect(handle.indexOf('replacedSince(')).toBeLessThan(handle.indexOf('await loadSource('))
@@ -2948,9 +2948,9 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     expect(importer).toMatch(/const busy = useAudioImportRun\(\(s\) => s\.run !== null\)/)
     expect(importer, 'none of the component-state spellings this replaced').not.toMatch(/busyRef|extractingRef|setBusy\(/)
     const load = importer.slice(importer.indexOf('async function loadFile('), importer.indexOf('function onDrop('))
-    expect(load).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('audio', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('audio-play'\)\s*return\s*\}\s*advise\?\.\(\)\s*const extracting = audioNeedsExtraction\(filePath\)\s*if \(!useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)\) \{\s*dropSwapPress\('audio-play'\)\s*return\s*\}\s*const heldBefore = useAudioStore\.getState\(\)\.source/)
+    expect(load).toMatch(/if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*const keptQuestion = keptPartQuestion\('audio', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*advise\?\.\(\)\s*const extracting = audioNeedsExtraction\(filePath\)\s*if \(!useAudioImportRun\.getState\(\)\.begin\(\{ filePath, extracting \}\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*const heldBefore = useAudioStore\.getState\(\)\.source/)
     // T-192 (3): a press that did not open the sound drops the swap's record.
-    expect(load).toMatch(/finally \{\s*if \(!kept\) dropSwapPress\('audio-play'\)\s*useAudioImportRun\.getState\(\)\.end\(\)\s*\}/)
+    expect(load).toMatch(/finally \{\s*if \(!kept\) dropSwapPress\('audio-play', token\)\s*useAudioImportRun\.getState\(\)\.end\(\)\s*\}/)
     // After the wait, before the load: the same rule as a project open's and Clean audio's.
     expect(load).toMatch(/if \(replacedSince\(heldBefore, useAudioStore\.getState\(\)\.source\)\) \{\s*toast\(`Skipped the sound of/)
     expect(load.indexOf('extractFromVideo(')).toBeLessThan(load.indexOf('replacedSince(heldBefore, useAudioStore.getState().source)'))
@@ -2959,7 +2959,7 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     expect(load, 'the skip returns before the load, the Recent entry and "Loaded"').toMatch(/duration: 8000\s*\}\)\s*return\s*\}/)
     // The refusal reads the store, so a returning importer refuses with the same words.
     expect(load.slice(0, load.indexOf('async function loadFile(')).length).toBe(0)
-    expect(importer).toMatch(/const running = useAudioImportRun\.getState\(\)\.run\s*if \(running === null\) return false\s*dropSwapPress\('audio-play'\)\s*toast\(\s*running\.extracting\s*\?\s*'Still extracting audio from the last file\. Wait for it to finish\.'\s*:\s*'Still loading the last file\. Wait for it to finish\.'/)
+    expect(importer).toMatch(/const running = useAudioImportRun\.getState\(\)\.run\s*if \(running === null\) return false\s*toast\(\s*running\.extracting\s*\?\s*'Still extracting audio from the last file\. Wait for it to finish\.'\s*:\s*'Still loading the last file\. Wait for it to finish\.'/)
     expect(strip(read('modules/audio-studio/state/audioImport.ts'))).toMatch(/export const useAudioImportRun = createRunStore<\{ filePath: string; extracting: boolean \}>\(\)/)
   })
 
@@ -3974,7 +3974,7 @@ describe('T-154 Track A - the second press, the held paste, the Player\'s name, 
     expect(panel).toMatch(/if \(\(\(e\.ctrlKey \|\| e\.metaKey\) && k === 'v'\) \|\| \(e\.shiftKey && k === 'Insert'\)\) pasteHeld = e\.repeat/)
     expect(panel).toMatch(/if \(pasteHeld\) \{\s*e\.preventDefault\(\)\s*return\s*\}/)
     expect(panel).toMatch(/await claimFirst\(\s*pickingRef,/)
-    expect(panel).toMatch(/input\.onchange = \(\) => \{[\s\S]*?resolve\(\)\s*\}\s*input\.oncancel = \(\) => \{\s*dropSwapPress\('image-select'\)\s*resolve\(\)\s*\}/)
+    expect(panel).toMatch(/input\.onchange = \(\) => \{[\s\S]*?resolve\(\)\s*\}\s*input\.oncancel = \(\) => \{\s*dropSwapPress\('image-select', token\)\s*resolve\(\)\s*\}/)
   })
 
   it('(9) a text overlay\'s ✕ drops a repeat press', () => {
@@ -4886,21 +4886,21 @@ describe('T-175 Track B - a kept part is asked about before it is let go; a Rece
   it('both importers ask it over the picked path after refuseIfBusy and before they claim their run; a Cancel returns', () => {
     const video = strip(read('modules/video-studio/Importer.tsx'))
     const handle = video.slice(video.indexOf('async function handleFile('), video.indexOf('function onDrop('))
-    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('video', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('video-play'\)\s*return\s*\}\s*advise\?\.\(\)\s*if \(!useImportRun\.getState\(\)\.begin/)
+    expect(handle).toMatch(/if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('video-play', token\)\s*return\s*\}\s*const keptQuestion = keptPartQuestion\('video', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('video-play', token\)\s*return\s*\}\s*advise\?\.\(\)\s*if \(!useImportRun\.getState\(\)\.begin/)
     const audio = strip(read('modules/audio-studio/AudioImporter.tsx'))
     const load = audio.slice(audio.indexOf('async function loadFile('), audio.indexOf('function onDrop('))
-    expect(load).toMatch(/if \(refuseIfBusy\(\)\) return\s*const keptQuestion = keptPartQuestion\('audio', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('audio-play'\)\s*return\s*\}\s*advise\?\.\(\)\s*const extracting/)
+    expect(load).toMatch(/if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*const keptQuestion = keptPartQuestion\('audio', filePath, basename\(filePath\)\)\s*if \(keptQuestion !== null && !confirm\(keptQuestion\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*advise\?\.\(\)\s*const extracting/)
     expect(load.indexOf('keptPartQuestion('), 'before the claim').toBeLessThan(load.indexOf('useAudioImportRun.getState().begin('))
     // Drop, Choose file and Recent all reach the one function.
     expect(video).toMatch(/void handleFile\(filePath, advise\)/)
-    expect(video).toMatch(/if \(filePath\) await handleFile\(filePath\)/)
+    expect(video).toMatch(/if \(filePath\) await handleFile\(filePath, undefined, token\)/)
     // T-192 (3): a Recent entry records the swap's press first (`pickRecent`), then reaches the same function.
     expect(video).toMatch(/onPick=\{pickRecent\}/)
-    expect(video).toMatch(/function pickRecent\(path: string\): void \{\s*recordPick\(\)\s*void handleFile\(path\)\s*\}/)
+    expect(video).toMatch(/function pickRecent\(path: string\): void \{\s*if \(refuseIfBusy\(\)\) return\s*void handleFile\(path, undefined, recordPick\(\)\)\s*\}/)
     expect(audio).toMatch(/void loadFile\(filePath, advise\)/)
     expect(audio).toMatch(/await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)/)
     expect(audio).toMatch(/onPick=\{pickRecent\}/)
-    expect(audio).toMatch(/function pickRecent\(path: string\): void \{\s*recordPick\(\)\s*void loadFile\(path\)\s*\}/)
+    expect(audio).toMatch(/function pickRecent\(path: string\): void \{\s*if \(refuseIfBusy\(\)\) return\s*void loadFile\(path, undefined, recordPick\(\)\)\s*\}/)
   })
 
   it('Open project does not ask (it supersedes a kept part: the standing rule)', () => {
@@ -4933,7 +4933,7 @@ describe('T-175 Track B - a kept part is asked about before it is let go; a Rece
   it('the advisory toasts about a dropped or picked file are passed as `advise`, said after the kept question and before the run is claimed - a Cancel leaves none on screen', () => {
     const video = strip(read('modules/video-studio/Importer.tsx'))
     const handle = video.slice(video.indexOf('async function handleFile('), video.indexOf('function onDrop('))
-    expect(handle).toMatch(/async function handleFile\(filePath: string, advise\?: \(\) => void\): Promise<void> \{/)
+    expect(handle).toMatch(/async function handleFile\(filePath: string, advise\?: \(\) => void, token: SwapToken \| null = null\): Promise<void> \{/)
     expect(handle.indexOf('confirm(keptQuestion)'), 'advice after the question').toBeLessThan(handle.indexOf('advise?.()'))
     expect(handle.indexOf('advise?.()'), 'and before the claim').toBeLessThan(handle.indexOf('useImportRun.getState().begin('))
     const drop = video.slice(video.indexOf('function onDrop('), video.indexOf('async function onPickFile('))
@@ -4944,14 +4944,14 @@ describe('T-175 Track B - a kept part is asked about before it is let go; a Rece
     // The refusals that are not about the file being tried stay where they were.
     expect(drop).toMatch(/if \(refuseIfBusy\(\)\) return/)
     expect(drop).toContain('Could not read file path')
-    expect(video).toMatch(/if \(filePath\) await handleFile\(filePath\)/)
+    expect(video).toMatch(/if \(filePath\) await handleFile\(filePath, undefined, token\)/)
     // T-192 (3): a Recent entry records the swap's press first (`pickRecent`), then reaches the same function.
     expect(video).toMatch(/onPick=\{pickRecent\}/)
-    expect(video).toMatch(/function pickRecent\(path: string\): void \{\s*recordPick\(\)\s*void handleFile\(path\)\s*\}/)
+    expect(video).toMatch(/function pickRecent\(path: string\): void \{\s*if \(refuseIfBusy\(\)\) return\s*void handleFile\(path, undefined, recordPick\(\)\)\s*\}/)
 
     const audio = strip(read('modules/audio-studio/AudioImporter.tsx'))
     const load = audio.slice(audio.indexOf('async function loadFile('), audio.indexOf('function onDrop('))
-    expect(load).toMatch(/async function loadFile\(filePath: string, advise\?: \(\) => void\): Promise<void> \{/)
+    expect(load).toMatch(/async function loadFile\(filePath: string, advise\?: \(\) => void, token: SwapToken \| null = null\): Promise<void> \{/)
     expect(load.indexOf('confirm(keptQuestion)')).toBeLessThan(load.indexOf('advise?.()'))
     expect(load.indexOf('advise?.()')).toBeLessThan(load.indexOf('useAudioImportRun.getState().begin('))
     const adrop = audio.slice(audio.indexOf('function onDrop('), audio.indexOf('async function onPickFile('))
@@ -4960,10 +4960,10 @@ describe('T-175 Track B - a kept part is asked about before it is let go; a Rece
     expect(adrop.split('Cloud-sync path detected').length, 'the hint is toasted only inside advise').toBe(2)
     expect(adrop).toMatch(/if \(file && refuseIfBusy\(\)\) return/)
     const pick = audio.slice(audio.indexOf('async function onPickFile('), audio.indexOf('return (\n    <div'))
-    expect(pick).toMatch(/if \(refuseIfBusy\(\)\) return\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)\s*\?\s*\(\): void => \{\s*toast\(\s*'Cloud-sync path\. If import fails/)
+    expect(pick).toMatch(/if \(refuseIfBusy\(\)\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}\s*await loadFile\(\s*filePath,\s*pathLooksLikeCloudSync\(filePath\)\s*\?\s*\(\): void => \{\s*toast\(\s*'Cloud-sync path\. If import fails/)
     expect(pick.split('Cloud-sync path.').length, 'the warning is toasted only inside advise').toBe(2)
     expect(audio).toMatch(/onPick=\{pickRecent\}/)
-    expect(audio).toMatch(/function pickRecent\(path: string\): void \{\s*recordPick\(\)\s*void loadFile\(path\)\s*\}/)
+    expect(audio).toMatch(/function pickRecent\(path: string\): void \{\s*if \(refuseIfBusy\(\)\) return\s*void loadFile\(path, undefined, recordPick\(\)\)\s*\}/)
   })
 })
 
@@ -5409,8 +5409,8 @@ describe('T-192 Track A - cut chips ignore a held Enter; every importer / editor
     const audioImporter = strip(read('modules/audio-studio/AudioImporter.tsx'))
     expect(audioImporter).toMatch(/focusAfterSwap\('audio-choose', chooseRef\.current\)/)
     expect(audioImporter).toMatch(/recordSwapPress\('audio-play', active !== null && rowRef\.current !== null && rowRef\.current\.contains\(active\)\)/)
-    expect(audioImporter).toMatch(/async function onPickFile\(\): Promise<void> \{\s*recordPick\(\)/)
-    expect(audioImporter, 'a canceled chooser is a press that failed').toMatch(/if \(!filePath\) \{\s*dropSwapPress\('audio-play'\)\s*return\s*\}/)
+    expect(audioImporter).toMatch(/async function onPickFile\(\): Promise<void> \{\s*await claimFirst\(pickingRef, async \(\) => \{\s*const token = recordPick\(\)/)
+    expect(audioImporter, 'a canceled chooser is a press that failed').toMatch(/if \(!filePath\) \{\s*dropSwapPress\('audio-play', token\)\s*return\s*\}/)
     expect(audioImporter).toMatch(/kept = true\s*await push\(filePath\)/)
 
     const player = strip(read('modules/video-studio/Player.tsx'))
@@ -5420,7 +5420,7 @@ describe('T-192 Track A - cut chips ignore a held Enter; every importer / editor
     expect(videoStudio).toMatch(/useEffect\(\(\) => \(\) => dropSwapPress\('video-play'\), \[\]\)/)
     const videoImporter = strip(read('modules/video-studio/Importer.tsx'))
     expect(videoImporter).toMatch(/focusAfterSwap\('video-choose', chooseRef\.current\)/)
-    expect(videoImporter).toMatch(/async function onPickFile\(\): Promise<void> \{\s*recordPick\(\)/)
+    expect(videoImporter).toMatch(/async function onPickFile\(\): Promise<void> \{\s*await claimFirst\(pickingRef, async \(\) => \{\s*const token = recordPick\(\)/)
     expect(videoImporter).toMatch(/kept = true\s*await push\(filePath\)/)
 
     const imageStudio = strip(read('modules/image-studio/ImageStudio.tsx'))
@@ -5430,7 +5430,7 @@ describe('T-192 Track A - cut chips ignore a held Enter; every importer / editor
     const importPanel = strip(read('modules/image-studio/ImportPanel.tsx'))
     expect(importPanel).toMatch(/function applyTemplate\(template: CanvasTemplate\): void \{\s*recordPress\(\)/)
     expect(importPanel).toMatch(/function addText\(\): void \{\s*recordPress\(\)/)
-    expect(importPanel).toMatch(/async function pickFile\(\): Promise<void> \{\s*recordPress\(\)/)
+    expect(importPanel).toMatch(/async function pickFile\(\): Promise<void> \{\s*await claimFirst\(\s*pickingRef,\s*\(\) =>\s*new Promise<void>\(\(resolve\) => \{\s*const token = recordPress\(\)/)
     expect(importPanel).toMatch(/emptyRef\.current !== null && emptyRef\.current\.contains\(active\)/)
   })
 
@@ -5448,5 +5448,49 @@ describe('T-192 Track A - cut chips ignore a held Enter; every importer / editor
     expect(swap).toMatch(/return active === null \|\| active === body/)
     expect(swap).toMatch(/control\.focus\(\)\s*holdHeldKeys\(\)/)
     expect(swap).toMatch(/swapFocus\.take\(target, document\.activeElement, document\.body\)/)
+  })
+})
+
+// T-193 (1): a record carries its press. The e2e cases (video-core.spec.ts, audio.spec.ts, image.spec.ts "T-193") hold an import and refuse a press during it; these pin where each piece of
+// the wiring sits, so putting a refusal's drop back, moving the Recent refusal after its record, or dropping the target for a paste is a red unit test too.
+describe('T-193 Track A - a refused press records nothing and drops nothing; every press drops its own token', () => {
+  const strip = (text: string): string => text.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '').replace(/\{\/\*[\s\S]*?\*\/\}/g, '')
+
+  it('the module hands the token out and takes it back: only the target-wide form drops without one', () => {
+    const swap = strip(read('lib/swapFocus.ts'))
+    expect(swap).toMatch(/export function recordSwapPress\(target: SwapTarget, hadFocus: boolean\): SwapToken \| null \{\s*return swapFocus\.record\(target, hadFocus\)\s*\}/)
+    expect(swap).toMatch(/export function dropSwapPress\(target\?: SwapTarget, token\?: SwapToken \| null\): void \{\s*swapFocus\.drop\(target, token\)\s*\}/)
+    expect(swap).toMatch(/\} else if \(token !== null && pending\.token === token && pending\.target === target\) pending = null/)
+  })
+
+  for (const [name, file, begin, handler, drop, target] of [
+    ['Video', 'modules/video-studio/Importer.tsx', 'async function handleFile(', 'handleFile', 'async function onPickFile(', 'video-play'],
+    ['Audio', 'modules/audio-studio/AudioImporter.tsx', 'async function loadFile(', 'loadFile', 'async function onPickFile(', 'audio-play']
+  ] as const) {
+    it(`${name}: the busy refusal drops nothing, a Recent entry is turned away before it records, and a drop records and drops nothing`, () => {
+      const importer = strip(read(file))
+      const refuse = importer.slice(importer.indexOf('function refuseIfBusy('), importer.indexOf(begin))
+      expect(refuse, 'refuseIfBusy turns the press away and touches no record').not.toMatch(/dropSwapPress|recordSwapPress|recordPick/)
+      const recent = importer.slice(importer.indexOf('function pickRecent('), importer.indexOf(drop))
+      expect(recent).toMatch(new RegExp(`function pickRecent\\(path: string\\): void \\{\\s*if \\(refuseIfBusy\\(\\)\\) return\\s*void ${handler}\\(path, undefined, recordPick\\(\\)\\)\\s*\\}`))
+      const onDrop = importer.slice(importer.indexOf('function onDrop('), importer.indexOf('function pickRecent('))
+      expect(onDrop, 'a drop records nothing, so it drops nothing').not.toMatch(/dropSwapPress|recordSwapPress|recordPick/)
+      expect(onDrop).toMatch(new RegExp(`void ${handler}\\(filePath, advise\\)`))
+      // The chooser press records once it holds the claim, and its token is the one every end of that press drops.
+      const pick = importer.slice(importer.indexOf(drop), importer.indexOf('return (\n    <div'))
+      expect(pick).toMatch(/await claimFirst\(pickingRef, async \(\) => \{\s*const token = recordPick\(\)/)
+      expect(pick).not.toMatch(new RegExp(`dropSwapPress\\('${target}'\\)`))
+      expect(importer, 'no target-wide drop is left in the importer').not.toMatch(new RegExp(`dropSwapPress\\('${target}'\\)`))
+    })
+  }
+
+  it('Stream Graphics: Import image\'s token reaches the ingest it starts; a drop and a paste pass none, so their refusals drop nothing', () => {
+    const panel = strip(read('modules/image-studio/ImportPanel.tsx'))
+    expect(panel).toMatch(/async function ingestFile\(file: File, token: SwapToken \| null = null\): Promise<void> \{\s*if \(!isImage\(file\.name\)\) \{\s*dropSwapPress\('image-select', token\)/)
+    expect(panel).toMatch(/\} catch \(err\) \{\s*dropSwapPress\('image-select', token\)\s*reportFailure/)
+    expect(panel).toMatch(/if \(file\) void ingestFile\(file, token\)\s*else dropSwapPress\('image-select', token\)/)
+    expect(panel, 'a paste passes no token').toMatch(/void ingestFile\(file\)\s*e\.preventDefault\(\)/)
+    expect(panel, 'a drop passes no token').toMatch(/files\.forEach\(\(f\) => void ingestFile\(f\)\)/)
+    expect(panel, 'no target-wide drop is left in the panel').not.toMatch(/dropSwapPress\('image-select'\)/)
   })
 })

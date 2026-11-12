@@ -84,20 +84,6 @@ export function GifPanel(): JSX.Element | null {
   return (
     <div className="card p-3 flex flex-col gap-3 text-sm">
       <PanelHeader icon="image">Export as GIF</PanelHeader>
-      {/* T-112: the wrapper is always mounted, so changing Speed ANNOUNCES the warning —
-          a live region that appears together with its content is not reliably read.
-          T-114: and while it is empty it is still a flex item, with a 12 px gap on each side - a
-          12 px hole under the header. `-mb-3` takes back the second gap and nothing is hidden:
-          the element stays in the accessibility tree, empty, ready to speak (no display:none,
-          no visibility:hidden - either would drop it, and a region added later is not reliably
-          announced). With a warning in it the margin is gone and it is a row like any other. */}
-      <div role="status" className={tooLong ? undefined : '-mb-3'}>
-        {tooLong ? (
-          <p className="text-xs text-warn">
-            GIF exports over about 10 s get huge. Trim the clip first.
-          </p>
-        ) : null}
-      </div>
       <div className="grid grid-cols-3 gap-2">
         <label className="flex flex-col gap-1 text-xs">
           <span className="text-ink-muted">Width</span>
@@ -142,6 +128,22 @@ export function GifPanel(): JSX.Element | null {
             <option value="3">3×</option>
           </select>
         </label>
+      </div>
+      {/* T-112: the wrapper is always mounted, so changing Speed ANNOUNCES the warning —
+          a live region that appears together with its content is not reliably read.
+          T-114: and while it is empty it is still a flex item, with a 12 px gap on each side - a
+          12 px hole under the header. `-mb-3` takes back the second gap and nothing is hidden:
+          the element stays in the accessibility tree, empty, ready to speak (no display:none,
+          no visibility:hidden - either would drop it, and a region added later is not reliably
+          announced). With a warning in it the margin is gone and it is a row like any other.
+          T-193 (2) class grep: it sits BELOW the Width / Frame rate / Speed row. A Speed change raises it, and above that row it moved the Speed select (the press's
+          own control) 44 px down the moment it spoke; below, the line arrives under every select and moves only the buttons beneath it. */}
+      <div role="status" className={tooLong ? undefined : '-mb-3'}>
+        {tooLong ? (
+          <p className="text-xs text-warn">
+            GIF exports over about 10 s get huge. Trim the clip first.
+          </p>
+        ) : null}
       </div>
       <div className="flex items-center gap-2">
         {/* T-126 (13): the chip side gives (`min-w-0`, its name already ends in an ellipsis); the primary's words stay on one line. */}

@@ -19,7 +19,7 @@ hard-code chrome colors in `className` — use the token.
 | `bg-elevated` | `#1c1313` | Cards, panels, modals |
 | `bg-hover` | `#2a1a18` | Hover state for interactive surfaces |
 | `accent` | `#ff3131` | Primary actions, focus rings, active states — neon magma red (5.29:1 on `bg-base`, 4.55:1 on `bg-hover`) |
-| `accent-muted` | `#f52e2e` | Hover state of accent elements - and nothing else: it is 1.08:1 from `accent`, so it cannot tell two drawn things apart (the Audio waveform's unplayed bars were it beside the played `accent` until T-191 (4); the default Ellipse's fill and stroke until T-192 (1)). Pinned in `designTokensInSync.test.ts`: no renderer source but `styles/tokens.ts` names `ACCENT_MUTED`, and every `accent-muted` class in a source or stylesheet carries a `hover:` variant |
+| `accent-muted` | `#f52e2e` | Hover state of accent elements - and nothing else: it is 1.08:1 from `accent`, so it cannot tell two drawn things apart (the Audio waveform's unplayed bars were it beside the played `accent` until T-191 (4); the default Ellipse's fill and stroke until T-192 (1); the "Emote · Blank circle" template's ring until T-193 (3)). Pinned in `designTokensInSync.test.ts`: no renderer source but `styles/tokens.ts` names `ACCENT_MUTED`, every `accent-muted` class in a source or stylesheet carries a `hover:` variant, and (T-193 (3), for document content, where a raw hex is allowed and the identifier pin cannot see it) no template, layer-factory default or blank document holds its VALUE, `#f52e2e` in any case or `rgb(245, 46, 46)` |
 | `ink-base` | `#ece4e2` | Primary text (15.5:1) |
 | `ink-muted` | `#a59a97` | Secondary text, labels (7.1:1) |
 | `ink-dim` | `#9c8f8b` | Tertiary text, borders, disabled — 6.2:1 on `bg-base`, 5.8:1 on `bg-elevated`, both above WCAG AA's 4.5:1 (the round-15 B9 lesson, re-verified for the round-19 obsidian-volcano palette). It is also the Audio waveform's **unplayed** wave (T-191 (4)): the played part is `accent` (5.29:1), the unplayed bars `ink-dim` (6.2:1), both over the waveform's `bg-base` above WCAG 1.4.11's 3:1 for a graphic, and they differ in hue (red against warm grey), not in lightness (1.17:1 between them); the cursor stays `ember`. A stored cut's `accent/35` wash keeps both readable: a bar under it is 3.36:1 (played) and 3.32:1 (unplayed) against the washed background (measured from a screenshot of the built app). |
@@ -163,6 +163,9 @@ held by this list alone, so a new one must be added below:
   app's own **default marks** — the fill and stroke a freshly drawn
   rect / ellipse / line / text layer comes out in — DO follow the tokens,
   because a user expects new shapes to arrive in imagii's colors.
+  The line and pencil default is the accent (T-193 (4): the ember it was is 1.67:1 on the white page, and those two tools have no colour box, so the default is the
+  colour a person gets), and a template layer that strokes over an opaque fill keeps its stroke 1.5:1 or more from that fill (T-193 (3); the Blank circle's ring is
+  `BG_BASE`'s value, 5.29:1 against its fill), pinned in `designTokensInSync.test.ts`.
   A new word is also placed and inked for what it lands on (T-140/T-141: wholly inside the page, 4.5:1 against what is under it), and the rule is
   the WORDS' own (T-166 (1)): a pasted sentence gets it too, sized down to fit and measured line by line (the box is the longest line wide and a line
   tall for each), not the box of the word "Text". The mechanics are in STYLE_GUIDE.
@@ -202,7 +205,7 @@ and `anchorFill` from `INK_BASE`, all imported from `tokens.ts` (an accent line,
 accent edge: 3.6:1 on a white page, which is the number that matters there, and 15.5:1 for the fill on
 the near-black). The frame is dashed (`borderDash={[6, 4]}`) and stands 4 px off the layer
 (`padding={4}`, T-165 (6)), so it never reads as the layer's own stroke: the rectangle tool strokes in
-the same accent, and a solid frame on the box's edge could not be told from it.
+the same accent (the Line and Pencil default to it too since T-193 (4), and the frame still stands off a 3 px line with white between), and a solid frame on the box's edge could not be told from it.
 `designTokensInSync.test.ts` fails on a second `:root` rule, a changed value, a toast
 mark that is not a token, or a Transformer whose three colors are not those imports.
 

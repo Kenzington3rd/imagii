@@ -18,7 +18,7 @@ import { claimFirst } from '../../lib/claimFirst'
 import { inputTypeOf, isTextEntryTarget, shortcutKey } from '../../lib/keyOwnership'
 import { ignoreHeldEnter, isRepeatPress } from '../../lib/repeatPress'
 import { reportFailure } from '../../lib/reportFailure'
-import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
+import { dropSwapPress, focusAfterSwap, recordSwapPress, type SwapToken } from '../../lib/swapFocus'
 import { SpecCard } from '../../components/SpecCard'
 
 import { placementFor, storedImageMaxDim } from '@shared/imageBounds'
@@ -54,9 +54,11 @@ export function ImportPanel(): JSX.Element {
   // the first layer lands (STYLE_GUIDE's swap rule). `emptyRef` is the empty state's root, so the same handlers called from the import bar (a canvas already open: no
   // swap) record nothing. A press that ends with no layer (a canceled chooser, a refused file) drops the record.
   const emptyRef = useRef<HTMLDivElement | null>(null)
-  function recordPress(): void {
+  // T-193 (1): the record carries its press: Import image's token goes to the ingest it starts, and a drop or a paste (which record nothing) pass none, so their refused
+  // type or failed decode cannot clear the record of an Import image ingest still pending. The template cards and Start with text swap at once and spend theirs in that commit.
+  function recordPress(): SwapToken | null {
     const active = document.activeElement
-    recordSwapPress('image-select', active !== null && emptyRef.current !== null && emptyRef.current.contains(active))
+    return recordSwapPress('image-select', active !== null && emptyRef.current !== null && emptyRef.current.contains(active))
   }
 
   // Stream Graphics pivot: when the canvas is empty, surface the
@@ -70,9 +72,9 @@ export function ImportPanel(): JSX.Element {
     setDocument(doc)
   }
 
-  async function ingestFile(file: File): Promise<void> {
+  async function ingestFile(file: File, token: SwapToken | null = null): Promise<void> {
     if (!isImage(file.name)) {
-      dropSwapPress('image-select')
+      dropSwapPress('image-select', token)
       toast.error('Unsupported file type')
       return
     }
@@ -95,7 +97,7 @@ export function ImportPanel(): JSX.Element {
       addLayer({ ...makeImageLayer(stored, place.width, place.height, place.x, place.y), name: file.name })
       toast.success(`Added ${file.name}`)
     } catch (err) {
-      dropSwapPress('image-select')
+      dropSwapPress('image-select', token)
       reportFailure(err, { failed: "Couldn't import that image." })
     }
   }
@@ -192,22 +194,23 @@ export function ImportPanel(): JSX.Element {
     focusAfterSwap('image-import', importRef.current)
   }, [])
   async function pickFile(): Promise<void> {
-    recordPress()
     await claimFirst(
       pickingRef,
       () =>
         new Promise<void>((resolve) => {
+          // Recorded once the press holds the claim (a double-click's second press records nothing), before the chooser opens.
+          const token = recordPress()
           const input = document.createElement('input')
           input.type = 'file'
           input.accept = 'image/*'
           input.onchange = () => {
             const file = input.files?.[0]
-            if (file) void ingestFile(file)
-            else dropSwapPress('image-select')
+            if (file) void ingestFile(file, token)
+            else dropSwapPress('image-select', token)
             resolve()
           }
           input.oncancel = () => {
-            dropSwapPress('image-select')
+            dropSwapPress('image-select', token)
             resolve()
           }
           input.click()

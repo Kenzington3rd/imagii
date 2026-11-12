@@ -773,12 +773,22 @@ Repeated UI is a component, not copy-paste:
   control - and `ImportPanel`'s mount effect spends it (an inline callback ref would be called with null on every
   render and record falsely). The record is named for the control the content will focus, so one press's flag is
   only ever spent by the content it was recorded for; a press that FAILS (a canceled chooser, a refused or failed
-  load) drops it (`dropSwapPress`), and so does a studio that is left before the swap came. It moves focus only while
+  load) drops it (`dropSwapPress`), and so does a studio that is left before the swap came. **A record carries its press
+  (T-193 (1)):** `recordSwapPress` returns a token (null when the press held no focus, which also clears that target's
+  held record, since a newer press that proceeds without focus must not have its swap move focus), and
+  `dropSwapPress(target, token)` drops only the record THAT press made, so a press that ends without a swap never clears
+  another press's record that is still on its way. A press that is turned away at once (a Recent entry pressed while an
+  import runs) is refused BEFORE it records, so it neither records nor drops; a drop and a paste record nothing and pass
+  no token (`null`: drops nothing); a Choose file… records once it holds the chooser claim and passes its token to the
+  file handler, and every way that press's import ends without a swap drops its own token (a canceled chooser, a press
+  refused after the chooser closed, a kept-part Cancel, a failed begin, the `finally` when the file did not open); the
+  busy refusal itself drops nothing. Only the studios' unmount cleanups and the waveform's playback error use the
+  target-wide `dropSwapPress(target)`. It moves focus only while
   focus is on `<body>` or nowhere, so a swap by a drop, a mouse press that focused nothing, a project opened from Home,
   an autosave Restore or the tour moves nothing, and focus the person put on another control while the chooser was open
   stays there. Focus it hands over meets the held Enter like every other receiver (T-191 (1)): `focusAfterSwap` calls
   `holdHeldKeys()`, so the press's own auto-repeats never act on the Play, the tool or the chooser button it landed on.
-  A new swap of this kind records its press, names its target in `SwapTarget`, and drops the record on every way the
+  A new swap of this kind records its press, names its target in `SwapTarget`, and drops ITS token on every way the
   press ends without a swap.
 - **Smooth scrolling that script asks for reads the Reduce-motion setting itself (T-119).** The `prefers-reduced-motion`
   block in `index.css` sets `scroll-behavior: auto`, which governs scrolling CSS decides but not

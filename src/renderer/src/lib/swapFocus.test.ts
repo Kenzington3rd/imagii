@@ -73,3 +73,97 @@ describe('createSwapFocus - a press that held focus hands it to the new content 
     expect(f.pending()).toBeNull()
   })
 })
+
+// T-193 (1): a record carries its press. A press refused or failed while ANOTHER press's import is still on its way must not clear that press's record (the sweep's finding:
+// a Recent entry or a drop refused during Audio's extraction dropped Choose file…'s record, and Play never took the focus when the extraction landed).
+describe('createSwapFocus - a record carries its press (T-193 (1))', () => {
+  const BODY = { tag: 'body' }
+
+  it('a press that held focus returns a token; a press that held none returns null and records nothing', () => {
+    const f = createSwapFocus<'a'>()
+    const token = f.record('a', true)
+    expect(token).not.toBeNull()
+    expect(f.pending()).toBe('a')
+    const g = createSwapFocus<'a'>()
+    expect(g.record('a', false)).toBeNull()
+    expect(g.pending()).toBeNull()
+    expect(g.take('a', BODY, BODY)).toBe(false)
+  })
+
+  it('every focused press gets its own token', () => {
+    const f = createSwapFocus<'a'>()
+    const first = f.record('a', true)
+    const second = f.record('a', true)
+    expect(second).not.toEqual(first)
+  })
+
+  it('a token\'s drop drops the record that press made', () => {
+    const f = createSwapFocus<'a'>()
+    const token = f.record('a', true)
+    f.drop('a', token)
+    expect(f.pending()).toBeNull()
+    expect(f.take('a', BODY, BODY)).toBe(false)
+  })
+
+  it('a token\'s drop leaves another press\'s record alone (the older press ends without a swap; the newer one is still on its way)', () => {
+    const f = createSwapFocus<'a'>()
+    const older = f.record('a', true)
+    f.record('a', true)
+    f.drop('a', older)
+    expect(f.pending(), 'the newer press\'s record survived the older press ending').toBe('a')
+    expect(f.take('a', BODY, BODY)).toBe(true)
+    // The other way round: the newer press ending drops its own record.
+    const g = createSwapFocus<'a'>()
+    g.record('a', true)
+    const last = g.record('a', true)
+    g.drop('a', last)
+    expect(g.pending()).toBeNull()
+  })
+
+  it('a press that held no focus (a null token) drops nothing: the record held belongs to another press', () => {
+    const f = createSwapFocus<'a'>()
+    f.record('a', true)
+    const unfocused = f.record('a', false)
+    expect(unfocused).toBeNull()
+    // ...and its own record was cleared by that press (a newer press of the target that proceeds without focus must not have its swap move focus), so hold a fresh one.
+    f.record('a', true)
+    f.drop('a', unfocused)
+    expect(f.pending(), 'a null token dropped a record').toBe('a')
+  })
+
+  it('a spent token drops nothing (the swap already happened)', () => {
+    const f = createSwapFocus<'a'>()
+    const token = f.record('a', true)
+    expect(f.take('a', BODY, BODY)).toBe(true)
+    const later = f.record('a', true)
+    f.drop('a', token)
+    expect(f.pending(), 'the spent press\'s token cleared a later press\'s record').toBe('a')
+    expect(later).not.toEqual(token)
+  })
+
+  it('a token is the press\'s claim on its own target: another target\'s record is not dropped by it', () => {
+    const f = createSwapFocus<'audio' | 'video'>()
+    const audio = f.record('audio', true)
+    f.drop('video', audio)
+    expect(f.pending()).toBe('audio')
+  })
+
+  it('the target-wide drop still drops any press\'s record (the studios\' unmount cleanups, the waveform\'s playback error); another target\'s leaves it', () => {
+    const f = createSwapFocus<'audio' | 'video'>()
+    f.record('audio', true)
+    f.drop('video')
+    expect(f.pending()).toBe('audio')
+    f.drop('audio')
+    expect(f.pending()).toBeNull()
+    f.record('video', true)
+    f.drop()
+    expect(f.pending()).toBeNull()
+  })
+
+  it('a press without focus still clears the same target\'s held record (it proceeds, so its swap must not move focus)', () => {
+    const f = createSwapFocus<'a'>()
+    f.record('a', true)
+    expect(f.record('a', false)).toBeNull()
+    expect(f.pending()).toBeNull()
+  })
+})

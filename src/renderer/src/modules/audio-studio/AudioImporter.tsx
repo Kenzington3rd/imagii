@@ -8,7 +8,7 @@ import { basename } from '../../components/OutputDirLabel'
 import { keptPartQuestion, replacedSince } from '../project/ProjectIO'
 import { useRecentFiles } from '../../hooks/useRecentFiles'
 import { claimFirst } from '../../lib/claimFirst'
-import { dropSwapPress, focusAfterSwap, recordSwapPress } from '../../lib/swapFocus'
+import { dropSwapPress, focusAfterSwap, recordSwapPress, type SwapToken } from '../../lib/swapFocus'
 import { describeFailedOpen, examineDroppedFile, pathLooksLikeCloudSync } from '@shared/importDiagnostics'
 import { assertDefined } from '@shared/assert'
 import { audioNeedsExtraction, formatHint, AUDIO_EXTENSIONS } from '@shared/mediaFormats'
@@ -35,18 +35,21 @@ export function AudioImporter(): JSX.Element {
   useEffect(() => {
     focusAfterSwap('audio-choose', chooseRef.current)
   }, [])
-  /** A press that may open a sound: the pick's focus is recorded while this row still has it, and dropped by every way the pick ends without one. */
-  function recordPick(): void {
+  /**
+   * A press that may open a sound: the pick's focus is recorded while this row still has it, and its token is dropped by every way the pick ends without one.
+   * T-193 (1): only a press that PROCEEDS records (a Recent entry pressed while an import runs is turned away first), and a press drops only its own token, so a
+   * refused press never clears the record of the import that is still running.
+   */
+  function recordPick(): SwapToken | null {
     const active = document.activeElement
-    recordSwapPress('audio-play', active !== null && rowRef.current !== null && rowRef.current.contains(active))
+    return recordSwapPress('audio-play', active !== null && rowRef.current !== null && rowRef.current.contains(active))
   }
 
   /** Refuses a second import while one runs. */
   function refuseIfBusy(): boolean {
     const running = useAudioImportRun.getState().run
     if (running === null) return false
-    // T-192 (3): a refused press swaps nothing.
-    dropSwapPress('audio-play')
+    // T-193 (1): drops nothing - the press that is refused holds no record of its own here, and the target's record belongs to the import that is running.
     toast(
       running.extracting
         ? 'Still extracting audio from the last file. Wait for it to finish.'
@@ -57,19 +60,23 @@ export function AudioImporter(): JSX.Element {
   }
 
   /** `advise`: what the drop or the picker has to say about the file (the cloud-sync warning). Said after the kept question (a Cancel says nothing about a file that was not tried) and before the run is claimed. */
-  async function loadFile(filePath: string, advise?: () => void): Promise<void> {
-    if (refuseIfBusy()) return
+  async function loadFile(filePath: string, advise?: () => void, token: SwapToken | null = null): Promise<void> {
+    // A Choose file… whose chooser was open when another import began lands here refused: it drops its own record (a drop has none: `token` is null).
+    if (refuseIfBusy()) {
+      dropSwapPress('audio-play', token)
+      return
+    }
     // T-175 (3): a chain kept for a sound that could not be opened (an unplugged drive) is let go when a DIFFERENT file opens here. Asked before the run is claimed or
     // anything is said, over the file this opens (`soundKey` of the loaded sound: the picked path, whether it is played as it is or extracted); Cancel opens nothing.
     const keptQuestion = keptPartQuestion('audio', filePath, basename(filePath))
     if (keptQuestion !== null && !confirm(keptQuestion)) {
-      dropSwapPress('audio-play')
+      dropSwapPress('audio-play', token)
       return
     }
     advise?.()
     const extracting = audioNeedsExtraction(filePath)
     if (!useAudioImportRun.getState().begin({ filePath, extracting })) {
-      dropSwapPress('audio-play')
+      dropSwapPress('audio-play', token)
       return
     }
     // T-137 (1): what Audio Studio held when this import began. The importer is on screen only while no sound is open, but an extraction takes
@@ -111,7 +118,7 @@ export function AudioImporter(): JSX.Element {
       const sentence = await describeFailedOpen(err, filePath, 'audio', { folderPresent: (p) => window.api.settings.folderOfFilePresent(p), remove })
       toast.error(sentence, { duration: 8000 })
     } finally {
-      if (!kept) dropSwapPress('audio-play')
+      if (!kept) dropSwapPress('audio-play', token)
       useAudioImportRun.getState().end()
     }
   }
@@ -152,21 +159,26 @@ export function AudioImporter(): JSX.Element {
   }
 
   function pickRecent(path: string): void {
-    recordPick()
-    void loadFile(path)
+    // T-193 (1): turned away BEFORE it records, so the refusal cannot touch the running import's record.
+    if (refuseIfBusy()) return
+    void loadFile(path, undefined, recordPick())
   }
 
   async function onPickFile(): Promise<void> {
-    recordPick()
     await claimFirst(pickingRef, async () => {
+      // Recorded once the press holds the claim (a double-click's second press records nothing) and ahead of the chooser's first await, so the focus read is the press's.
+      const token = recordPick()
       const filePath = await window.api.audio.pickFile()
       if (!filePath) {
-        dropSwapPress('audio-play')
+        dropSwapPress('audio-play', token)
         return
       }
       // The picker can be open while a drop starts a load (the button is only disabled once busy): refuse
-      // before the cloud-sync warning, for the reason the drop does.
-      if (refuseIfBusy()) return
+      // before the cloud-sync warning, for the reason the drop does. Its own record goes with the refusal.
+      if (refuseIfBusy()) {
+        dropSwapPress('audio-play', token)
+        return
+      }
       await loadFile(
         filePath,
         pathLooksLikeCloudSync(filePath)
@@ -176,7 +188,8 @@ export function AudioImporter(): JSX.Element {
                 { icon: <Icon name="warning" size={18} />, duration: 6000 }
               )
             }
-          : undefined
+          : undefined,
+        token
       )
     })
   }

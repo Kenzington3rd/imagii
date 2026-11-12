@@ -1,4 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
 import { asHint, displayOpacity, type CanvasDocument, type CanvasLayer, type LayerType, type TextLayer } from '@shared/canvas'
 import {
   FONT_SIZE_MIN,
@@ -1051,5 +1053,40 @@ describe('the default Ellipse is drawn in the accent, like the Rectangle (T-192 
     const e = makeEllipseLayer(0, 0)
     const r = makeRectLayer(0, 0)
     expect([e.fill, e.stroke]).toEqual([r.fill, r.stroke])
+  })
+})
+
+/**
+ * T-193 (4): the default Line and Pencil stroke was EMBER, 1.67:1 on the default white page, and neither tool has a colour box (T-186's ruled missing feature), so
+ * the default is the colour a person gets. It is the accent now: the Rectangle's and Ellipse's stroke and the Line tool's own draw preview (3.66:1 on white,
+ * 5.29:1 on BG_BASE). The Pencil's draw preview is the same colour as the layer it commits (it was ember while drawing and would have turned accent on release).
+ */
+describe('the default Line and Pencil are drawn in the accent (T-193 (4))', () => {
+  it('both default to the accent', () => {
+    expect(makeLineLayer([0, 0, 10, 10]).stroke).toBe(ACCENT)
+    expect(makeLineLayer([0, 0, 10, 10], 'Line').stroke).toBe(ACCENT)
+    expect(makeLineLayer([0, 0, 10, 10, 20, 5], 'Pencil').stroke).toBe(ACCENT)
+  })
+
+  it('and the accent clears 3:1 on the default page and on the dark base (the colour box they do not have)', () => {
+    useCanvasStore.getState().resetDocument()
+    const page = useCanvasStore.getState().doc.background
+    expect(page).toBe('#ffffff')
+    for (const layer of [makeLineLayer([0, 0, 10, 10]), makeLineLayer([0, 0, 10, 10, 20, 5], 'Pencil')]) {
+      expect(contrastRatio(layer.stroke, page)).toBeGreaterThan(3)
+      expect(contrastRatio(layer.stroke, BG_BASE)).toBeGreaterThan(3)
+    }
+  })
+
+  it('control: it is the stroke of the Rectangle and the Ellipse beside it', () => {
+    expect([makeRectLayer(0, 0).stroke, makeEllipseLayer(0, 0).stroke]).toEqual([ACCENT, ACCENT])
+  })
+
+  it('wiring: the Pencil\'s draw preview strokes in the accent (the colour the layer is made in)', () => {
+    const canvas = readFileSync(fileURLToPath(new URL('../Canvas.tsx', import.meta.url)), 'utf8')
+    const preview = canvas.match(/<Line\s+points=\{pencilPoints\}[\s\S]*?\/>/)
+    expect(preview, 'the Pencil preview is in Canvas.tsx').not.toBeNull()
+    expect(preview?.[0]).toMatch(/stroke=\{ACCENT\}/)
+    expect(preview?.[0]).not.toMatch(/EMBER/)
   })
 })

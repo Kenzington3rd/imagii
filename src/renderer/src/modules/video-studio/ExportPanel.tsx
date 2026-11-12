@@ -452,12 +452,6 @@ export function ExportPanel(): JSX.Element | null {
       >
         Export
       </PanelHeader>
-      {/* T-153: the wrapper is always mounted so unchecking the last platform ANNOUNCES why Export went dark (a live region that appears
-          with its content is not reliably read - GifPanel's pattern). While it is empty it is still a flex item with a gap on each side, so
-          `-mb-4` takes back the second one; nothing is hidden (no display:none, no visibility:hidden), it stays in the accessibility tree. */}
-      <div role="status" className={!running && totalQueued === 0 ? undefined : '-mb-4'}>
-        {!running && totalQueued === 0 ? <p className="text-xs text-warn">{NOTHING_QUEUED}</p> : null}
-      </div>
       {running ? (
         // B8 fix (round 15) + INIT-I (round 16): a long batch had no abort path. Cancel calls cancelAll, but a misclick during a
         // 20-clip batch was too costly - confirm before nuking >=2 running jobs.
@@ -591,6 +585,16 @@ export function ExportPanel(): JSX.Element | null {
           })}
         </div>
       ) : null}
+
+      {/* T-153: the wrapper is always mounted so unchecking the last platform ANNOUNCES why Export went dark (a live region that appears
+          with its content is not reliably read - GifPanel's pattern). While it is empty it is still a flex item with a gap on each side, so
+          `-mb-4` takes back the second one; nothing is hidden (no display:none, no visibility:hidden), it stays in the accessibility tree.
+          T-193 (2): it sits BELOW the grid, not above it. Above, it appeared when the last card was unchecked and pushed every card down by its
+          line and a gap (32 px): a double-click on the only checked card checked a different one with its second press. Below, the line arrives
+          where nothing a press on a card reaches is. */}
+      <div role="status" className={!running && totalQueued === 0 ? undefined : '-mb-4'}>
+        {!running && totalQueued === 0 ? <p className="text-xs text-warn">{NOTHING_QUEUED}</p> : null}
+      </div>
 
       {jobs.length > 0 ? (
         <div className="flex flex-col gap-2 mt-2">
