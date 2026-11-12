@@ -10599,6 +10599,93 @@ IMG-PREC.
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 146 — see the Done entry)
 
+## T-198 — sweep-85 fix (round 147)
+
+- **Spec:** the eighty-fifth sweep's verified findings (candidate clean pass #1 on f122d8d, the T-197 tree; the count
+  stays at 0). Item 1 found by the QA main reader and executed by it (a rename that refuses once), confirmed by the
+  expediter in source. Item 2 re-adjudicated by the expediter from a QA renderer reader's not-counted list and
+  measured by the expediter in the built app. Twelve readers clean; four sent back once for partial reads (UX 1, UX 2,
+  streamer r-b, privacy), each clean on its amended report (the ffmpeg reader was still out when this ticket was
+  written; a finding from it joins Track A). Not counted: a refused second sound under an open Audio tour
+  (unreachable: the tour opens only on an arrived waveform, its scrim and trap cover the page, every background loader
+  skips an open sound and the importer is single-flight); a re-attached MP4 opened in Video Studio only from its toast
+  and not added to Recent (the finished row carries the path and Show in folder; initiative); PostChecklist's leading
+  zero (cosmetic); the emote cards' '3-PNG pack' beside a JPG choice (the Output readout states the file); the setup
+  card's Refresh status removing itself once ready (a second press lands on text); the ledgered T-110 letters and
+  earlier dispositions each reader named. Two worker tracks, disjoint files: A main (fsAtomic.ts, autosave.ts,
+  ffmpeg/partialOutput.ts), B renderer (modules/project/ProjectIO.ts, routes/Home.tsx,
+  components/AutosaveRestore.tsx).
+
+  **Track A — a save waits out a scanner's moment, as the render swap does (item 1).**
+  1. **[LOW] A save that the disk refuses for a moment is given up on, where the render swap waits it out**
+     (main/fsAtomic.ts:57-64 `writeFileAtomic` and main/autosave.ts:157 rename their tmp ONCE and rethrow;
+     main/ffmpeg/partialOutput.ts:88-108 `renameWhenFree` retries the same refusal - EBUSY, EPERM or EACCES - for
+     about 1.55 s (`COMMIT_RETRY_DELAYS_MS` 50/100/200/400/800) on the repo's own premise (T-140): on Windows a
+     scanner (Defender, the search indexer) holds a file just closed for a moment. The tmp a `writeFileAtomic` has
+     just written and flushed is that file, so Save project, Stream Graphics Save / Save as and the emote pack
+     (`image:saveMany` writes in a loop: a refusal mid-loop leaves part of the pack in the folder), Save .srt, the
+     Clip Kit's captions, the transcript cache and every mood-board write fail once with "Windows blocked access to a
+     file. Close any app using it, or check your antivirus." for a file nothing else holds, and the next press works;
+     the autosave loses that tick. Executed by the QA main reader with `rename` refusing once: `writeFileAtomic`
+     rejects EPERM and the target stays old, `commitPartial` lands on the second call). Fix: ONE helper,
+     `renameWhenFree(from, to, check?)` in main/fsAtomic.ts with the same delays and codes (moved there from
+     partialOutput.ts, which imports it and passes its run's `check`), used by `writeFileAtomic` and
+     `writeAutosaveNow`; nothing else changes - a target another app holds still refuses after the waits (T-139 (1)'s
+     sentence), the render swap still lands beside a held target (T-140), and the quit's bounded flush (1.5 s) still
+     bounds the autosave's wait. Class check: every other rename or replace in src/main (grep `rename(`, `copyFile(`,
+     `unlink(` on a file the person chose) - name each and say whether a scanner's moment can refuse it; fix the same
+     way only a user-visible one.
+  Covering tests: unit (fsAtomic.test.ts beside the T-139 cases; `rename` stubbed to refuse with EPERM, EBUSY and
+  EACCES once, then behave): `writeFileAtomic` lands the new bytes and leaves no tmp (red on the base); a refusal that
+  outlasts the delays still rejects with the disk's error and the target is the old file (guard); a non-lock code
+  (ENOSPC) is not retried (guard); `writeAutosaveNow` lands after one refusal (red on the base); partialOutput's
+  existing retry cases stay green through the moved helper. Layer 5 is not required (no ffmpeg command, graph or chain
+  changes), but the expediter runs the T-140 swap blocks with the real binary on the merged tree. Fold (non-counted,
+  review tooling): .claude/agents/a11y-reviewer.md:37 still names the round-23 palette ('text-ink-dim (#5d5d6e) on
+  bg-base (#0b0b0f)'); point it at tokens.ts and DESIGN_GUIDE's computed pairings instead of literal values. Docs: IC
+  rows for the saves (revised in place), LESSONS at the TOP, TESTING paragraph, STYLE_GUIDE's T-139 / T-140 passage
+  says the one helper.
+
+  **Track B — a superseded project open stops changing the studios (item 2).**
+  2. **[LOW] Opening a second project while the first is still loading lets the first one's late sound land in the
+     second one's session, and its 'Project loaded' read as the second's** (modules/project/ProjectIO.ts
+     `applyProject`: the audio section's guards are `replacedSince(heldBefore, source)`, which reads an EMPTY studio
+     as 'not replaced' (T-112), and the failure branch's `keepPart()` (:653-655) has no `audioApplies` check - only
+     T-195 (2)'s refusal follow-up honours 'a newer apply has the slot'; Home's T-131 (5) comment calls opening
+     another project meanwhile supported. Measured by the expediter on a built f122d8d (probe85): P1 (a video whose
+     sound is extracted again, the extraction stalled 12 s) opened from Home, then P2 opened during it; P2's
+     extraction is refused by main's one slot ('Still extracting the sound from "a-first.mp4". Wait for it to finish,
+     then try again. The rest of your project is open.'); then P1's sound lands and 'Project loaded' shows; the
+     session holds P2's video (b-second.mp4) with P1's sound and P1's Hum removal, and Save project writes that mixed
+     project. A late FAILURE of P1's sound instead overwrites P2's kept part, so P2's save carries P1's file and
+     chain. The video section has the same shape: a converted import's conversion that ends after a newer apply). Fix:
+     an apply knows when it is no longer the newest - a module counter `projectApplies`, `const apply =
+     ++projectApplies` at the top of `applyProject` and `superseded = () => apply !== projectApplies`. Every guard
+     that asks 'replaced since the wait?' also asks `superseded()` (the video conversion's post-wait check, the audio
+     load closures and `extractAgain`'s post-extraction check), so a superseded section skips; a superseded apply
+     writes no kept part (either studio), sets no chain and applies no `place`; and `ApplyOutcome` gains `superseded:
+     boolean`, on which Home's Open project and the autosave Restore raise nothing for that apply (no 'Project
+     loaded', no note: the newer open speaks for the session) while every other outcome reads as today. T-195 (2)'s
+     `audioApplies` stays as it is for the refusal follow-up. Found-not-fixed to name: the superseded extraction or
+     conversion is not cancelled (no cancel exists for `audio:extractFromVideo`), so the newer project's own refusal
+     ('wait for it to finish, then try again') stays true and its try again works; upgrade: a cancel on supersede.
+  Covering tests: unit (ProjectIO.test.ts beside the T-195 (2) / T-196 (1) bridge that holds an extraction: a newer
+  apply that starts while an older one waits - the older one's late success does not load its sound, its late failure
+  keeps no part, and the newer apply's kept part is the one Save writes (red on the base); the outcome of the older
+  apply says superseded and the newer's does not); e2e (NEW describe at the end of home-chrome.spec.ts, the probe85
+  shape: P1's extraction stalled with `installSpawnStall`, P2 opened during it with `recordSlowChooser`; after both
+  settle Audio Studio does NOT hold P1's sound, the toast log has no 'Project loaded' for P1 after P2's line, and Save
+  project writes P2's video and P2's sound part (red on the base: a-first.mp4 and hum60); control: a single Open
+  project of P1 still opens its sound and says 'Project loaded' (green on the base). Docs: IC rows for Open project
+  and Restore (revised in place), LESSONS at the TOP, TESTING paragraph, STYLE_GUIDE's T-112 / T-195 (2) passage says
+  a superseded apply.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
+  track moves and update each pin in place; the expediter runs the full suite and the real-media suite on the merged
+  tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 147)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
