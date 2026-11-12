@@ -10460,6 +10460,50 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 144 — see the Done entry)
 
+## T-196 — sweep-83 fixes (round 145)
+
+- **Spec:** the eighty-third sweep's verified finding (candidate clean pass #1 on 7d81c3a, the T-195 tree; the count
+  stays at 0). Item 1 found by UX reader 1 from source and by QA renderer reader A with a scratch unit test, and
+  measured by the expediter in the built app; a new consequence of T-195 (2). Thirteen readers clean (no send-backs;
+  the ffmpeg reader was still out when this ticket was written, and a finding from it joins this track). Not counted:
+  the ledgered T-110 letters and earlier sweeps' dispositions each reader named (among them Export's shrinking primary
+  over its folder chip, IC:3514; a schema-invalid config.json stopping launch, IC:2986; the Clip Kit's 6 s toasts,
+  TICKETS:9601). One worker track: project/ProjectIO.ts and its test, with a describe in home-chrome.spec.ts.
+
+  **The one track — a kept chain is kept until its file is read (item 1).**
+  1. **[LOW] A kept Audio Studio chain is lost when its file opens and is refused**
+     (project/ProjectIO.ts:447-453 `giveBackAudio`, run by the store subscriber at :478 when a source opens, applies a
+     kept part to the same file and DELETES it at once, before that file's waveform is read; only `applyProject` keeps a
+     part again on a refusal (T-195 (2), :628-647); measured by the expediter on a built 7d81c3a: a project naming an
+     unknown-format WAV with Hum removal and Remove low rumble on opens with the refusal sentence and Save project still
+     writes the chain (T-195 holds); the SAME unchanged file then dropped on Audio Studio - "try again" - is refused
+     again, Save project says "Nothing to save yet.", and the file made a standard WAV and opened has both unchecked;
+     re-exported before the second open, both are kept. The same give-back loses a T-174 (4) part - kept for a file that
+     would not open - when that file later opens and is refused). A new consequence of T-195 (2): the work survived one
+     try. Fix: the give-back keeps its record of what it gave back, and when THAT source's waveform read is refused (the
+     T-195 test: `waveformRefused(source)`, the studio empty) the part is kept again exactly as it was given back,
+     unless a newer apply or another kept part has taken the slot since; the given-back sound still owns the chain while
+     it is open (Save project and the autosave write the open source, Close asks its own question), so nothing else
+     changes. The person can try any number of times and the work is kept until a read arrives. Class check: every other
+     place a kept part is let go before the file it is for is known to be readable (the video's give-back;
+     `keptPartQuestion`; Close) - name each and whether a post-open refusal exists there.
+  Covering tests: e2e (NEW describe at the end of home-chrome.spec.ts) - Open project naming an unknown-format WAV with
+  Hum removal and Remove low rumble on; after the refusal the SAME unchanged file dropped on Audio Studio is refused
+  again: Save project then writes the audio part with both (red on the base: "Nothing to save yet."), and the file made
+  a standard WAV and opened has both checked (red: unchecked); the T-174 (4) path: the project opened while its WAV is
+  missing (kept), then the file put back in the unknown format and dropped (given back, refused): Save project still
+  writes the chain (red); control: the file standard at the second open is given back, its waveform arrives, and after
+  Close (its question accepted) Save project writes no audio part. Unit (ProjectIO.test.ts NEW describe) - a give-back
+  whose source is refused keeps the part again; one whose read arrives does not; a Close or another file opened before
+  the refusal does not; a newer apply since does not. Docs: IC rows (the T-174 (4) and T-195 (2) rows revised in
+  place), LESSONS at the TOP, TESTING paragraph, USER_GUIDE's saving passage (any number of tries).
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
+  track moves and update each pin in place; the expediter runs the full suite and the real-media suite on the merged
+  tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 145)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
