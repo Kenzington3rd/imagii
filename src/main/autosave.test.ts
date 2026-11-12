@@ -652,3 +652,54 @@ describe('autosave read: a canvas that cannot be drawn (T-188 (1))', () => {
     expect(JSON.stringify(again.project)).toBe(whole)
   })
 })
+
+// T-198 (1): a scanner holding the tmp just closed refused the autosave's one rename and the tick was lost; the render swap's wait (fsAtomic.renameWhenFree) is used now.
+describe('autosave write waits out a refused rename (T-198 (1))', () => {
+  /** An autosave module whose `rename` refuses `times` times with `code`, then behaves; `calls` counts every rename asked for. */
+  async function refusing(code: string, times: number): Promise<{ m: typeof import('./autosave'); calls: () => number }> {
+    let calls = 0
+    vi.resetModules()
+    vi.doMock('electron', () => ({ app: { getPath: () => tempDir } }))
+    vi.doMock('node:fs/promises', async () => {
+      const real = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises')
+      return {
+        ...real,
+        rename: async (from: string, to: string) => {
+          calls += 1
+          if (calls <= times) throw Object.assign(new Error(`${code}: simulated, rename`), { code })
+          return real.rename(from, to)
+        }
+      }
+    })
+    return { m: await import('./autosave'), calls: () => calls }
+  }
+  const files = async (): Promise<string[]> => (await readdir(path.join(tempDir, 'autosave'))).sort()
+
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('%s once: the tick lands, readable, and no tmp is left', async (code) => {
+    const { m, calls } = await refusing(code, 1)
+    const r = await m.writeAutosave(validProject())
+    expect(r.ok).toBe(true)
+    expect(calls()).toBe(2)
+    expect((await m.readAutosave()).ok).toBe(true)
+    expect((await files()).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('a refusal that outlasts the waits fails the tick with the disk\'s words, keeps the old autosave and leaves no tmp (guard)', async () => {
+    const first = await buildAutosaveModule()
+    await first.writeAutosave({ ...validProject(), appVersion: '1.0.0' })
+    const { m } = await refusing('EPERM', 99)
+    const r = await m.writeAutosave({ ...validProject(), appVersion: '2.0.0' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.reason).toContain('EPERM')
+    const again = await m.readAutosave()
+    expect(again.ok && again.project?.appVersion).toBe('1.0.0')
+    expect((await files()).filter((f) => f.endsWith('.tmp'))).toEqual([])
+  })
+
+  it('a refusal that is not a lock (ENOSPC) is not retried (guard)', async () => {
+    const { m, calls } = await refusing('ENOSPC', 1)
+    const r = await m.writeAutosave(validProject())
+    expect(r.ok).toBe(false)
+    expect(calls()).toBe(1)
+  })
+})

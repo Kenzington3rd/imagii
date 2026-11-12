@@ -227,6 +227,12 @@ Repeated UI is a component, not copy-paste:
   Discard. When both land on one run the name wins. A runner whose cleanup depends on WHO stopped it reads it off the error; it never guesses from a plain cancel.
 - **A flush closes what it opens (T-141 (10)).** `flushToDisk(file)` (`fsAtomic.ts`) is the one best-effort fsync: open, sync, close in a `finally`, every failure
   swallowed. `writeFileAtomic` and the autosave both use it; a second hand-written copy is how a rejecting `sync` once left a descriptor open per autosave.
+- **One helper waits out a scanner's moment on a rename (T-198 (1); revises the T-139 (1) and T-140 (1) passages above).** `renameWhenFree(from, to, check?)` and
+  `COMMIT_RETRY_DELAYS_MS` (50/100/200/400/800, about 1.55 s) live in `main/fsAtomic.ts`: a rename refused with EBUSY, EPERM or EACCES is tried again after each wait, any
+  other code and the refusal after the last wait are thrown as the disk's own error. `writeFileAtomic`, `writeAutosaveNow` and the render swap (`commitPartial`, which passes
+  `() => run.check()` so a Cancel still lands between tries) all rename through it; a second hand-written rename-and-rethrow is how a save failed once on a file nothing else
+  held. Nothing else changed: a target another app really holds still refuses after the waits (no redirect for a save; only the render swap lands beside a held target), and the
+  quit's 1.5 s flush still bounds the autosave's wait.
 - **A progress number is a measurement, or it is absent (T-89).** A progress
   event carries `percent` only when main KNOWS how far along the work is — a
   download's byte count, `done` = 100, the burn-in's encode position over the
@@ -287,7 +293,10 @@ Repeated UI is a component, not copy-paste:
   transcript for the wrong picture. Opening a project is the same shape with a longer wait: `applyProject` holds
   what each studio held before the re-convert / re-extract and skips the project's source if the person opened a
   different one meanwhile (`replacedSince`: a studio CLOSED meanwhile is not "something else"), reporting it in
-  `ApplyOutcome.skipped`. Both outcomes of a project open that are not "it opened" — a file that is gone
+  `ApplyOutcome.skipped`. T-198 (2): `replacedSince` reads an EMPTY studio as "not replaced", so it cannot tell that a NEWER project open has begun
+  (its own sound refused leaves the studio empty): `applyProject` takes a place in a module counter (`projectApplies`) and asks `superseded()` beside
+  every `replacedSince` and after every load, so a superseded apply skips its sections, writes no kept part, sets no chain and applies no place, and
+  `ApplyOutcome.superseded` tells Home's Open project and the autosave Restore to raise nothing (the newer open speaks for the session). Both outcomes of a project open that are not "it opened" — a file that is gone
   (`unavailable`, said only when `isMissingFileError` is true), a file that would not open for any other reason
   (`failed`, the `userFacingError` sentence for the real cause), a source skipped — are one string from
   `describeApplyOutcome`, which Home's Open project and the autosave Restore both toast. A new long job asks: what

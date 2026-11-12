@@ -19,6 +19,8 @@ const faults = vi.hoisted(() => ({
   writeThenFail: null as string | null,
   /** The next rename(s) fail with this errno. */
   renameFails: null as string | null,
+  /** T-198 (1): the next `times` renames fail with `code`, then the real rename runs (a scanner's moment). */
+  renameRefuses: null as { code: string; times: number } | null,
   /** Every unlink fails with this errno. */
   unlinkFails: null as string | null,
   /** Every open() fails with this errno (the fsync is the only open the helper makes). */
@@ -48,6 +50,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     rename: async (from: string, to: string) => {
       faults.renamed.push([String(from), String(to)])
       if (faults.renameFails) throw errno(faults.renameFails, 'rename')
+      if (faults.renameRefuses && faults.renameRefuses.times > 0) {
+        faults.renameRefuses.times -= 1
+        throw errno(faults.renameRefuses.code, 'rename')
+      }
       return real.rename(from, to)
     },
     unlink: async (file: string) => {
@@ -61,7 +67,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }
 })
 
-const { writeFileAtomic, ATOMIC_TMP } = await import('./fsAtomic')
+const { writeFileAtomic, ATOMIC_TMP, COMMIT_RETRY_DELAYS_MS, renameWhenFree } = await import('./fsAtomic')
 
 let dir = ''
 let target = ''
@@ -70,6 +76,7 @@ beforeEach(() => {
   target = path.join(dir, 'My project.imagii.json')
   faults.writeThenFail = null
   faults.renameFails = null
+  faults.renameRefuses = null
   faults.unlinkFails = null
   faults.openFails = null
   faults.written.length = 0
@@ -269,5 +276,86 @@ describe('writeFileAtomic - a target at the file system\'s limit (T-183 (2))', (
   it('a name that fits keeps its tmp exactly `<target>.<hex>.tmp`', async () => {
     await writeFileAtomic(target, OLD)
     expect(faults.written[0]).toMatch(new RegExp(`^${target.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\.[0-9a-f]{8}\\.tmp$`))
+  })
+})
+
+
+// T-198 (1): the render swap (T-140) waited out a scanner's moment on a file just closed (EBUSY / EPERM / EACCES, about 1.55 s); a save over the person's file gave up on the
+// first refusal and said "Windows blocked access to a file" for a file nothing else held. The helper is shared now. The refusals are injected (Linux cannot make one).
+describe('writeFileAtomic - a rename the disk refuses for a moment is waited out (T-198 (1))', () => {
+  it.each(['EPERM', 'EBUSY', 'EACCES'])('%s once, then through: the new bytes land, the same tmp is retried, and no tmp is left', async (code) => {
+    writeFileSync(target, OLD)
+    faults.renameRefuses = { code, times: 1 }
+    await writeFileAtomic(target, 'new')
+    expect(readFileSync(target, 'utf8')).toBe('new')
+    expect(readdirSync(dir)).toEqual([path.basename(target)])
+    expect(faults.renamed).toHaveLength(2)
+    expect(faults.renamed[1], 'the second try is the same pair').toEqual(faults.renamed[0])
+  })
+
+  it('a first save (no old file) lands after one refusal too', async () => {
+    faults.renameRefuses = { code: 'EPERM', times: 3 }
+    await writeFileAtomic(target, 'new')
+    expect(readFileSync(target, 'utf8')).toBe('new')
+    expect(faults.renamed).toHaveLength(4)
+  })
+
+  it('a refusal that outlasts every wait rejects with the disk\'s own error, the old bytes stand and no tmp is left (guard)', async () => {
+    writeFileSync(target, OLD)
+    faults.renameFails = 'EPERM'
+    const started = Date.now()
+    const err = await writeFileAtomic(target, 'new').then(() => null, (e: unknown) => e)
+    const spent = Date.now() - started
+    expect((err as NodeJS.ErrnoException).code).toBe('EPERM')
+    expect((err as Error).message).toBe('EPERM: simulated, rename')
+    expect(faults.renamed, 'the first try and one per delay').toHaveLength(COMMIT_RETRY_DELAYS_MS.length + 1)
+    expect(spent, 'it waited the delays').toBeGreaterThanOrEqual(COMMIT_RETRY_DELAYS_MS.reduce((a, b) => a + b, 0) - 50)
+    expect(readFileSync(target, 'utf8')).toBe(OLD)
+    expect(readdirSync(dir)).toEqual([path.basename(target)])
+  })
+
+  it('a refusal that is not a lock (ENOSPC) is thrown at once: one try, the old bytes stand, no tmp (guard)', async () => {
+    writeFileSync(target, OLD)
+    faults.renameRefuses = { code: 'ENOSPC', times: 1 }
+    const err = await writeFileAtomic(target, 'new').then(() => null, (e: unknown) => e)
+    expect((err as NodeJS.ErrnoException).code).toBe('ENOSPC')
+    expect(faults.renamed).toHaveLength(1)
+    expect(readFileSync(target, 'utf8')).toBe(OLD)
+    expect(readdirSync(dir)).toEqual([path.basename(target)])
+  })
+})
+
+describe('renameWhenFree - the shared helper (T-198 (1))', () => {
+  it('asks `check` after each wait and not before the first try', async () => {
+    const from = path.join(dir, 'a.tmp')
+    writeFileSync(from, 'x')
+    faults.renameRefuses = { code: 'EBUSY', times: 2 }
+    let checks = 0
+    await renameWhenFree(from, target, () => {
+      checks += 1
+    })
+    expect(checks, 'two refusals, two waits, two checks').toBe(2)
+    expect(readFileSync(target, 'utf8')).toBe('x')
+  })
+
+  it('does not ask `check` when the first try lands', async () => {
+    const from = path.join(dir, 'a.tmp')
+    writeFileSync(from, 'x')
+    await renameWhenFree(from, target, () => {
+      throw new Error('asked')
+    })
+    expect(readFileSync(target, 'utf8')).toBe('x')
+  })
+
+  it('a `check` that throws stops the retries: the throw goes up and no further rename is made', async () => {
+    const from = path.join(dir, 'a.tmp')
+    writeFileSync(from, 'x')
+    faults.renameFails = 'EPERM'
+    await expect(
+      renameWhenFree(from, target, () => {
+        throw new Error('cancelled')
+      })
+    ).rejects.toThrow('cancelled')
+    expect(faults.renamed).toHaveLength(1)
   })
 })

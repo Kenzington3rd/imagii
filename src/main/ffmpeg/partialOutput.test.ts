@@ -18,8 +18,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
   }
 })
 
+const { COMMIT_RETRY_DELAYS_MS } = await import('../fsAtomic')
 const {
-  COMMIT_RETRY_DELAYS_MS,
   PARTIAL_OUTPUT,
   commitPartial,
   discardPartial,
@@ -524,5 +524,30 @@ describe('partialPathFor - a target at the file system\'s limit (T-183 (2))', ()
     expect(bytes(landed)).toBe(255)
     expect(readFileSync(landed, 'utf8')).toBe('new render')
     expect(readFileSync(target, 'utf8')).toBe('earlier export')
+  })
+})
+
+// T-198 (1): `renameWhenFree` moved to fsAtomic.ts and takes the run's check as a callback; the swap still asks it BETWEEN tries, so a Cancel lands during the waits.
+describe('commitPartial - a Cancel recorded while the swap is being retried wins between the tries (T-198 (1))', () => {
+  it('the Cancel is seen after the first wait: no second try is made, the target is the old file and the partial is dropped', async () => {
+    const target = write('out.mp4', 'old')
+    const partial = write(path.basename(partialPathFor(target)), 'new')
+    let calls = 0
+    let cancelNow = false
+    const run = {
+      check: (): void => {
+        if (cancelNow) throw new CancelledError()
+      }
+    }
+    renameHook = async (_real, _from, to) => {
+      if (to !== target) throw new Error('unexpected name')
+      calls += 1
+      cancelNow = true
+      throw Object.assign(new Error('EPERM: simulated'), { code: 'EPERM' })
+    }
+    await expect(commitPartial(run, partial, target, 'replace')).rejects.toBeInstanceOf(CancelledError)
+    expect(calls, 'one try, one wait, then the check').toBe(1)
+    expect(readFileSync(target, 'utf8')).toBe('old')
+    expect(names()).toEqual(['out.mp4'])
   })
 })

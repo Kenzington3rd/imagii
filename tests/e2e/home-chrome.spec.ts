@@ -5656,3 +5656,154 @@ test.describe('round 145 (T-196 (1)): a kept chain is kept until its file is rea
     }
   })
 })
+
+// ── round 147 Track B (T-198 (2)): a project open that a newer one overtook changes nothing ────────────────────────────────────────────────────────────────────
+//
+// Opening a second project while the first is still extracting its sound is supported (Home's claim covers the dialog and nothing after it). The first one's late sound then landed in the second one's
+// session (an empty studio reads as "not replaced"), "Project loaded" read as the second's, and Save project wrote the second's video with the first's sound and chain. The first extraction is
+// stalled with `installSpawnStall` (main has ONE extraction slot, so the second open's own extraction is refused in its finished sentence); the first one's answer is awaited by its scratch WAV
+// landing in %TEMP%\imagii-audio, and the assertions come after it. The Restore variant is the same race with an autosave's apply as the older open.
+test.describe('round 147 Track B (T-198 (2)): a superseded project open changes nothing', () => {
+  const STILL_EXTRACTING =
+    'Still extracting the sound from "a-first.mp4". Wait for it to finish, then try again. The rest of your project is open.'
+  const HUM = 'Hum removal (60 Hz mains)'
+  const RUMBLE = 'Remove low rumble (below 80 Hz)'
+  const scratchDir = path.join(os.tmpdir(), 'imagii-audio')
+  const scratchWavs = (): string[] => (existsSync(scratchDir) ? readdirSync(scratchDir).filter((n) => n.endsWith('.wav')) : [])
+
+  interface Fixture {
+    app: ElectronApplication
+    window: Page
+    root: string
+    userDataDir: string
+    first: string
+    second: string
+    saved: string
+  }
+
+  const part = (video: string, chain: Record<string, unknown>): Record<string, unknown> => ({
+    schemaVersion: 5,
+    savedAt: Date.now(),
+    appVersion: '1.0.0',
+    videoStudio: { sourcePath: video, clips: [], selectedClipId: null, watermark: null, srtPath: null },
+    audioStudio: { sourcePath: video, extractedFromVideo: true, chain }
+  })
+
+  async function launch(label: string, opts: { files: string[]; autosave?: boolean }): Promise<Fixture> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const sourceDir = path.join(root, 'source')
+    mkdirSync(sourceDir, { recursive: true })
+    const first = path.join(sourceDir, 'a-first.mp4')
+    const second = path.join(sourceDir, 'b-second.mp4')
+    await makeFixtureMp4(first)
+    await makeFixtureMp4(second)
+    const saved = path.join(root, 'saved.imagii.json')
+    const p1 = path.join(root, 'p1.imagii.json')
+    const p2 = path.join(root, 'p2.imagii.json')
+    const chainA = { ...DEFAULT_CHAIN_SPEC, hum60: true }
+    const chainB = { ...DEFAULT_CHAIN_SPEC, rumbleHighpass: true }
+    writeFileSync(p1, JSON.stringify(part(first, chainA)), 'utf8')
+    writeFileSync(p2, JSON.stringify(part(second, chainB)), 'utf8')
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    // The autosave variant's snapshot names the audio route, so a Restore that finished would navigate there.
+    if (opts.autosave) seedAutosave(userDataDir, { ...part(first, chainA), place: { route: '/audio' } })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await recordSlowChooser(app, { files: opts.files.map((f) => (f === 'p1' ? p1 : p2)), saveAs: saved })
+    return { app, window, root, userDataDir, first, second, saved }
+  }
+  const close = (f: Fixture): Promise<void> => f.app.close().catch(() => undefined).then(() => cleanup(f.root))
+
+  /** The first apply's extraction answers when ffmpeg has written its scratch WAV and let it go (its size stops moving), plus a moment for the renderer to act on it. */
+  async function firstExtractionAnswered(f: Fixture, before: Set<string>): Promise<void> {
+    const fresh = (): string | undefined => scratchWavs().find((n) => !before.has(n))
+    await expect.poll(() => fresh() !== undefined, { timeout: 60_000, intervals: [250] }).toBe(true)
+    const file = path.join(scratchDir, fresh()!)
+    let last = -1
+    await expect
+      .poll(() => {
+        const size = existsSync(file) ? statSync(file).size : 0
+        const stable = size > 44 && size === last
+        last = size
+        return stable
+      }, { timeout: 30_000, intervals: [700] })
+      .toBe(true)
+    await f.window.waitForTimeout(2500)
+  }
+
+  async function openSecondOverFirst(f: Fixture): Promise<Set<string>> {
+    await installSpawnStall(f.app, [{ match: 'ffmpeg', nth: 1, ms: 8_000 }])
+    const before = new Set(scratchWavs())
+    await f.window.getByRole('button', { name: 'Open project' }).click()
+    await expect.poll(() => readToastLog(f.window), { timeout: 30_000, intervals: [200] }).toContain('Extracting audio…')
+    return before
+  }
+
+  test('Open project twice: the first one\'s late sound does not land, "Project loaded" is not said, and Save project writes the second project (a-first.mp4 and Hum removal landed)', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t198-open', { files: ['p1', 'p2'] })
+    try {
+      const before = await openSecondOverFirst(f)
+      await f.window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(f.window), { timeout: 30_000, intervals: [200] }).toContain(STILL_EXTRACTING)
+      await firstExtractionAnswered(f, before)
+
+      await f.window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(f.saved), { timeout: 15_000 }).toBe(true)
+      const written = JSON.parse(readFileSync(f.saved, 'utf8')) as {
+        videoStudio?: { sourcePath?: string }
+        audioStudio?: { sourcePath?: string; extractedFromVideo?: boolean; chain?: { hum60?: boolean; rumbleHighpass?: boolean } }
+      }
+      expect(written.videoStudio?.sourcePath).toBe(f.second)
+      expect(written.audioStudio).toMatchObject({ sourcePath: f.second, extractedFromVideo: true, chain: { hum60: false, rumbleHighpass: true } })
+
+      await f.window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(f.window.getByText('Drop audio or video here'), 'Audio Studio does not hold the first project\'s sound').toBeVisible({ timeout: 20_000 })
+      // Last, so a red run reads the files first: no good news for either open (the second one is refused, the first one was overtaken).
+      expect(await readToastLog(f.window), 'nothing more is said for the opens (our own Save says "Project saved"): not "Project loaded", and no note about a sound that was skipped').toEqual(['Extracting audio…', STILL_EXTRACTING, 'Project saved'])
+    } finally {
+      await close(f)
+    }
+  })
+
+  test('a Restore overtaken by Open project: no "Restored from autosave", and the person is not taken to the snapshot\'s studio', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t198-restore', { files: ['p2'], autosave: true })
+    try {
+      await expect(f.window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await installSpawnStall(f.app, [{ match: 'ffmpeg', nth: 1, ms: 8_000 }])
+      const before = new Set(scratchWavs())
+      await f.window.getByRole('button', { name: 'Restore', exact: true }).click()
+      await expect.poll(() => readToastLog(f.window), { timeout: 30_000, intervals: [200] }).toContain('Extracting audio…')
+      await f.window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(f.window), { timeout: 30_000, intervals: [200] }).toContain(STILL_EXTRACTING)
+      await firstExtractionAnswered(f, before)
+      expect(await readToastLog(f.window), 'no "Restored from autosave", no "Project loaded", no note about a sound that was skipped').toEqual(['Extracting audio…', STILL_EXTRACTING])
+      await expect(f.window.locator('h1', { hasText: 'imagii' }), 'still on Home').toBeVisible()
+      expect(new URL(f.window.url()).hash).toBe('#/home')
+      await f.window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    } finally {
+      await close(f)
+    }
+  })
+
+  test('control: a single Open project of the first still opens its sound with Hum removal, and says "Project loaded"', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t198-control', { files: ['p1'] })
+    try {
+      await f.window.getByRole('button', { name: 'Open project' }).click()
+      await expect.poll(() => readToastLog(f.window), { timeout: 60_000, intervals: [250] }).toContain('Project loaded')
+      await f.window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(f.window.locator('[data-tutorial="audio-waveform"]').getByRole('button', { name: 'Play', exact: true })).toBeEnabled({ timeout: 60_000 })
+      const box = f.window.locator('[data-tutorial="audio-cleanup"]')
+      await expect(box.getByLabel(HUM)).toBeChecked()
+      await expect(box.getByLabel(RUMBLE)).not.toBeChecked()
+    } finally {
+      await close(f)
+    }
+  })
+})

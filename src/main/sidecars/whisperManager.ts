@@ -1,11 +1,12 @@
 import { spawn, type ChildProcess } from 'node:child_process'
-import { mkdir, writeFile, readFile, rename, unlink, stat } from 'node:fs/promises'
+import { mkdir, writeFile, readFile, unlink, stat } from 'node:fs/promises'
 import { createWriteStream } from 'node:fs'
 import path from 'node:path'
 import { existsSync } from 'node:fs'
 import { net } from 'electron'
 import { extractAudioFromVideo } from '../audio/extract'
 import { ffmpegPath } from '../ffmpeg/paths'
+import { renameWhenFree } from '../fsAtomic'
 import { probeVideo } from '../ffmpeg/probe'
 import { EVEN_PICTURE } from '../ffmpeg/filters'
 import { cancelledOr, killAsCancelled } from '../ffmpeg/cancelMark'
@@ -954,7 +955,9 @@ async function verifyAndFinalize(
   }
 
   try {
-    await rename(partialPath, finalPath)
+    // T-198 (1): a scanner's moment on the 141 MB file just written is waited out, as for every tmp-and-rename write. No `check` is passed: `verifyAndFinalize`
+    // has never asked the install's cancel flag (a Cancel during the verify is not honoured before this step either), so nothing is lost between tries.
+    await renameWhenFree(partialPath, finalPath)
   } catch (err) {
     return {
       ok: false,

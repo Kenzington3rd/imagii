@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
 import { rename, stat, unlink } from 'node:fs/promises'
+import { LOCKED_CODES, renameWhenFree } from '../fsAtomic'
 import path from 'node:path'
 import { fitFileName } from '../../shared/filename'
 import { NAME_UNIT } from './outputPath'
@@ -85,31 +86,9 @@ export interface CancelCheck {
   check(): void
 }
 
-/**
- * How long a refused rename is waited out. On Windows a scanner (Defender, the search indexer) can hold a file ffmpeg has just closed for a moment,
- * and the rename of it is refused (EBUSY, EPERM or EACCES) - the same reason graceful-fs retries. The render is whole and took minutes, and it did not
- * have this step before, so it is tried again for about a second and a half before it is given up. The quit's wait for a run to end is 1.5 s.
- */
-export const COMMIT_RETRY_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800]
-const LOCKED = new Set(['EBUSY', 'EPERM', 'EACCES'])
-
-async function renameWhenFree(run: CancelCheck, from: string, to: string): Promise<void> {
-  for (let attempt = 0; ; attempt += 1) {
-    try {
-      await rename(from, to)
-      return
-    } catch (err) {
-      const delay = COMMIT_RETRY_DELAYS_MS[attempt]
-      if (delay === undefined || !LOCKED.has((err as NodeJS.ErrnoException).code ?? '')) throw err
-      await new Promise((resolve) => setTimeout(resolve, delay))
-      run.check()
-    }
-  }
-}
-
 /** Did the disk refuse the swap with a lock code, onto a name that something is at? Only then is "the file is open in another app" the reading. */
 async function targetIsHeld(err: unknown, target: string): Promise<boolean> {
-  if (!LOCKED.has((err as NodeJS.ErrnoException).code ?? '')) return false
+  if (!LOCKED_CODES.has((err as NodeJS.ErrnoException).code ?? '')) return false
   try {
     await stat(target)
     return true
@@ -131,7 +110,7 @@ export async function commitPartial(run: CancelCheck, partial: string, target: s
     const landing = mode === 'beside' ? await nextFreePath(target) : target
     run.check()
     try {
-      await renameWhenFree(run, partial, landing)
+      await renameWhenFree(partial, landing, () => run.check())
       return landing
     } catch (err) {
       // `beside` chose a name that was free a moment ago, so a refusal there is not an open file; any other refusal (a full or read-only drive) would

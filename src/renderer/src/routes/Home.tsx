@@ -49,6 +49,9 @@ async function handleLoad(): Promise<void> {
     // T-139 (5): the project is in the stores. The autosave banner on this page offers a session that is not the person's any more: it goes (Restore would apply
     // the snapshot over what was just opened).
     useAutosaveOffer.getState().withdraw()
+    // T-198 (2): a newer open began while this one waited, so the session is that one's: no note and no "Project loaded" for a project that is not what is open.
+    // The offer above still goes: the person opened a project of their own, whichever of the two ends up in the studios.
+    if (outcome.superseded) return
     // T-112: also the files that would not open for another reason, and a source
     // skipped because the person opened a different one while it loaded.
     const note = describeApplyOutcome(outcome, 'project')

@@ -4,7 +4,6 @@ import {
   writeFile,
   readFile,
   readdir,
-  rename,
   unlink,
   stat,
   copyFile
@@ -12,7 +11,7 @@ import {
 import { existsSync } from 'node:fs'
 import { randomBytes } from 'node:crypto'
 import path from 'node:path'
-import { flushToDisk } from './fsAtomic'
+import { flushToDisk, renameWhenFree } from './fsAtomic'
 import { isSafeToAutosave, validateProjectJsonString } from '../shared/projectValidation'
 import type { ImagiiProject } from '../shared/workspace'
 
@@ -154,7 +153,8 @@ async function writeAutosaveNow(
       }
     }
 
-    await rename(tmp, current)
+    // T-198 (1): a scanner's moment on the tmp just closed is waited out, as the render swap's is; the quit's bounded flush still bounds it.
+    await renameWhenFree(tmp, current)
     return { ok: true, sizeBytes: raw.length }
   } catch (err) {
     // A write that failed part-way must not leave its half file behind (it has a name of its own now, so nothing would overwrite it).

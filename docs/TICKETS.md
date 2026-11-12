@@ -10604,17 +10604,16 @@ IMG-PREC.
 - **Spec:** the eighty-fifth sweep's verified findings (candidate clean pass #1 on f122d8d, the T-197 tree; the count
   stays at 0). Item 1 found by the QA main reader and executed by it (a rename that refuses once), confirmed by the
   expediter in source. Item 2 re-adjudicated by the expediter from a QA renderer reader's not-counted list and
-  measured by the expediter in the built app. Twelve readers clean; four sent back once for partial reads (UX 1, UX 2,
-  streamer r-b, privacy), each clean on its amended report (the ffmpeg reader was still out when this ticket was
-  written; a finding from it joins Track A). Not counted: a refused second sound under an open Audio tour
-  (unreachable: the tour opens only on an arrived waveform, its scrim and trap cover the page, every background loader
-  skips an open sound and the importer is single-flight); a re-attached MP4 opened in Video Studio only from its toast
-  and not added to Recent (the finished row carries the path and Show in folder; initiative); PostChecklist's leading
-  zero (cosmetic); the emote cards' '3-PNG pack' beside a JPG choice (the Output readout states the file); the setup
-  card's Refresh status removing itself once ready (a second press lands on text); the ledgered T-110 letters and
-  earlier dispositions each reader named. Two worker tracks, disjoint files: A main (fsAtomic.ts, autosave.ts,
-  ffmpeg/partialOutput.ts), B renderer (modules/project/ProjectIO.ts, routes/Home.tsx,
-  components/AutosaveRestore.tsx).
+  measured by the expediter in the built app. Thirteen readers clean (the ffmpeg reader handed back clean after the
+  ticket was written); four of them sent back once for partial reads (UX 1, UX 2, streamer r-b, privacy), each clean
+  on its amended report. Not counted: a refused second sound under an open Audio tour (unreachable: the tour opens
+  only on an arrived waveform, its scrim and trap cover the page, every background loader skips an open sound and the
+  importer is single-flight); a re-attached MP4 opened in Video Studio only from its toast and not added to Recent
+  (the finished row carries the path and Show in folder; initiative); PostChecklist's leading zero (cosmetic); the
+  emote cards' '3-PNG pack' beside a JPG choice (the Output readout states the file); the setup card's Refresh status
+  removing itself once ready (a second press lands on text); the ledgered T-110 letters and earlier dispositions each
+  reader named. Two worker tracks, disjoint files: A main (fsAtomic.ts, autosave.ts, ffmpeg/partialOutput.ts), B
+  renderer (modules/project/ProjectIO.ts, routes/Home.tsx, components/AutosaveRestore.tsx).
 
   **Track A — a save waits out a scanner's moment, as the render swap does (item 1).**
   1. **[LOW] A save that the disk refuses for a moment is given up on, where the render swap waits it out**
@@ -10684,7 +10683,7 @@ IMG-PREC.
   standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
   track moves and update each pin in place; the expediter runs the full suite and the real-media suite on the merged
   tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 147)
+- **Status:** done (round 147 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -11262,6 +11261,37 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 147 — T-198, the two counted items of sweep 85, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+52981fa, disjoint files. Track A (item 1): one `renameWhenFree` in
+main/fsAtomic.ts (moved from partialOutput.ts, the same 50-800 ms
+waits on EBUSY/EPERM/EACCES) is used by `writeFileAtomic`, the
+autosave write, the render swap (with its Cancel check) and the
+caption model's install, so a Windows scanner's moment on a file just
+written no longer fails a save; a target another app holds still
+refuses after the waits. Fold: the a11y reviewer's stale palette now
+points at tokens.ts. Sent back once: the class check's model-install
+rename was left unfixed, then fixed. Track B (item 2): an apply that a
+newer one overtook (`projectApplies`, `superseded()`) changes nothing
+past that point - no sound, no kept part, no chain, no place - and
+Home's Open project and the autosave Restore say nothing for it;
+measured red on the base (P2's video with P1's sound written by Save).
+Deviations accepted: Track B removed a dead `replaced()` conjunct (no
+await between the audio-section guard and it); Home's banner withdraw
+is unconditional (idempotent). Found-not-fixed (IC): an importer's
+late result over a project open whose sound was refused; the
+superseded extraction is not cancelled (no cancel exists). Expediter:
+one independent mutation per track, both killed (the retry schedule
+cut to one wait; Home's quiet return moved below the note). Ledger: 6
+of 6 and 10 of 11 killed (one equivalent), every restore identical.
+Gates: npm run verify twice on the merged tree (217 files, 7259
+tests), plus the workers' targeted runs in their clones
+(byte-identical code): the T-140 Layer 5 swap blocks 41 passed,
+home-chrome.spec 123/123, the project-open and restore cases of
+audio.spec (15) and video-core (4), the new T-198 describe 9/9 over 3
+repeats; the full Playwright suite and the full real-media suite were
+NOT run on the merged tree (owner directive to conserve usage).
 
 Round 146 — T-197, the two counted items of sweep 84, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones

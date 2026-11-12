@@ -14,6 +14,38 @@ Entries are grouped by date. Most recent first.
 
 ---
 
+## 2026-11-12 - T-198 (round 147), Track A: a premise that a helper is built on belongs in the helper, not in its first caller
+
+The eighty-fifth sweep's item 1: the render swap waited out a scanner's moment; the saves did not.
+
+**Bug** - `writeFileAtomic` and the autosave renamed their tmp once and rethrew. On Windows a scanner (Defender, the search indexer) can hold a file for a moment after it is closed, and the rename of it is refused (EBUSY, EPERM, EACCES): Save project, Stream Graphics Save, the emote pack (a refusal mid-loop left part of the pack in the folder), Save .srt, the Clip Kit's captions and every mood-board write failed once with "Windows blocked access to a file" for a file nothing else held, and the autosave lost that tick. Executed by the QA main reader with `rename` refusing once: `writeFileAtomic` rejected EPERM and the target stayed old, while `commitPartial` landed on the second call.
+
+**Root cause** - T-140 found the scanner premise for the render swap and put the retry in `partialOutput.ts`'s private `renameWhenFree`. The saves rename a file they have just written and flushed, which is the same file in the same moment, and nothing moved the retry to where both could reach it.
+
+**Fix** - ONE helper, `renameWhenFree(from, to, check?)` in `main/fsAtomic.ts`, with the same delays (`COMMIT_RETRY_DELAYS_MS`, about 1.55 s) and codes; `writeFileAtomic`, `writeAutosaveNow` and the render swap (which passes its run's check) use it. A target another app really holds still refuses after the waits (T-139 (1)); the swap still lands beside a held target (T-140); the quit's 1.5 s flush still bounds the autosave. Class check: the model download's rename (`whisperManager.ts:957`, a scanner's moment on the 141 MB file ended the install with a raw reason after a download the person must repeat) has the same shape and uses the helper too.
+
+**Test** - fsAtomic.test.ts, autosave.test.ts, partialOutput.test.ts and whisperInstallRename.test.ts, "T-198 (1)" describes (an injected refusal through the real file system; Layer 5 is not required, the expediter runs the T-140 swap blocks with the real binary).
+
+**Lesson** - When a rule is justified by a platform premise ("a scanner holds a just-closed file"), the rule goes where every file that meets the premise passes, not in the first caller that met it: grep for the other sites that rename or replace a file they just wrote, whenever a retry, a guard or a code set is added to one. And a guard moved between modules needs a test that fails if the new call site drops a parameter (here the Cancel check), because the old cases only held the retry, not the callback.
+
+---
+
+## 2026-11-12 - T-198 (2) (round 147): an apply that is no longer the newest changes nothing
+
+The eighty-fifth sweep's item 2, measured by the expediter in the built app (probe85) after the QA renderer reader's not-counted list.
+
+**Bug** - Opening a second project while the first was still extracting its sound (Home's comment calls that supported) let the first one's late sound land in the second one's session: P1's video's sound was extracted again with the extraction stalled 12 s, P2 was opened during it, P2's own extraction was refused by main's one slot ("Still extracting the sound from "a-first.mp4". Wait for it to finish, then try again. The rest of your project is open."), then P1's sound landed and "Project loaded" showed. Audio Studio named a-first.mp4 with its Hum removal, and Save project wrote the second project's video (b-second.mp4) with the first one's sound and chain. A late FAILURE of P1's sound instead overwrote P2's kept part, so P2's save carried P1's file and chain; the video section had the same shape (a converted import's conversion that ends after a newer apply). The autosave Restore is the same apply and read the same.
+
+**Root cause** - The guards that ask "was this replaced while I waited?" are `replacedSince(heldBefore, source)`, which reads an EMPTY studio as "not replaced" (T-112: a Close is not "something else"). A newer apply whose own sound was refused leaves the studio empty, so the older one's sound passed. The failure branch's `keepPart()` had no check at all: only T-195 (2)'s refusal follow-up asked `generation === audioApplies` ("a newer apply has the slot"). Nothing let an apply ask the one question that was true: am I still the newest?
+
+**Fix** - A module counter `projectApplies`; `applyProject` takes `const apply = ++projectApplies` and asks `superseded()` where it asks `replacedSince`: the converted video's post-conversion check, `extractAgain`'s post-extraction check, the audio section's start (an apply overtaken in the video's wait must not delete the newer apply's kept part or take the sound slot) and, after each load, before it writes anything. A superseded apply writes no kept part (either studio), sets no chain and applies no place. `ApplyOutcome` gains `superseded`; Home's Open project and the autosave Restore raise nothing for it (no "Project loaded", no note, no "Restored from autosave", no navigation to the snapshot's studio; the newer open speaks for the session). T-195 (2)'s `audioApplies` stays as it was for the refusal follow-up. Not fixed: the superseded extraction or conversion is not cancelled (there is no cancel for `audio:extractFromVideo`), so the newer project's own refusal stays true and its "try again" works; upgrade: a cancel on supersede.
+
+**Test** - ProjectIO.test.ts "a project open that a newer one overtook changes nothing (T-198 (2))" (7 cases: late success, late failure, the outcome, the place, a converted video's late success and late failure, the sound skipped when the video wait was overtaken; all red on the base); home-chrome.spec.ts "round 147 Track B (T-198 (2))" (Open project twice: the toast log is exactly the two lines and Save project writes the second project, red on the base with a-first.mp4 and hum60; Restore overtaken by Open project; control: one Open project still says "Project loaded"); interactionWiring.test.ts "T-198 (2)" (string-shape pin of the two callers' returns).
+
+**Lesson** - "Is what I waited for still what is open?" has two different questions in it: *did someone put something else there* (`replacedSince`, which an empty studio answers "no") and *has a newer run of me started* (a counter). A wait that can be overtaken by its own kind needs the second one, and every write that follows the wait - the kept part, the chain, the place, the toast - asks it. A guard that lives only at the wait's end is not enough: the write after it is the one that lands.
+
+---
+
 ## 2026-11-12 - T-197 (round 146): whoever celebrates a file asks `waveformArrived` first - and a tour is a celebration too
 
 The eighty-fourth sweep's item 1: a sibling of T-132 (11)'s rule at a site it did not name.

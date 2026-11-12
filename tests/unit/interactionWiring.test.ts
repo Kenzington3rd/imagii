@@ -3160,7 +3160,7 @@ describe('T-139 Track B - the twenty-fifth sweep', () => {
     expect(run).toMatch(/export const useAutosaveOffer = create<\{ withdrawn: number; withdraw: \(\) => void \}>\(\(set\) => \(\{\s*withdrawn: 0,\s*withdraw: \(\) => set\(\(s\) => \(\{ withdrawn: s\.withdrawn \+ 1 \}\)\)\s*\}\)\)/)
     const home = strip(read('routes/Home.tsx'))
     const load = home.slice(home.indexOf('async function handleLoad()'), home.indexOf('export function Home()'))
-    expect(load).toMatch(/const outcome = await applyProjectHeld\(result\.project\)\s*useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*const note = describeApplyOutcome\(outcome, 'project'\)/)
+    expect(load).toMatch(/const outcome = await applyProjectHeld\(result\.project\)\s*useAutosaveOffer\.getState\(\)\.withdraw\(\)\s*if \(outcome\.superseded\) return\s*const note = describeApplyOutcome\(outcome, 'project'\)/)
     expect(load.indexOf('withdraw()'), 'not on the refusal path: a project that did not open withdraws nothing').toBeGreaterThan(load.indexOf('if (!result.ok)'))
     expect(home.match(/withdraw\(\)/g) ?? [], 'once').toHaveLength(1)
     const banner = strip(read('components/AutosaveRestore.tsx'))
@@ -5584,5 +5584,27 @@ describe('T-197 (1) - the Audio tour reads the waveform before it opens', () => 
 
   it('and it is the only useTutorial call in the file', () => {
     expect(studio.match(/useTutorial\(/g)).toHaveLength(1)
+  })
+})
+
+// T-198 (2): a project open that a newer one overtook says nothing. Behavior: ProjectIO.test.ts "a project open that a newer one overtook changes nothing" and home-chrome.spec.ts "round 147 Track B".
+// This is a string-shape pin and says so: the callers that toast an apply's outcome both return on `superseded` before they raise anything.
+describe('T-198 (2) - Open project and Restore raise nothing for a superseded apply', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+
+  it('Home returns on a superseded outcome before the note and the green line', () => {
+    const home = strip(read('routes/Home.tsx'))
+    const load = home.slice(home.indexOf('async function handleLoad()'), home.indexOf('export function Home()'))
+    expect(load).toMatch(/if \(outcome\.superseded\) return\s*const note = describeApplyOutcome\(outcome, 'project'\)/)
+    expect(load.indexOf('outcome.superseded')).toBeLessThan(load.indexOf("toast.success('Project loaded')"))
+  })
+
+  it('Restore returns on a superseded outcome before its toasts, the applied signal and the navigation (the run still ends in the finally)', () => {
+    const banner = strip(read('components/AutosaveRestore.tsx'))
+    const body = banner.slice(banner.indexOf('async function restore()'), banner.indexOf('async function clearAutosave()'))
+    expect(body).toMatch(/const outcome = await applyProjectHeld\(snapshot\.project\)\s*if \(outcome\.superseded\) return\s*const note = describeApplyOutcome\(outcome, 'autosave'\)/)
+    expect(body.indexOf('outcome.superseded')).toBeLessThan(body.indexOf('patch({ applied: true })'))
+    expect(body.indexOf('outcome.superseded')).toBeLessThan(body.indexOf('navigate(route)'))
+    expect(body).toMatch(/finally \{\s*useRestoreRun\.getState\(\)\.end\(\)\s*\}/)
   })
 })

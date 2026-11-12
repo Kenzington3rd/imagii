@@ -34,9 +34,12 @@ icon-only `✕` buttons; do not re-flag those.
    documents shortcuts; the renderer wires Space / arrows / I / O / V /
    R / O / L / P, etc. Any documented shortcut not wired, or any wired
    shortcut not documented?
-4. **Color contrast** — `text-ink-dim` (#5d5d6e) on `bg-base` (#0b0b0f)
-   — is the contrast ratio at least 4.5:1 for body text, 3:1 for large?
-   Flag specific places where dim text is critical UI (not just hint).
+4. **Color contrast** — read the current palette and its computed
+   pairings from `src/renderer/src/styles/tokens.ts` (the header
+   comment lists each ratio) and DESIGN_GUIDE's palette tables; do not
+   work from remembered hex values. Is each text/background pairing the
+   UI actually uses at least 4.5:1 for body text, 3:1 for large? Flag
+   specific places where dim text is critical UI (not just hint).
 5. **Reduced motion** — does the app respect
    `prefers-reduced-motion`? Look for animations / transitions that
    could be disabled. (Cosmetic if there are no large animations.)

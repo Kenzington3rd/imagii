@@ -91,6 +91,13 @@ const keptParts: {
 /** T-195 (2): counts the applies that reached the audio part, so a refused sound's follow-up can tell it is still the latest (it never overwrites a newer open's slot). */
 let audioApplies = 0
 
+/**
+ * T-198 (2): counts every `applyProject`, so an apply can tell it is no longer the newest. Opening a second project while the first still waits (a conversion or an extraction takes minutes;
+ * Home calls that supported) used to let the first one's late sound land in the second one's session and its late failure overwrite the second's kept part: `replacedSince` reads an EMPTY studio
+ * as "not replaced" (T-112), and only the refusal follow-up above honoured "a newer apply has the slot".
+ */
+let projectApplies = 0
+
 /** What the open studios hold, as a project part each - and, unless `openOnly`, a kept part in the slot of a studio with nothing open (an open source always wins its slot). */
 function capture(openOnly: boolean): ImagiiProject {
   const video = useVideoStore.getState()
@@ -243,6 +250,9 @@ export interface ApplyOutcome {
   /** Studios whose project source was NOT applied because the person opened a different
    *  one while it was loading (T-112) — what they opened is untouched. */
   skipped: Array<UnavailableSource['studio']>
+  /** True when a newer `applyProject` started before this one ended (T-198 (2)): it changed nothing past that point (no sound, no kept part, no chain, no place), and the newer open speaks for
+   *  the session - whoever opened this one says nothing about it. */
+  superseded: boolean
   /** The sound this open put in Audio Studio, when it put one there (T-132 (11)): its waveform is read AFTER it opens, and
    *  `audioSettled` asks about exactly this source, even if main has refused it and the studio let go of it already. */
   audioOpened?: AudioSource
@@ -499,7 +509,10 @@ useAudioStore.subscribe((state, prev) => {
  * or caption path for a video that is not there).
  */
 export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome> {
-  const outcome: ApplyOutcome = { unavailable: [], failed: [], skipped: [] }
+  const outcome: ApplyOutcome = { unavailable: [], failed: [], skipped: [], superseded: false }
+  // T-198 (2): this apply's place in line; a newer one that starts while it waits makes it `superseded`.
+  const apply = ++projectApplies
+  const superseded = (): boolean => apply !== projectApplies
   // T-113: what BOTH media studios hold, captured before the first wait. The video's wait is a
   // transcode that can take minutes, and the sound's baseline was taken only when its own turn
   // came — after it — so a sound the person opened and tuned during the video's wait WAS the
@@ -543,7 +556,7 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
           toast.loading('Converting for editing\u2026', { id: 'reopen-convert' })
           try {
             const converted = await window.api.video.convertForImport(sourcePath)
-            if (replacedSince(heldBefore, useVideoStore.getState().source)) return false
+            if (replacedSince(heldBefore, useVideoStore.getState().source) || superseded()) return false
             await useVideoStore.getState().loadSource(converted, sourcePath)
             return true
           } finally {
@@ -558,7 +571,10 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     delete keptParts.video
     const loaded = await loadReporting('video', sourcePath, load, outcome)
     videoOpened = loaded
-    if (loaded) {
+    // T-198 (2): a newer apply is the session's now - this one keeps no part and puts no clips over what that one opens.
+    if (superseded()) {
+      // (nothing: the final check below returns before the place)
+    } else if (loaded) {
       applyVideoPart(video)
     } else if (!outcome.skipped.includes('video')) {
       // T-174 (4): the file could not be opened (unavailable or failed; a SKIP is the person's choice and keeps nothing): its clips and caption path wait for it.
@@ -572,7 +588,8 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     }
   }
   const audio = project.audioStudio
-  if (audio?.sourcePath) {
+  // T-198 (2): the video's wait can be minutes; an apply that was overtaken in it has no sound to open (and must not take the audio slot or drop the newer apply's kept part). This is also the check the two load closures' top-of-section `replaced()` needs: no await lies between here and it, so it cannot differ.
+  if (audio?.sourcePath && !superseded()) {
     const sourcePath = audio.sourcePath
     // T-112: the same guard for the sound — its extraction waits as long as the conversion.
     // T-113: against what it held at the START (`heldAudio`), not when this section begins:
@@ -594,7 +611,7 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
       toast.loading('Extracting audio\u2026', { id: 'reopen-extract-audio' })
       try {
         const { wavPath, hasVideo } = await window.api.audio.extractFromVideo(videoPath)
-        if (replacedSince(heldBefore, useAudioStore.getState().source)) return false
+        if (replacedSince(heldBefore, useAudioStore.getState().source) || superseded()) return false
         opened = await useAudioStore.getState().loadSource(wavPath, videoPath, undefined, hasVideo)
         return true
       } finally {
@@ -638,7 +655,9 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     const keepPart = (): void => {
       keptParts.audio = { key: audioKey, extracted: audio.extractedFromVideo === true || fromVideo !== null, chain: audio.chain }
     }
-    if (loaded) {
+    if (superseded()) {
+      // T-198 (2): overtaken while it waited - the newer apply's sound, chain and kept part stand.
+    } else if (loaded) {
       useAudioStore.setState({ chain: audio.chain })
       if (opened) {
         outcome.audioOpened = opened
@@ -656,6 +675,10 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
   }
   // Last: the selections and the playhead only mean anything once the
   // clips and layers they point at are in place.
+  if (superseded()) {
+    outcome.superseded = true
+    return outcome
+  }
   applyPlace(project.place, videoOpened)
   return outcome
 }

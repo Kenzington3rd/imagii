@@ -152,6 +152,9 @@ export function AutosaveRestore(): JSX.Element {
       }
       // T-113: autosave is held for the apply alone (see `applyProjectHeld`).
       const outcome = await applyProjectHeld(snapshot.project)
+      // T-198 (2): a project opened from Home while this restore waited is the session's now; this snapshot is not in it. No toast, no `applied` (it is not), no navigation to the
+      // snapshot's route; the run still ends below, and that open withdraws the offer itself.
+      if (outcome.superseded) return
       // T-84: same rule as Open project — what could be restored is, and the
       // one message names the file that could not.
       const note = describeApplyOutcome(outcome, 'autosave')

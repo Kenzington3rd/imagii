@@ -12,6 +12,33 @@ import { NAME_UNIT } from './ffmpeg/outputPath'
 export const ATOMIC_TMP = /\.[0-9a-f]{8}\.tmp$/
 
 /**
+ * How long a refused rename is waited out. On Windows a scanner (Defender, the search indexer) can hold a file that was just closed for a moment, and the rename
+ * of it is refused (EBUSY, EPERM or EACCES) - the same reason graceful-fs retries. The render swap (`partialOutput.ts`, T-140) was the first to wait it out; T-198 (1)
+ * moved the wait here so every tmp-and-rename write has it. About a second and a half before it is given up; the quit's wait for a run to end is 1.5 s.
+ */
+export const COMMIT_RETRY_DELAYS_MS: readonly number[] = [50, 100, 200, 400, 800]
+export const LOCKED_CODES: ReadonlySet<string> = new Set(['EBUSY', 'EPERM', 'EACCES'])
+
+/**
+ * T-198 (1) - `rename(from, to)`, waiting out a refusal that a scanner's moment explains. A lock code (EBUSY, EPERM, EACCES) is tried again after each of
+ * `COMMIT_RETRY_DELAYS_MS`; any other code, and the refusal after the last wait, is thrown as it came (the disk's own error). `check`, when given, is called after
+ * each wait (the render swap passes its run's Cancel check, so a Cancel still lands between tries). A target another app really holds still refuses, after the waits.
+ */
+export async function renameWhenFree(from: string, to: string, check?: () => void): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to)
+      return
+    } catch (err) {
+      const delay = COMMIT_RETRY_DELAYS_MS[attempt]
+      if (delay === undefined || !LOCKED_CODES.has((err as NodeJS.ErrnoException).code ?? '')) throw err
+      await new Promise((resolve) => setTimeout(resolve, delay))
+      check?.()
+    }
+  }
+}
+
+/**
  * T-141 (10) - ask the disk to hold `file`'s bytes before they are renamed into place, best effort, and never leave the handle open.
  *
  * The open, the `sync` and the `close` are one unit: a `sync` that REJECTS (a drive or a share that cannot fsync) must still close what it opened. The autosave
@@ -44,7 +71,8 @@ export async function flushToDisk(file: string): Promise<void> {
  * disk's words, not ours.
  *
  * The flush is best effort: a drive that cannot fsync still gets a whole file, and a failed sync must not turn a good write into a refused one.
- * (`autosave.ts` keeps its own tmp-and-rename: it also keeps the previous snapshot, which this does not. It flushes through `flushToDisk` too.)
+ * T-198 (1): the rename waits out a scanner's moment (`renameWhenFree`) before it gives up. (`autosave.ts` keeps its own tmp-and-rename: it also keeps the previous
+ * snapshot, which this does not. It flushes through `flushToDisk` and renames through `renameWhenFree` too.)
  */
 // simplification: the new file takes the folder's default attributes and ACL, not the old file's, and a symlink at the target is replaced rather than
 // written through. A person's project, picture, subtitle or board file has neither; the upgrade is to copy the old file's mode onto the tmp before the rename.
@@ -57,7 +85,7 @@ export async function writeFileAtomic(target: string, data: string | Buffer): Pr
   try {
     await writeFile(tmp, data)
     await flushToDisk(tmp)
-    await rename(tmp, target)
+    await renameWhenFree(tmp, target)
   } catch (err) {
     await unlink(tmp).catch(() => undefined)
     throw err

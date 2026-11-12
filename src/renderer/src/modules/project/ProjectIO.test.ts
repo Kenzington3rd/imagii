@@ -1481,24 +1481,24 @@ describe('applyProject over a long wait (T-112)', () => {
 
   describe('the sentence a caller toasts', () => {
     it('says nothing when everything opened', () => {
-      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: [] }, 'project')).toBeNull()
+      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: [], superseded: false }, 'project')).toBeNull()
     })
 
     // T-113: a skip says what it left alone and how to get the skipped part back — it used to end
     // at "while it was loading.", which left the person to guess whether anything else had opened.
     it('names a skipped video, in the person\'s terms, and how to get it back', () => {
-      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: ['video'] }, 'project')).toBe(
+      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: ['video'], superseded: false }, 'project')).toBe(
         "Skipped the project's video because you opened another video while it was loading. " +
           'The rest of your project is open. Open the project again to bring its video back.'
       )
     })
 
     it('names a skipped sound, and both when both were skipped', () => {
-      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: ['audio'] }, 'project')).toBe(
+      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: ['audio'], superseded: false }, 'project')).toBe(
         "Skipped the project's audio because you opened another audio file while it was loading. " +
           'The rest of your project is open. Open the project again to bring its audio back.'
       )
-      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: ['video', 'audio'] }, 'project')).toBe(
+      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: ['video', 'audio'], superseded: false }, 'project')).toBe(
         "Skipped the project's video because you opened another video while it was loading. " +
           "Skipped the project's audio because you opened another audio file while it was loading. " +
           'The rest of your project is open. Open the project again to bring its video and audio back.'
@@ -1509,7 +1509,7 @@ describe('applyProject over a long wait (T-112)', () => {
       const text = describeApplyOutcome({
         unavailable: [{ studio: 'audio', path: '/a/mic.wav', fileName: 'mic.wav' }],
         failed: [],
-        skipped: ['video']
+        skipped: ['video'], superseded: false
       }, 'project')
       expect(text).toBe(
         "Couldn't find mic.wav. It may have been moved or deleted. " +
@@ -1524,7 +1524,7 @@ describe('applyProject over a long wait (T-112)', () => {
       const text = describeApplyOutcome({
         unavailable: [],
         failed: [{ studio: 'audio', path: '/a/mic.wav', fileName: 'mic.wav', message: 'That file looks damaged.' }],
-        skipped: ['video']
+        skipped: ['video'], superseded: false
       }, 'project')
       expect(text?.match(/rest of your project is open/gi)).toHaveLength(1)
       expect(text).toContain('Open the project again to bring its video back.')
@@ -1537,7 +1537,7 @@ describe('applyProject over a long wait (T-112)', () => {
   // another video IS that change - so the autosave file is replaced by what is open now. The skip
   // sentence for an autosave says that, plainly.
   describe('the same outcome, said for an autosave Restore (T-114)', () => {
-    const skipped = (...studios: Array<'video' | 'audio'>) => ({ unavailable: [], failed: [], skipped: studios })
+    const skipped = (...studios: Array<'video' | 'audio'>) => ({ unavailable: [], failed: [], skipped: studios, superseded: false })
 
     it('a skipped video: no project to open again, and what happens to its clips', () => {
       expect(describeApplyOutcome(skipped('video'), 'autosave')).toBe(
@@ -1575,7 +1575,7 @@ describe('applyProject over a long wait (T-112)', () => {
         {
           unavailable: [{ studio: 'audio', path: '/a/mic.wav', fileName: 'mic.wav' }],
           failed: [],
-          skipped: ['video']
+          skipped: ['video'], superseded: false
         },
         'autosave'
       )
@@ -1588,9 +1588,9 @@ describe('applyProject over a long wait (T-112)', () => {
     })
 
     it('says nothing different when nothing was skipped: a missing file reads the same for both callers', () => {
-      const outcome = { unavailable: [{ studio: 'video' as const, path: '/v/s.flv', fileName: 's.flv' }], failed: [], skipped: [] }
+      const outcome = { unavailable: [{ studio: 'video' as const, path: '/v/s.flv', fileName: 's.flv' }], failed: [], skipped: [], superseded: false }
       expect(describeApplyOutcome(outcome, 'autosave')).toBe(describeApplyOutcome(outcome, 'project'))
-      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: [] }, 'autosave')).toBeNull()
+      expect(describeApplyOutcome({ unavailable: [], failed: [], skipped: [], superseded: false }, 'autosave')).toBeNull()
     })
   })
 
@@ -3272,5 +3272,187 @@ describe('a given-back part is kept again when its file is refused (T-196 (1))',
     expect(newer.unavailable).toHaveLength(1)
     await refuse(AUDIO_PATH)
     expect(kept()).toEqual({ sourcePath: MUSIC_PATH, chain: { ...CHAIN, gainDb: 6 } })
+  })
+})
+
+/**
+ * T-198 (2) - a project open that a newer one overtook changes nothing. Opening a second project while the first still waits (a conversion or an extraction takes minutes, and Home calls that
+ * supported) used to let the first one's late sound land in the second one's session (`replacedSince` reads an EMPTY studio as "not replaced"), its late failure overwrite the second's kept
+ * part, and its place land over the second's. The shape is the expediter's probe: the first extraction is held, the second one is refused by main's one slot (so the second's sound is
+ * not in the studio), and then the first one's answer arrives. Each case names what the base does.
+ */
+describe('a project open that a newer one overtook changes nothing (T-198 (2))', () => {
+  const VIDEO_A = '/home/user/Videos/a-first.mp4'
+  const VIDEO_B = '/home/user/Videos/b-second.mp4'
+  const FLV_A = '/home/user/Videos/a-first.flv'
+  const FLV_B = '/home/user/Videos/b-second.flv'
+  const WAV_A = '/tmp/imagii-audio/aaaaaaaaaa.wav'
+  const CHAIN_A: ChainSpec = { ...DEFAULT_CHAIN_SPEC, hum60: true }
+  const CHAIN_B: ChainSpec = { ...DEFAULT_CHAIN_SPEC, rumbleHighpass: true }
+  const BUSY = new Error("Error invoking remote method 'audio:extractFromVideo': Error: Still extracting the sound from \"a-first.mp4\". Wait for it to finish, then try again.")
+  type Held = { resolve: (v: never) => void; reject: (e: Error) => void }
+  const extractions: Record<string, Held> = {}
+  const conversions: Record<string, Held> = {}
+  /** Per video: held until the test answers it, or refused at once (main's one slot); every other extraction answers at once. */
+  const mode: Record<string, 'hold' | 'refuse'> = {}
+  const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+  function bridge(): void {
+    for (const k of Object.keys(extractions)) delete extractions[k]
+    for (const k of Object.keys(conversions)) delete conversions[k]
+    for (const k of Object.keys(mode)) delete mode[k]
+    vi.stubGlobal('window', {
+      api: {
+        video: {
+          probe: (_p: string) => Promise.resolve(VIDEO_PROBE),
+          fileUrl: (p: string) => pathToImagiiFileUrl(p),
+          convertForImport: (p: string) =>
+            mode[p] === 'refuse'
+              ? Promise.reject(new Error("Error invoking remote method 'video:convertForImport': Error: Still converting \"a-first.flv\". Wait for it to finish, then try again."))
+              : new Promise((resolve, reject) => { conversions[p] = { resolve: resolve as Held['resolve'], reject } })
+        },
+        audio: {
+          ...PEAKS_BRIDGE,
+          probe: (_p: string) => Promise.resolve(AUDIO_PROBE),
+          extractFromVideo: (p: string) =>
+            mode[p] === 'refuse'
+              ? Promise.reject(BUSY)
+              : mode[p] === 'hold'
+                ? new Promise((resolve, reject) => { extractions[p] = { resolve: resolve as Held['resolve'], reject } })
+                : Promise.resolve(sound(`/tmp/imagii-audio/${p.length}-now.wav`, true))
+        }
+      }
+    })
+  }
+
+  const project = (video: string, chain: ChainSpec, extra: Partial<ImagiiProject> = {}): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    videoStudio: { sourcePath: video, clips: [], selectedClipId: null, watermark: null, srtPath: null },
+    audioStudio: { sourcePath: video, extractedFromVideo: true, chain },
+    ...extra
+  })
+  const converted = (video: string, extra: Partial<ImagiiProject> = {}): ImagiiProject => ({
+    schemaVersion: MAX_SCHEMA_VERSION,
+    savedAt: 1_700_000_000_000,
+    appVersion: '1.0.0',
+    videoStudio: { sourcePath: video, convertedForImport: true, clips: [CLIP_A], selectedClipId: CLIP_A.id, watermark: null, srtPath: null },
+    ...extra
+  })
+  /** What Save project would write right now. */
+  const saved = (): ImagiiProject => captureProject()
+
+  /** P1 opens and waits on its extraction; P2 opens over it and its extraction is refused. Returns both applies, P2 settled. */
+  async function overtaken(first: ImagiiProject, second: ImagiiProject): Promise<{ first: Promise<Awaited<ReturnType<typeof applyProject>>>; second: Awaited<ReturnType<typeof applyProject>> }> {
+    mode[VIDEO_A] = 'hold'
+    mode[VIDEO_B] = 'refuse'
+    const p1 = applyProject(first)
+    await flush()
+    expect(extractions[VIDEO_A], 'the first open is waiting on its extraction').toBeDefined()
+    return { first: p1, second: await applyProject(second) }
+  }
+
+  beforeEach(() => {
+    bridge()
+    useReferencesStore.getState().setTab('reference')
+    vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    // A session that holds no kept part from an earlier case: open a sound, then close it.
+    useAudioStore.getState().clearSource()
+  })
+  afterEach(() => {
+    vi.restoreAllMocks()
+  })
+
+  it('the older open\'s LATE SUCCESS does not load its sound over the newer one\'s session (red on the base: the sound of a-first.mp4 and its Hum removal)', async () => {
+    const { first, second } = await overtaken(project(VIDEO_A, CHAIN_A), project(VIDEO_B, CHAIN_B))
+    expect(second.failed, 'the newer open\'s extraction was refused').toHaveLength(1)
+    extractions[VIDEO_A]!.resolve(sound(WAV_A, true) as never)
+    await first
+    await flush()
+    expect(useAudioStore.getState().source, 'the older sound did not land').toBeNull()
+    expect(useAudioStore.getState().chain, 'and the chain is not the older open\'s').toEqual(DEFAULT_CHAIN_SPEC)
+    // Save project writes the newer open's video and its kept sound part - nothing of the older one.
+    expect(saved().videoStudio?.sourcePath).toBe(VIDEO_B)
+    expect(saved().audioStudio).toEqual({ sourcePath: VIDEO_B, extractedFromVideo: true, chain: CHAIN_B })
+  })
+
+  it('the older open\'s LATE FAILURE keeps no part: the newer open\'s kept part is what Save writes (red on the base: a-first.mp4 and its chain)', async () => {
+    const { first, second } = await overtaken(project(VIDEO_A, CHAIN_A), project(VIDEO_B, CHAIN_B))
+    expect(second.failed).toHaveLength(1)
+    extractions[VIDEO_A]!.reject(new Error('ffmpeg exited with code 1'))
+    const older = await first
+    expect(older.failed, 'the failure is the older open\'s to report - and nobody does').toHaveLength(1)
+    expect(saved().audioStudio).toEqual({ sourcePath: VIDEO_B, extractedFromVideo: true, chain: CHAIN_B })
+  })
+
+  it('the outcome says which open was overtaken: the older one is superseded, the newer one and a lone open are not (red on the base: the field is not there)', async () => {
+    const { first, second } = await overtaken(project(VIDEO_A, CHAIN_A), project(VIDEO_B, CHAIN_B))
+    expect(second.superseded, 'the newest open is never superseded').toBe(false)
+    extractions[VIDEO_A]!.resolve(sound(WAV_A, true) as never)
+    expect((await first).superseded).toBe(true)
+    // Guard: a lone open, with a wait in it, is the newest one and says so.
+    useVideoStore.getState().clearSource()
+    useAudioStore.getState().clearSource()
+    mode[VIDEO_A] = 'hold'
+    const lone = applyProject(project(VIDEO_A, CHAIN_A))
+    await flush()
+    extractions[VIDEO_A]!.resolve(sound(WAV_A, true) as never)
+    const outcome = await lone
+    expect(outcome.superseded).toBe(false)
+    expect(useAudioStore.getState().source, 'and its sound lands as it always did').not.toBeNull()
+    expect(useAudioStore.getState().chain).toEqual(CHAIN_A)
+  })
+
+  it('a superseded open puts no place: the newer open\'s References tab stands (red on the base: the older one\'s tab lands last)', async () => {
+    const { first } = await overtaken(
+      project(VIDEO_A, CHAIN_A, { place: { route: '/audio', referencesTab: 'assets' } }),
+      project(VIDEO_B, CHAIN_B, { place: { route: '/video', referencesTab: 'moodboards' } })
+    )
+    expect(useReferencesStore.getState().tab, 'the newer open put its place').toBe('moodboards')
+    extractions[VIDEO_A]!.resolve(sound(WAV_A, true) as never)
+    await first
+    expect(useReferencesStore.getState().tab).toBe('moodboards')
+  })
+
+  it('a converted video\'s LATE conversion does not open over the newer open (red on the base: the older video and its clips land, the newer part is dropped)', async () => {
+    mode[FLV_B] = 'refuse'
+    const p1 = applyProject(converted(FLV_A))
+    await flush()
+    expect(conversions[FLV_A], 'the first open is converting').toBeDefined()
+    const second = await applyProject(converted(FLV_B))
+    expect(second.failed).toHaveLength(1)
+    conversions[FLV_A]!.resolve('/tmp/imagii-video/converted-a.mp4' as never)
+    const older = await p1
+    expect(useVideoStore.getState().source, 'the older conversion did not open').toBeNull()
+    expect(saved().videoStudio?.sourcePath, 'Save writes the newer open\'s kept part').toBe(FLV_B)
+    expect(older.superseded).toBe(true)
+  })
+
+  it('a converted video\'s LATE FAILURE keeps no part: the newer open\'s kept video part is what Save writes (red on the base: the older file and its clips)', async () => {
+    mode[FLV_B] = 'refuse'
+    const p1 = applyProject(converted(FLV_A))
+    await flush()
+    const second = await applyProject(converted(FLV_B))
+    expect(second.failed).toHaveLength(1)
+    conversions[FLV_A]!.reject(new Error('ffmpeg exited with code 1'))
+    const older = await p1
+    expect(saved().videoStudio?.sourcePath).toBe(FLV_B)
+    expect(older.superseded).toBe(true)
+  })
+
+  it('an open overtaken in its VIDEO wait skips its sound: it does not take the slot or drop the newer open\'s kept part (red on the base: the older sound opens)', async () => {
+    // P1: a converted video whose conversion is held, with a sound; P2: a video and a sound whose extraction is refused (it keeps its part).
+    mode[VIDEO_B] = 'refuse'
+    const p1 = applyProject({ ...converted(FLV_A), audioStudio: { sourcePath: VIDEO_A, extractedFromVideo: true, chain: CHAIN_A } })
+    await flush()
+    expect(conversions[FLV_A], 'the first open is converting').toBeDefined()
+    const second = await applyProject(project(VIDEO_B, CHAIN_B))
+    expect(second.failed).toHaveLength(1)
+    conversions[FLV_A]!.resolve('/tmp/imagii-video/converted-a.mp4' as never)
+    const older = await p1
+    expect(useAudioStore.getState().source, 'the older open\'s sound was not opened').toBeNull()
+    expect(saved().audioStudio, 'the newer open\'s kept part is still the one Save writes').toEqual({ sourcePath: VIDEO_B, extractedFromVideo: true, chain: CHAIN_B })
+    expect(older.superseded).toBe(true)
   })
 })

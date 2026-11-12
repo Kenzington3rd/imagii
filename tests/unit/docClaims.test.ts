@@ -710,15 +710,15 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
   // what those lines hold]`. A row is found by its label, so a stale cite that is another row's cite (Open project was Home.tsx:90, Redo's line) still fails.
   const rowOf = (label: string): string => homeRows.split('\n').find((l) => l.startsWith(`| ${label}`)) ?? ''
   const CITES: ReadonlyArray<readonly [string, string, string, number, number, readonly string[]]> = [
-    ['Undo button', 'Home.tsx:82', home, 82, 82, ['onClick={undo.undo}']],
-    ['Redo button', 'Home.tsx:90', home, 90, 90, ['onClick={undo.redo}']],
-    ['"last:" readout', 'Home.tsx:97', home, 97, 97, ['last:']],
-    ['Open project', 'Home.tsx:101', home, 101, 101, ['onClick={handleLoad}']],
-    ['Save project', 'Home.tsx:107', home, 107, 107, ['onClick={handleSave}']],
-    ['NavCard x5', 'Home.tsx:117-151', home, 117, 151, ['<NavCard']],
-    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:275-295', autosave, 275, 295, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={dismissBanner}', 'Later']],
+    ['Undo button', 'Home.tsx:85', home, 85, 85, ['onClick={undo.undo}']],
+    ['Redo button', 'Home.tsx:93', home, 93, 93, ['onClick={undo.redo}']],
+    ['"last:" readout', 'Home.tsx:100', home, 100, 100, ['last:']],
+    ['Open project', 'Home.tsx:104', home, 104, 104, ['onClick={handleLoad}']],
+    ['Save project', 'Home.tsx:110', home, 110, 110, ['onClick={handleSave}']],
+    ['NavCard x5', 'Home.tsx:120-154', home, 120, 154, ['<NavCard']],
+    ['AutosaveRestore: Restore / Clear / Later', 'AutosaveRestore.tsx:278-298', autosave, 278, 298, ['onClick={() => void restore()}', 'onClick={() => void clearAutosave()}', 'onClick={dismissBanner}', 'Later']],
     // The row writes this cite in its shorthand (`:225-238`, the same file as the cite before it). T-140 (6) re-pointed both cites (+9 lines above them: the banner's listener and the backstop's sentence), not loosened; T-160 (1) again (-6 lines above them: the age gate and its constant), not loosened. T-184 (4), (5) again (+18 lines above the offer's buttons, +18 above the damaged notice's: the status region's helper and the banners' `max-w-4xl` / `withRegion` wrappers), re-pointed, not loosened. T-192 (4) again (+12 lines above them: the `dismissBanner` helper and its comment, +1 the import, +2 Restore's comment and swallow; Later and Dismiss now press `dismissBanner`, which is `setDismissed(true)` and the swallow), re-pointed, not loosened.
-    ['AutosaveRestore: Restore / Clear / Later', ':249-262', autosave, 249, 262, ['onClick={() => void clearAutosave()}', 'onClick={dismissBanner}', 'Dismiss']]
+    ['AutosaveRestore: Restore / Clear / Later', ':252-265', autosave, 252, 265, ['onClick={() => void clearAutosave()}', 'onClick={dismissBanner}', 'Dismiss']]
   ]
 
   it('the Home table was found, with its rows (a scan that matched nothing would look like a clean table)', () => {
@@ -734,9 +734,9 @@ describe('T-139 Track C: README and the Home inventory say what the code does', 
     for (const anchor of anchors) expect(text, `${file}:${from}-${to} does not hold ${anchor}`).toContain(anchor)
   })
 
-  it('the Home.tsx:117-151 range holds the five NavCards, and its last line closes the fifth', () => {
-    expect(lines(home, 117, 151).match(/<NavCard\b/g)).toHaveLength(5)
-    expect(lines(home, 151)).toMatch(/^\s*\/>$/)
+  it('the Home.tsx:120-154 range holds the five NavCards, and its last line closes the fifth', () => {
+    expect(lines(home, 120, 154).match(/<NavCard\b/g)).toHaveLength(5)
+    expect(lines(home, 154)).toMatch(/^\s*\/>$/)
   })
 
   it('the Welcome row cites the button where it stands, and no longer says no test clicks it', () => {
