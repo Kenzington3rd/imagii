@@ -137,6 +137,18 @@ export function ExportDialog(): JSX.Element | null {
       <PanelHeader icon="download">Export</PanelHeader>
 
       <div className="flex flex-wrap items-center gap-2 text-sm">
+        {/* T-195 (1): FIRST in the row. Format and Bitrate hide while this is ticked, so ahead of it unticking mounted them in front of it and moved it right under the
+            pointer: a double-click's second press landed on the Format select. Behind it, what unticking reveals goes to its right and the pressed control never moves. */}
+        {source.fromVideo ? (
+          <label className="flex items-center gap-1.5 text-sm">
+            <input
+              type="checkbox"
+              checked={muxBack}
+              onChange={(e) => setMuxBack(e.target.checked)}
+            />
+            Re-attach to video (output .mp4)
+          </label>
+        ) : null}
         {/* T-165 (3): an .mp4 re-attach has no audio format to pick (the sound goes in as AAC), so Format hides under the condition Bitrate does; the `format` state is
             untouched, so unticking brings it back at the person's pick. */}
         {!(source.fromVideo && muxBack) ? (
@@ -169,16 +181,6 @@ export function ExportDialog(): JSX.Element | null {
               <option value="256k">256 kbps</option>
               <option value="320k">320 kbps</option>
             </select>
-          </label>
-        ) : null}
-        {source.fromVideo ? (
-          <label className="flex items-center gap-1.5 text-sm">
-            <input
-              type="checkbox"
-              checked={muxBack}
-              onChange={(e) => setMuxBack(e.target.checked)}
-            />
-            Re-attach to video (output .mp4)
           </label>
         ) : null}
         {source.fromVideo && muxBack && chain.cutRegions.length > 0 ? (

@@ -7204,3 +7204,135 @@ test.describe('Audio Studio - a refused press leaves the running import\'s focus
     }
   })
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-195 (1): a double-click on "Re-attach to video" unticks it and the second press went to the Format select. Format and Bitrate were drawn BEFORE the
+// checkbox in the row and hide while it is ticked, so unticking mounted them in front of it and moved it right (x 49 to 365): a deliberate second press a
+// moment later landed on the select, which took the focus and opened its list (the T-168 (6) / T-193 (2) / T-194 (3) class). The checkbox is now the row's
+// FIRST child, so what unticking reveals is to its right and the pressed control never moves. No repeat swallow: a second press lands on the checkbox too.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('T-195 (1): Re-attach to video stays where it is when it is unticked, so a second press lands on it', () => {
+  type Press = { type: string; detail: number; what: string }
+
+  async function openVideoSound(label: string): Promise<Studio> {
+    const studio = await openStudio(label)
+    const video = path.join(studio.root, 'source', 'e2e-clip.mp4')
+    await makeFixtureMp4(video)
+    await dropOnImporter(studio.window, video, 'e2e-clip.mp4')
+    await expect(playButton(studio.window)).toBeEnabled({ timeout: 60_000 })
+    await expect(studio.window.locator(EXPORT).getByRole('checkbox'), 'a video\'s sound opens with Re-attach ticked').toBeChecked()
+    // App drops a repeat press for half a second after a route change (T-153 (3)): wait it out, or the second press is swallowed and the case measures nothing.
+    await expect.poll(() => studio.window.evaluate(() => performance.now()), { timeout: 10_000 }).toBeGreaterThan(2000)
+    return studio
+  }
+
+  const reattachLabel = (window: Page) => window.locator(EXPORT).locator('label', { hasText: 'Re-attach to video (output .mp4)' })
+
+  async function logPresses(window: Page): Promise<void> {
+    await window.evaluate(() => {
+      const w = window as unknown as { __presses: Press[] }
+      w.__presses = []
+      for (const type of ['mousedown', 'mouseup', 'click']) {
+        document.addEventListener(
+          type,
+          (e) => {
+            const el = e.target as HTMLElement
+            const inLabel = el.closest('label')?.textContent?.trim().slice(0, 12) ?? ''
+            w.__presses.push({ type, detail: (e as MouseEvent).detail, what: `${el.tagName.toLowerCase()} in "${inLabel}"` })
+          },
+          true
+        )
+      }
+    })
+  }
+
+  const presses = (window: Page): Promise<Press[]> => window.evaluate(() => (window as unknown as { __presses: Press[] }).__presses)
+
+  async function focusedTag(window: Page): Promise<string> {
+    return window.evaluate(() => document.activeElement?.tagName ?? '')
+  }
+
+  /** The Format select's and the Bitrate select's x, and the checkbox's box. */
+  async function rowBoxes(window: Page) {
+    const panel = window.locator(EXPORT)
+    const box = await panel.getByRole('checkbox').boundingBox()
+    if (!box) throw new Error('no box for the Re-attach checkbox')
+    const selects = await panel.getByRole('combobox').evaluateAll((els) => els.map((el) => el.getBoundingClientRect().x))
+    return { box, selects }
+  }
+
+  test('two presses 80 ms apart on its text toggle it twice and leave it in place, no select focused, and the second press on the label', async () => {
+    test.setTimeout(180_000)
+    const studio = await openVideoSound('t195-pair')
+    const { window } = studio
+    try {
+      const panel = window.locator(EXPORT)
+      await expect(panel.getByRole('combobox'), 'set up: ticked, no Format or Bitrate').toHaveCount(0)
+      const before = await rowBoxes(window)
+      await logPresses(window)
+
+      const label = reattachLabel(window)
+      const box = await label.boundingBox()
+      if (!box) throw new Error('no box for the label')
+      const x = box.x + box.width / 2
+      const y = box.y + box.height / 2
+      await window.mouse.move(x, y)
+      await window.mouse.down()
+      await window.mouse.up()
+      await window.waitForTimeout(80)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await window.waitForTimeout(400)
+
+      // Each press on the label toggles the box, so a pair ends TICKED again (on the base the second went to the Format select and it stayed unticked).
+      expect(await focusedTag(window), 'no select took the focus').not.toBe('SELECT')
+      const second = (await presses(window)).filter((p) => p.detail > 1)
+      expect(second.length, 'the second press logged its mousedown, mouseup and click').toBeGreaterThanOrEqual(3)
+      for (const p of second) expect(p.what, `the second press's ${p.type} is on the label, not on a select`).toMatch(/in "Re-attach to"/)
+      const after = await rowBoxes(window)
+      expect(Math.abs(after.box.x - before.box.x), `the box did not move (x ${before.box.x} to ${after.box.x})`).toBeLessThanOrEqual(1)
+      await expect(panel.getByRole('checkbox'), 'two toggles: ticked again').toBeChecked()
+      await expect(panel.getByRole('combobox'), 'and Format and Bitrate went away again').toHaveCount(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('one press unticks it: the box has not moved, Format and Bitrate are drawn to its right, and a Playwright dblclick on the text ends on the label too', async () => {
+    test.setTimeout(180_000)
+    const studio = await openVideoSound('t195-single')
+    const { window } = studio
+    try {
+      const panel = window.locator(EXPORT)
+      const before = await rowBoxes(window)
+      await logPresses(window)
+      await reattachLabel(window).click()
+      await expect(panel.getByRole('checkbox')).not.toBeChecked()
+      const open = await rowBoxes(window)
+      expect(Math.abs(open.box.x - before.box.x), `unticking did not move the box (x ${before.box.x} to ${open.box.x})`).toBeLessThanOrEqual(1)
+      expect(open.selects, 'Format and Bitrate are both drawn').toHaveLength(2)
+      for (const sx of open.selects) expect(sx, 'each is to the RIGHT of the checkbox').toBeGreaterThan(open.box.x + open.box.width)
+      await expect(panel.getByRole('combobox').first()).toBeVisible()
+
+      // Control: ticking it again takes them away and the box does not move.
+      await reattachLabel(window).click()
+      await expect(panel.getByRole('checkbox')).toBeChecked()
+      await expect(panel.getByRole('combobox')).toHaveCount(0)
+      const again = await rowBoxes(window)
+      expect(Math.abs(again.box.x - before.box.x), 'ticking it again did not move the box').toBeLessThanOrEqual(1)
+
+      // Playwright's own dblclick, on the middle of the text: two presses on the same label, no select under either.
+      await logPresses(window)
+      await reattachLabel(window).dblclick()
+      await window.waitForTimeout(400)
+      expect(await focusedTag(window), 'no select took the focus').not.toBe('SELECT')
+      const log = await presses(window)
+      expect(log.length, 'the dblclick logged its presses').toBeGreaterThanOrEqual(6)
+      for (const p of log) expect(p.what, `${p.type} (detail ${p.detail}) is on the label`).toMatch(/in "Re-attach to"/)
+      const done = await rowBoxes(window)
+      expect(Math.abs(done.box.x - before.box.x), 'the box is where it was').toBeLessThanOrEqual(1)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

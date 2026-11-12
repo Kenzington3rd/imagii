@@ -19,7 +19,7 @@ vi.mock('react-hot-toast', () => {
   }
 })
 
-const { useAudioStore, isPicture, waveformArrived } = await import('./audioStore')
+const { useAudioStore, isPicture, waveformArrived, waveformRefused } = await import('./audioStore')
 
 /**
  * T-126 (7): `fromVideo` is what turns Re-attach on, and it was decided by the EXTENSION of the file a sound was taken from. An `.mkv`
@@ -689,5 +689,54 @@ describe('a typed loudness target coalesces under its own key (T-177 (1))', () =
     store().patchChain({ loudnormTargetLufs: -14 })
     type(-3, -30)
     expect(store().history.past).toHaveLength(3)
+  })
+})
+
+/**
+ * T-195 (2): `waveformArrived` is false for a refusal, a Close and another file opened alike. `waveformRefused` is the part that tells the first from the other two, so a project open
+ * keeps the part it applied for a file main refused (and for no other reason the studio let go).
+ */
+describe('waveformRefused: did main refuse this file\'s waveform, as against the studio letting go of it (T-195 (2))', () => {
+  const held = (): NonNullable<ReturnType<typeof useAudioStore.getState>['source']> => useAudioStore.getState().source as NonNullable<ReturnType<typeof useAudioStore.getState>['source']>
+
+  it('is true for the file main refused, and false for it before that (still being read) and for a file whose waveform came', async () => {
+    autoAnswer = false
+    await useAudioStore.getState().loadSource('/a/odd.wav')
+    const odd = held()
+    expect(waveformRefused(odd), 'still being read').toBe(false)
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      peaksCalls[0]?.reject(new Error(`Error invoking remote method 'audio:peaks': Error: ${WAVEFORM_READ_FAILED}`))
+      await flush()
+    } finally {
+      quiet.mockRestore()
+    }
+    expect(useAudioStore.getState().source).toBeNull()
+    expect(waveformRefused(odd)).toBe(true)
+    await useAudioStore.getState().loadSource('/a/good.wav')
+    peaksCalls[1]?.resolve(peaksOf(60))
+    await flush()
+    expect(waveformRefused(held()), 'a file whose waveform arrived').toBe(false)
+  })
+
+  it('is false when the person closes the file, and when another file is opened over it - even if main then refuses the first file\'s read', async () => {
+    autoAnswer = false
+    await useAudioStore.getState().loadSource('/a/closed.wav')
+    const closed = held()
+    useAudioStore.getState().clearSource()
+    await useAudioStore.getState().loadSource('/a/first.wav')
+    const first = held()
+    await useAudioStore.getState().loadSource('/a/second.wav')
+    const quiet = vi.spyOn(console, 'error').mockImplementation(() => undefined)
+    try {
+      peaksCalls[0]?.reject(new Error(`Error invoking remote method 'audio:peaks': Error: ${WAVEFORM_READ_FAILED}`))
+      peaksCalls[1]?.reject(new Error(`Error invoking remote method 'audio:peaks': Error: ${WAVEFORM_READ_FAILED}`))
+      await flush()
+    } finally {
+      quiet.mockRestore()
+    }
+    expect(waveformRefused(closed)).toBe(false)
+    expect(waveformRefused(first)).toBe(false)
+    expect(useAudioStore.getState().source?.filePath, 'the second file is still open').toBe('/a/second.wav')
   })
 })

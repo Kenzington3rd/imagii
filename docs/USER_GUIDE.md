@@ -474,7 +474,10 @@ that names the file being converted.)
   **Recent**, **Edit in Video Studio** and **Clean audio** alike; **Cancel** opens nothing and keeps them waiting, and the same
   file opens with no question. **Open project** replaces what it names without asking. Closing leaves them waiting. A file that is
   there but won't open (a conversion that
-  failed, a full disk) is reported with its real cause instead and keeps its work the same way, and if you open a
+  failed, a full disk) is reported with its real cause instead and keeps its work the same way, and so does a sound that opens
+  and then cannot be read for its waveform (an unusual WAV format: "Re-export it as a standard PCM WAV or MP3 and try again") -
+  the re-exported file, saved under the same name and opened again in Audio Studio, has its cleanup, cuts and second track,
+  and Save project and the autosave hold them meanwhile. If you open a
   different video while a long conversion is still running, the project's video is
   skipped — what you opened is never replaced — and a note says so.
 

@@ -8915,3 +8915,72 @@ test.describe('Image Studio - a drag selects what it moves, and a line is recolo
     })
   }
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-195 (1), class grep: a double-click on the toolbar's "+ More". The press unmounts the button and Line takes its place, so the second press of a double-click
+// (measured in the built app, 80 ms apart: mousedown, mouseup and click, detail 2) landed on Line and made it the active tool. The button cannot stay where it is
+// (it is what is removed), so the press calls `swallowRepeatClicks()`, the rule a running job's Cancel has (T-194 (3)).
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('T-195 (1): a double-click on "+ More" reveals Line and Pencil and does not pick Line', () => {
+  test('two presses 80 ms apart reveal both tools, the second reaches nothing, and Select is still the tool', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t195-more')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      // App drops a repeat press for half a second after a route change (T-153 (3)): wait it out, or the second press is dropped for a reason that is not this fix.
+      await expect.poll(() => window.evaluate(() => performance.now()), { timeout: 10_000 }).toBeGreaterThan(2000)
+      await expect(toolbar.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true')
+      await window.evaluate(() => {
+        const w = window as unknown as { __presses: Array<{ type: string; detail: number; what: string }> }
+        w.__presses = []
+        for (const type of ['mousedown', 'mouseup', 'click']) {
+          document.addEventListener(
+            type,
+            (e) => {
+              const el = (e.target as HTMLElement).closest('button') ?? (e.target as HTMLElement)
+              w.__presses.push({ type, detail: (e as MouseEvent).detail, what: (el.textContent ?? '').trim() })
+            },
+            true
+          )
+        }
+      })
+      const box = await toolbar.getByRole('button', { name: '+ More' }).boundingBox()
+      if (!box) throw new Error('no box for + More')
+      await window.mouse.move(box.x + box.width / 2, box.y + box.height / 2)
+      await window.mouse.down()
+      await window.mouse.up()
+      await window.waitForTimeout(80)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+      await window.waitForTimeout(400)
+
+      await expect(toolbar.getByRole('button', { name: 'Line' }), 'the first press revealed the tools').toBeVisible()
+      await expect(toolbar.getByRole('button', { name: 'Pencil' })).toBeVisible()
+      const log = await window.evaluate(() => (window as unknown as { __presses: Array<{ type: string; detail: number; what: string }> }).__presses)
+      expect(log.filter((p) => p.detail > 1), 'no part of the second press (down, up or click) reached the page (red on the base: it landed on Line)').toEqual([])
+      await expect(toolbar.getByRole('button', { name: 'Line' }), 'Line was not picked').toHaveAttribute('aria-pressed', 'false')
+      await expect(toolbar.getByRole('button', { name: 'Select' }), 'Select is still the tool').toHaveAttribute('aria-pressed', 'true')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('one press reveals both tools, and a single press on Line a moment later still picks it (control)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t195-more-single')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+      await expect(toolbar.getByRole('button', { name: '+ More' })).toHaveCount(0)
+      await expect(toolbar.getByRole('button', { name: 'Select' })).toHaveAttribute('aria-pressed', 'true')
+      await toolbar.getByRole('button', { name: 'Line' }).click()
+      await expect(toolbar.getByRole('button', { name: 'Line' }), 'a deliberate press (one click) is not swallowed').toHaveAttribute('aria-pressed', 'true')
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+})

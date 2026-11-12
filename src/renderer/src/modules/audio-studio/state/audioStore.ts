@@ -117,6 +117,17 @@ function stopDrawing(drawing: WaveformDrawing | null): void {
   if (drawing) window.api.audio.cancel(drawing.jobId).catch(() => undefined)
 }
 
+/** T-195 (2): the sources whose waveform read main refused (the studio let go of each). A Close or another file opened is not a refusal and is never in here. */
+const refused = new WeakSet<AudioSource>()
+
+/**
+ * T-195 (2): did the studio let go of `source` because its waveform read was REFUSED? `waveformArrived` is false for that, for a Close and for another file opened; only the first
+ * means the file itself is the trouble, and only then does a project open keep the part it was applying for the file (T-174 (4)).
+ */
+export function waveformRefused(source: AudioSource): boolean {
+  return refused.has(source)
+}
+
 /**
  * T-129 (T-110 (ao)): draw `source`'s waveform from main's peaks job. The renderer used to hand wavesurfer the file and let it
  * decode the WHOLE thing with WebAudio (3.25 GB of renderer memory for a 1 h WAV), which is why T-123 refused anything over two
@@ -140,6 +151,8 @@ async function drawWaveform(source: AudioSource, jobId: string): Promise<void> {
     setState({ waveform: answer, drawing: null })
   } catch (err) {
     if (getState().source !== source) return
+    // T-195 (2): recorded BEFORE the reset, so whoever the reset wakes (`waveformArrived` resolving false) can tell this refusal from a Close or another file opened.
+    refused.add(source)
     setState({ source: null, waveform: null, drawing: null, chain: DEFAULT_CHAIN_SPEC, history: { past: [], future: [] }, historyKey: null, currentTime: 0 })
     reportFailure(err, { failed: "Couldn't draw the waveform." })
   } finally {

@@ -1828,7 +1828,7 @@ describe('T-124 — the round-74 fixes are wired where the person reaches them',
     expect(restore, 'and the restore\'s navigation does not wait for the line').not.toMatch(/await audioSettled/)
     const project = strip(read('modules/project/ProjectIO.ts'))
     expect(project.match(/opened = await useAudioStore\.getState\(\)\.loadSource\(/g) ?? [], 'the three ways a project opens its sound').toHaveLength(3)
-    expect(project).toMatch(/if \(opened\) outcome\.audioOpened = opened/)
+    expect(project).toMatch(/if \(opened\) \{\s*outcome\.audioOpened = opened/) // T-195 (2): the block also follows the waveform for a refusal
   })
 
   // T-132 (7): "Base on" sets all five boxes from the platform, not the size alone. E2E: video-pipelines.spec.ts "saves, lists, queues and
@@ -5531,5 +5531,41 @@ describe('T-194 Track B - a take reads Convert to MP4 when it ends, the start-ti
     expect(strokeFields).toMatch(/field="stroke" caption="Stroke"/)
     expect(strokeFields).toMatch(/updateLayer\(layer\.id, \{ strokeWidth: n \} as Partial<CanvasLayer>, 'strokeWidth'\)/)
     expect(strokeFields, 'a line has no fill').not.toMatch(/field="fill"/)
+  })
+})
+
+// T-195 (1): the Re-attach checkbox is the Export row's first child. Format and Bitrate hide while it is ticked, so ahead of it they mounted in front of it
+// when it was unticked and a double-click's second press landed on the Format select. Behavior: audio.spec.ts "T-195 (1)" (the pair of presses, read in the
+// built app: the box at the same x, no select focused, the second press on the label).
+describe('T-195 (1) - Export\'s Re-attach checkbox comes before the controls its own change reveals', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const dialog = strip(read('modules/audio-studio/ExportDialog.tsx'))
+  const row = dialog.slice(dialog.indexOf('<div className="flex flex-wrap items-center gap-2 text-sm">'), dialog.indexOf('className="btn-primary px-4 py-1.5 ml-auto'))
+  const at = (needle: string): number => row.indexOf(needle)
+
+  it('the Re-attach label is before the Format label, the Bitrate label and the cut-regions note', () => {
+    expect(row.length, 'the row was found').toBeGreaterThan(200)
+    const reattach = at('Re-attach to video (output .mp4)')
+    expect(reattach).toBeGreaterThan(0)
+    expect(at('<span className="text-ink-muted text-xs">Format</span>'), 'Format is drawn after it').toBeGreaterThan(reattach)
+    expect(at('<span className="text-ink-muted text-xs">Bitrate</span>'), 'Bitrate is drawn after it').toBeGreaterThan(reattach)
+    expect(at('Parts you removed come out of the picture too'), 'and the note stays last').toBeGreaterThan(at('<span className="text-ink-muted text-xs">Bitrate</span>'))
+  })
+
+  it('nothing is rendered ahead of the checkbox in the row, so the pressed control cannot move', () => {
+    const before = row.slice(row.indexOf('>') + 1, at('<input'))
+    expect(before.replace(/\s+/g, ' ').trim(), 'only the `source.fromVideo ? (` and the label tag open before the input').toBe('{source.fromVideo ? ( <label className="flex items-center gap-1.5 text-sm">')
+  })
+
+  it('Format and Bitrate still hide under the same condition and no repeat swallow was added', () => {
+    expect(dialog.match(/!\(source\.fromVideo && muxBack\)/g), 'Format and Bitrate each keep the condition').toHaveLength(2)
+    expect(dialog).not.toMatch(/swallowRepeatClicks/)
+  })
+
+  // Class grep: Stream Graphics' "+ More" is removed by its own press and Line takes its place, so it cannot stay put; it swallows the repeat (behavior: image.spec.ts "T-195 (1)").
+  it('the toolbar\'s "+ More" swallows a repeat press before it reveals Line and Pencil', () => {
+    const toolbar = strip(read('modules/image-studio/Toolbar.tsx'))
+    expect(toolbar).toMatch(/import \{ swallowRepeatClicks \} from '\.\.\/\.\.\/lib\/repeatPress'/)
+    expect(toolbar).toMatch(/onClick=\{\(\) => \{\s*swallowRepeatClicks\(\)\s*setAdvancedOpen\(true\)\s*\}\}/)
   })
 })

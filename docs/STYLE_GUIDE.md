@@ -1161,7 +1161,10 @@ If you write the same markup a third time, extract it.
   read after that, so "the file opened" is not "main could read it": whoever celebrates a file asks `waveformArrived(source)` first
   (the importer's green "Loaded" and its Recent entry; the project open's "Project loaded" and "Restored from autosave" ask
   `audioSettled(outcome)`, about the source `applyProject` recorded in `outcome.audioOpened`, because a refusal that landed before
-  anyone asked leaves the studio EMPTY, which is not "nothing was opened"). Play is `disabled:opacity-50` while the waveform is drawn.
+  anyone asked leaves the studio EMPTY, which is not "nothing was opened"). T-195 (2): whoever keeps state for a file across that read
+  asks `waveformRefused(source)` as well, because `waveformArrived` is false for a Close and for another file opened as well as for a
+  refusal; a project open whose sound is refused keeps its part as a load that threw does (T-174 (4)). Play is `disabled:opacity-50`
+  while the waveform is drawn.
 - **What the Player owns, the Timeline asks for through the store (T-120, T-121).** The Player registers a `PlayerTransport` (`readTime`, the
   element's exact `currentTime`; `togglePlay`, its own play / pause) with `registerTransport` while it is mounted. The Timeline's Space
   calls `togglePlay`, and its arrows, `,` / `.` and I / O read `playheadNow(state)`: the element's time, else the store's `currentTime`, which is

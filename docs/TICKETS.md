@@ -10458,7 +10458,7 @@ IMG-PREC.
   track moves and update each pin in place; any e2e double-click waits out App's route-change repeat swallow first
   (T-193's merge lesson); the expediter runs the full suite and the real-media suite on the merged tree; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 144)
+- **Status:** done (round 144 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -11036,6 +11036,57 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 144 — T-195, the two counted items of sweep 82, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+0f0d1c6, disjoint files (Track B moved one pin in place in
+interactionWiring.test.ts, where Track A appended a describe; merged
+with git merge-file). Track A (item 1): Audio Export's "Re-attach to
+video (output .mp4)" checkbox is the first child of its row, so
+unticking it shows Format and Bitrate to its right and the box does
+not move (it moved from x 49 to 365, and a double-click's second
+press, or a deliberate second press a moment later, landed on the
+Format select and opened it); a double-click on it now toggles it
+twice, as on any checkbox. The class grep (every checkbox, every
+toggled boolean, every swap site) found one more: Stream Graphics' "+
+More" is removed by its own press and Line takes its place, so a
+double-click made Line the tool; its press now calls
+`swallowRepeatClicks()` (it cannot stay put, the RunningCancel rule);
+every other reveal draws after the pressed control. Track B (item 2):
+a project or autosave whose sound OPENS and is then refused by its
+waveform read (an unknown WAV format) keeps its part exactly as a load
+that threw does (T-174 (4)'s failed path): the store records the
+refused source (`waveformRefused`, set before the reset), and
+`applyProject` follows `waveformArrived` without making the open wait,
+keeping the part only for a refusal of that source while no newer open
+has taken the slot; Save project and the autosave write it, and the
+file re-exported under the same name and opened again gets its
+cleanup, cuts and second track back (it had the default chain, and
+Save project said "Nothing to save yet."). Deviations, accepted: "+
+More" swallows rather than moves; the double-click case asserts the
+box ticked again (two presses toggle twice; the ticket said unticked);
+no separate "studio holds no sound" check (the refusal's reset and the
+follow-up's microtask share one turn); the first e2e split in two so
+each half is red on the base. Survivors disclosed: the refusal check
+and the newer-open guard dropped survive at e2e (in the app nothing
+can close or replace the file inside the read's second) and are killed
+at the unit layer. Expediter: independent mutations - Bitrate moved
+ahead of the checkbox (killed by both e2e cases: the box moved from x
+49 to 198.75, and two unit pins); the refused part keyed by the
+sound's path instead of the video's, which SURVIVED the first
+hand-back (its video case used the v1-3 shape, where the two are one
+path) and was killed by the case added on the send-back for the
+current shape (the scratch WAV in `sourcePath`, the video in
+`fromVideoPath`). At merge the expediter corrected
+INTERACTION_COVERAGE.md's round 143 Track B Docs line (it called three
+remarks stale that the same round had fixed), said in USER_GUIDE that
+the re-exported file is given back under the same name, and added the
+`waveformRefused` sentence to STYLE_GUIDE's T-132 (11) passage.
+Ledger: worker mutations 4 of 4 and 4 of 6 killed (the two survivors
+above), every restore identical. Gates on the merged tree: npm run
+verify twice (216 files, 7208 tests), test:media (566 cases: 538 run,
+28 skipped), and the full Playwright suite with the default TMPDIR
+(980 tests, 65.1 min: 980 passed).
 
 Round 143 — T-194, the five counted items of sweep 81, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

@@ -5321,3 +5321,178 @@ test.describe('T-192 (4): a double-click on the autosave banner\'s buttons', () 
     }
   })
 })
+
+// ── round 144 Track B (T-195 (2)): a sound that opens and is then refused keeps its work ───────────────────────────────────────────────────────────────────────────────
+//
+// T-174 (4) keeps the chain of a sound whose file could not be OPENED. A file that opens and is refused afterwards (main's waveform read fails: an unknown WAV format, T-132 (11)) went through the
+// same sentence ("... try again") and lost its chain: the studio reset itself to the default chain, Save project said "Nothing to save yet.", and the file re-exported at the same path and opened
+// again had the default chain. The store records which source it refused and the project open keeps that part exactly as a load that threw does. The pins are the three ends it must reach: Save
+// project, the autosave on disk, and the same file opened again in Audio Studio - and the control, a different file opened after the refusal, which lets the kept chain go.
+test.describe('round 144 Track B (T-195 (2)): a sound that opens and is then refused keeps its chain', () => {
+  const REFUSED =
+    "imagii couldn't read the sound in this file to draw its waveform. It may be damaged or in a format imagii can't read here. Re-export it as a standard PCM WAV or MP3 and try again."
+  const CHAIN = { ...DEFAULT_CHAIN_SPEC, hum60: true, rumbleHighpass: true }
+  const HUM = 'Hum removal (60 Hz mains)'
+  const RUMBLE = 'Remove low rumble (below 80 Hz)'
+
+  /** A WAV whose format tag no decoder knows (0x9999): it probes and opens, and main's peaks job refuses it (audio.spec.ts's T-132 (11) fixture). */
+  function unknownFormatWav(): Buffer {
+    const rate = 8000
+    const data = Buffer.alloc(rate * 2 * 3)
+    const fmt = Buffer.alloc(16)
+    fmt.writeUInt16LE(0x9999, 0)
+    fmt.writeUInt16LE(1, 2)
+    fmt.writeUInt32LE(rate, 4)
+    fmt.writeUInt32LE(rate * 2, 8)
+    fmt.writeUInt16LE(2, 12)
+    fmt.writeUInt16LE(16, 14)
+    const head = Buffer.alloc(44)
+    head.write('RIFF', 0)
+    head.writeUInt32LE(36 + data.length, 4)
+    head.write('WAVEfmt ', 8)
+    head.writeUInt32LE(16, 16)
+    fmt.copy(head, 20)
+    head.write('data', 36)
+    head.writeUInt32LE(data.length, 40)
+    return Buffer.concat([head, data])
+  }
+
+  interface Fixture {
+    app: ElectronApplication
+    window: Page
+    root: string
+    userDataDir: string
+    odd: string
+    projectFile: string
+  }
+  const audioPart = (odd: string): Record<string, unknown> => ({ sourcePath: odd, chain: CHAIN })
+
+  async function launch(label: string, seed: (f: { odd: string; projectFile: string; userDataDir: string }) => void, saveAs?: string): Promise<Fixture> {
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const odd = path.join(root, 'source', 'unknown-format.wav')
+    const projectFile = path.join(root, 'refused.imagii.json')
+    mkdirSync(path.dirname(odd), { recursive: true })
+    writeFileSync(odd, unknownFormatWav())
+    seedUserData(userDataDir, { welcomeSeen: true, tutorialSeen: ALL_TUTORIALS_SEEN })
+    seed({ odd, projectFile, userDataDir })
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await waitForHome(window)
+    await installToastLog(window)
+    await recordSlowChooser(app, { files: [projectFile], ...(saveAs ? { saveAs } : {}) })
+    return { app, window, root, userDataDir, odd, projectFile }
+  }
+  const refusalToast = async (window: Page): Promise<void> => {
+    await expect.poll(() => readToastLog(window), { timeout: 60_000, intervals: [250] }).toContain(REFUSED)
+  }
+  async function openProjectRefused(f: Fixture): Promise<void> {
+    await f.window.getByRole('button', { name: 'Open project' }).click()
+    await refusalToast(f.window)
+    expect((await readToastLog(f.window)).join(' | '), 'the open is not good news').not.toContain('Project loaded')
+  }
+  /** The file at `odd` put back as a standard WAV (what re-exporting it does), dropped on Audio Studio. */
+  async function putBackAndDrop(f: Fixture): Promise<void> {
+    await makeFixtureWav(f.odd)
+    await f.window.locator('a', { hasText: 'Audio Studio' }).first().click()
+    await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+    await dropOnZone(f.window, '[data-tutorial="audio-importer"] .card', f.odd, path.basename(f.odd))
+    await expect(f.window.locator('[data-tutorial="audio-waveform"]').getByRole('button', { name: 'Play', exact: true })).toBeEnabled({ timeout: 60_000 })
+  }
+  const cleanup_ = (f: Fixture): Promise<void> => f.app.close().catch(() => undefined).then(() => cleanup(f.root))
+
+  interface Autosaved {
+    savedAt?: number
+    audioStudio?: { sourcePath?: string; chain?: { hum60?: boolean; rumbleHighpass?: boolean } }
+  }
+  function readAutosaved(userDataDir: string): Autosaved | null {
+    try {
+      return JSON.parse(readFileSync(autosaveFile(userDataDir), 'utf8')) as Autosaved
+    } catch {
+      return null
+    }
+  }
+
+  const projectOf = ({ odd, projectFile }: { odd: string; projectFile: string }): void =>
+    writeFileSync(projectFile, JSON.stringify({ schemaVersion: 5, savedAt: Date.now(), appVersion: '1.0.0', audioStudio: audioPart(odd) }), 'utf8')
+
+  test('Open project: Save project afterwards writes the audio part with both switches (it said "Nothing to save yet." and wrote no file)', async () => {
+    test.setTimeout(300_000)
+    const saved = path.join(os.tmpdir(), `imagii-e2e-t195-saved-${Date.now().toString(36)}.imagii.json`)
+    const f = await launch('t195-save', projectOf, saved)
+    try {
+      await openProjectRefused(f)
+      await f.window.getByRole('button', { name: 'Save project' }).click()
+      await expect.poll(() => existsSync(saved), { timeout: 15_000 }).toBe(true)
+      expect((await readToastLog(f.window)).join(' | ')).not.toContain('Nothing to save yet')
+      expect(JSON.parse(readFileSync(saved, 'utf8')).audioStudio).toMatchObject({ sourcePath: f.odd, chain: { hum60: true, rumbleHighpass: true } })
+    } finally {
+      await cleanup_(f)
+      try {
+        rmSync(saved, { force: true })
+      } catch {
+        /* ignore */
+      }
+    }
+  })
+
+  test('Open project: the file put back as a standard WAV and dropped on Audio Studio opens with Hum removal and Remove low rumble checked (the "try again" is true)', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t195-again', projectOf)
+    try {
+      await openProjectRefused(f)
+      await putBackAndDrop(f)
+      await expect(f.window.locator('[data-tutorial="audio-cleanup"]').getByLabel(HUM)).toBeChecked()
+      await expect(f.window.locator('[data-tutorial="audio-cleanup"]').getByLabel(RUMBLE)).toBeChecked()
+    } finally {
+      await cleanup_(f)
+    }
+  })
+
+  test('an autosave Restore with a canvas beside the refused sound: the autosave written after the refusal still holds the chain', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t195-autosave', ({ odd, userDataDir }) =>
+      seedAutosave(userDataDir, { ...canvasProject('Kept rect'), schemaVersion: 5, audioStudio: audioPart(odd) })
+    )
+    try {
+      await expect(f.window.getByText(/imagii autosaved your work/)).toBeVisible({ timeout: 20_000 })
+      await f.window.getByRole('button', { name: 'Restore' }).click()
+      await refusalToast(f.window)
+      expect((await readToastLog(f.window)).join(' | ')).not.toContain('Restored from autosave')
+      // A write that lands AFTER the refusal (the canvas is the work the session holds, so autosaving goes on): it still carries the sound.
+      const refusedAt = Date.now()
+      await expect.poll(() => (readAutosaved(f.userDataDir)?.savedAt ?? 0) > refusedAt, { timeout: 40_000, intervals: [500] }).toBe(true)
+      expect(readAutosaved(f.userDataDir)?.audioStudio).toMatchObject({ sourcePath: f.odd, chain: { hum60: true, rumbleHighpass: true } })
+    } finally {
+      await cleanup_(f)
+    }
+  })
+
+  test('control: a DIFFERENT standard WAV opened after the refusal lets the kept chain go - the file put back later opens with the default chain', async () => {
+    test.setTimeout(300_000)
+    const f = await launch('t195-other', projectOf)
+    try {
+      // Opening a different file may ask whether to let the kept changes go (T-175 (3)): accept.
+      f.window.on('dialog', (dialog) => void dialog.accept())
+      await openProjectRefused(f)
+      const other = path.join(f.root, 'source', 'some-other-take.wav')
+      await makeFixtureWav(other)
+      await f.window.locator('a', { hasText: 'Audio Studio' }).first().click()
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 20_000 })
+      await dropOnZone(f.window, '[data-tutorial="audio-importer"] .card', other, 'some-other-take.wav')
+      const play = f.window.locator('[data-tutorial="audio-waveform"]').getByRole('button', { name: 'Play', exact: true })
+      await expect(play).toBeEnabled({ timeout: 60_000 })
+      await expect(f.window.locator('[data-tutorial="audio-cleanup"]').getByLabel(HUM)).not.toBeChecked()
+      await f.window.getByRole('button', { name: 'Close', exact: true }).click()
+      await expect(f.window.getByText('Drop audio or video here')).toBeVisible({ timeout: 15_000 })
+
+      await makeFixtureWav(f.odd)
+      await dropOnZone(f.window, '[data-tutorial="audio-importer"] .card', f.odd, path.basename(f.odd))
+      await expect(play).toBeEnabled({ timeout: 60_000 })
+      await expect(f.window.locator('[data-tutorial="audio-cleanup"]').getByLabel(HUM)).not.toBeChecked()
+      await expect(f.window.locator('[data-tutorial="audio-cleanup"]').getByLabel(RUMBLE)).not.toBeChecked()
+    } finally {
+      await cleanup_(f)
+    }
+  })
+})

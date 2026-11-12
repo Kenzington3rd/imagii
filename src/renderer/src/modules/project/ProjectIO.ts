@@ -5,7 +5,7 @@ import type { ImagiiProject, PlaceRecord } from '@shared/workspace'
 import { KNOWN_ROUTES, MAX_SCHEMA_VERSION, hasStudioState } from '@shared/projectValidation'
 import { isMissingFileError, userFacingError } from '@shared/userFacingError'
 import { useVideoStore, videoKey } from '../video-studio/store/videoStore'
-import { useAudioStore, soundKey, waveformArrived, type AudioSource } from '../audio-studio/state/audioStore'
+import { useAudioStore, soundKey, waveformArrived, waveformRefused, type AudioSource } from '../audio-studio/state/audioStore'
 import { useCanvasStore } from '../image-studio/state/canvasStore'
 import { useReferencesStore } from '../references/state/referencesStore'
 import { basename } from '../../components/OutputDirLabel'
@@ -87,6 +87,9 @@ const keptParts: {
   video?: { key: string; converted: boolean; clips: Clip[]; selectedClipId: string | null; srtPath: string | null }
   audio?: { key: string; extracted: boolean; chain: ChainSpec }
 } = {}
+
+/** T-195 (2): counts the applies that reached the audio part, so a refused sound's follow-up can tell it is still the latest (it never overwrites a newer open's slot). */
+let audioApplies = 0
 
 /** What the open studios hold, as a project part each - and, unless `openOnly`, a kept part in the slot of a studio with nothing open (an open source always wins its slot). */
 function capture(openOnly: boolean): ImagiiProject {
@@ -621,12 +624,26 @@ export async function applyProject(project: ImagiiProject): Promise<ApplyOutcome
     // T-174 (4): the file this sound is named by - the one a failure reports, and the key a kept chain waits under (`soundKey` of the sound it will be opened as).
     const audioKey = fromVideo ?? sourcePath
     delete keptParts.audio
+    // T-195 (2): this open's claim on the slot; a newer apply that reaches here takes it.
+    const generation = ++audioApplies
     const loaded = await loadReporting('audio', audioKey, load, outcome)
+    const keepPart = (): void => {
+      keptParts.audio = { key: audioKey, extracted: audio.extractedFromVideo === true || fromVideo !== null, chain: audio.chain }
+    }
     if (loaded) {
       useAudioStore.setState({ chain: audio.chain })
-      if (opened) outcome.audioOpened = opened
+      if (opened) {
+        outcome.audioOpened = opened
+        // T-195 (2): the file OPENED, and its waveform is read after that (T-129). If main refuses it the studio resets to the default chain, and the sentence ("try again") sends the
+        // person to load the file again - so it is kept exactly as a load that threw is. Not awaited: a long file's read takes seconds and the open is not made to wait for it. A Close or
+        // another file opened is not a refusal, and a newer open that has reached this section has the slot.
+        const settled = opened
+        void waveformArrived(settled).then((arrived) => {
+          if (!arrived && waveformRefused(settled) && generation === audioApplies) keepPart()
+        })
+      }
     } else if (!outcome.skipped.includes('audio')) {
-      keptParts.audio = { key: audioKey, extracted: audio.extractedFromVideo === true || fromVideo !== null, chain: audio.chain }
+      keepPart()
     }
   }
   // Last: the selections and the playhead only mean anything once the

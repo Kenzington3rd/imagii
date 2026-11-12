@@ -3,6 +3,7 @@ import type { Tool } from './state/canvasStore'
 import { useCanvasStore } from './state/canvasStore'
 import { Icon, type IconName } from '../../components/Icon'
 import { DraftField } from '../../components/DraftField'
+import { swallowRepeatClicks } from '../../lib/repeatPress'
 import { clampTyped, isTypedInRange } from '@shared/draftNumber'
 
 interface ToolDef {
@@ -88,7 +89,12 @@ export function Toolbar(): JSX.Element {
           <button
             ref={moreRef}
             className="px-2 py-1.5 text-xs text-ink-muted hover:text-ink-base hover:bg-bg-hover rounded"
-            onClick={() => setAdvancedOpen(true)}
+            onClick={() => {
+              // T-195 (1) class grep: the button is removed by this press and Line takes its place, so the second press of a double-click landed on Line and made it the
+              // active tool. It cannot stay put the way Export's Re-attach box does (it IS what unmounts), so the window-level rule applies, as for a running job's Cancel (T-194 (3)).
+              swallowRepeatClicks()
+              setAdvancedOpen(true)
+            }}
             title="Show line and pencil tools"
           >
             + More
