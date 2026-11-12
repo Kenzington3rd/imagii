@@ -10310,6 +10310,89 @@ IMG-PREC.
   suite on the merged tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 142 — see the Done entry)
 
+## T-194 — sweep-81 fixes (round 143)
+
+- **Spec:** the eighty-first sweep's verified findings (candidate clean pass #1 on 67046ef, the T-193 tree; the count
+  stays at 0). Item 1 found by QA renderer reader B, UX reader 2, the a11y reader and design reader 2 (design 2
+  measured it), with streamer renderer reader B's note on USER_GUIDE, all a new consequence of T-193 (2); item 2 found
+  by QA renderer reader A and verified by the expediter in source; item 3 found by UX reader 2 and measured by the
+  expediter in the built app at three click gaps; item 4 found by UX reader 1 and measured by the expediter; item 5
+  found and measured by design reader 1 (a new consequence of T-193 (4); streamer renderer reader A and design reader 2
+  had noted the collision and judged it a placement choice, superseded by the measured dead end). Not counted: a Cancel
+  landing in transcription's last write window leaving its rewritten SRT in the app's captions folder (userData,
+  cleared by Clear saved transcripts); Export with no `-sn` / `-map` (a source's subtitle track rides as mov_text and a
+  bitmap-subtitle source could fail: a disc-rip shape, not a streamer's recording); the reason for the disabled Export
+  now sitting under the cards rather than beside the header button (the line is where the person who unchecked the last
+  card is looking, and the button's title carries it); Rectangle and Ellipse defaults over accent areas (they have their
+  Fill and Stroke boxes); the ledgered T-110 letters each reader named. Two worker tracks, disjoint files: Track A =
+  items 1 and 3 (video-studio/ExportPanel.tsx, components/RunningCancel.tsx and its test, docs/USER_GUIDE.md); Track B =
+  items 2, 4 and 5 (record-studio/RecordStudio.tsx; image-studio/Canvas.tsx and PropertiesPanel.tsx). The ffmpeg
+  reader was still out when this ticket was written; a finding from it joins Track A.
+
+  **Track A — the Export card says where to look, and a Cancel's second press reaches nothing (items 1 and 3).**
+  1. **[LOW] Export's nothing-queued sentence points the wrong way since its line moved under the grid**
+     (video-studio/ExportPanel.tsx:40 `NOTHING_QUEUED = 'Check at least one platform below to export.'`, drawn by the
+     region T-193 (2) moved BELOW the grid at :595-597; the same constant is the disabled Export button's title in the
+     header, where "below" is still true; docs/USER_GUIDE.md:279 says "a line beside it says to check one"; the T-112
+     comment at the button, :434-435, says "the same sentence is under the header"). Fix: the sentence is
+     "Check at least one platform to export." (true in both places); USER_GUIDE says the line is under the platform
+     cards; the comment says where the sentence is now. Every pin of the old sentence moves with it (video-core.spec.ts
+     :3463 and :4464, video-pipelines.spec.ts:4239, and IC rows that describe the current card); LESSONS entries that
+     quote the old sentence as history stay as written.
+  3. **[LOW] A double-click on a one-job export's Cancel opens the Watermark position menu** (ExportPanel.tsx:455-468:
+     with one job `requestExportCancel` cancels at once, exportQueue.ts:186-189, the Cancel row unmounts when the batch
+     ends and the Watermark row moves up into its place; measured by the expediter at 80, 150 and 250 ms between the
+     presses: the element under the second press is the Watermark position select, and it takes the focus). The T-168 (6)
+     class (the tour's Done opened the same select), at a site no disposition names; two or more jobs ask first, and
+     Modal's close swallows. Fix: `RunningCancel` (the one component every running job's Cancel is, eleven panels) calls
+     `swallowRepeatClicks()` when it is pressed, before its `onClick`: a Cancel always takes its own row away when the
+     job ends, so the window-level rule for "what this covered moves under the pointer" belongs in the component. Class
+     grep: every RunningCancel site, with what lands under a second press on its own row's removal (measure the Export,
+     the audio export and one other in the built app; name the rest by reading).
+  Covering tests: e2e (NEW describe at the end of video-pipelines.spec.ts) - a one-file export running, a double-click
+  on Cancel with two real presses 150 ms apart: the export is canceled, the Watermark position select is not focused
+  and no popup opened (red on the base: the select takes the focus); a single click on Cancel still cancels (control);
+  the Export card with nothing checked shows "Check at least one platform to export." under the cards (the existing
+  T-153 and T-193 (2) cases re-pointed). Unit (RunningCancel.test.tsx NEW describe) - a press calls
+  `swallowRepeatClicks` and then `onClick`. Docs: USER_GUIDE, IC rows, LESSONS at the TOP, TESTING paragraph.
+
+  **Track B — a take honours its last setting, a drag selects what it moves, and a line can be recoloured (items 2, 4 and 5).**
+  2. **[LOW] Record ignores "Convert to MP4" changed during "Starting…"** (record-studio/RecordStudio.tsx:513-514
+     `recorder.onstop = () => { void finalizeRecording() }` is set in the start sequence, so the take is finalized by the
+     closure of the render Start was pressed in, which reads that render's `convertToMp4` at :619, :634 and :636; the
+     Output card's checkbox, :971-980, stays enabled through Starting… - up to the 10 s first-picture wait - and persists
+     and shows the change the take then ignores, and the saving card shows the stale value too). Fix: the take reads the
+     preference when it is finalized (a ref kept in step with the state, read by `finalizeRecording`), so a change made
+     before the recording begins applies to it. Class grep: every other control on screen during Starting… (the webcam
+     corner, Record microphone, the microphone and camera selects, the source tiles) - name what each does to the take
+     that is starting, and fix the same way any that is shown as changed and silently not applied, or disable it while
+     starting with the reason.
+  4. **[LOW] Dragging an unselected layer moves it and leaves the selection on another** (image-studio/Canvas.tsx:314-356:
+     `baseProps` selects on `onClick` / `onTap` only, and Konva suppresses the click after a drag; measured by the
+     expediter: with a Text selected, a drag on a Rectangle moved the Rectangle, Properties still showed the Text, and
+     Delete then removed the Text). Fix: a layer's `onDragStart` selects it (`selectLayer`), so a drag selects what it
+     moves; the click select stays.
+  5. **[LOW] A Line or Pencil drawn on the app's own accent fills cannot be seen or recoloured** (image-studio/
+     PropertiesPanel.tsx:119-123 gives Fill and Stroke boxes to rect and ellipse only; since T-193 (4) the line default
+     is the accent, 1.00:1 on "Emote · Blank circle"'s disc and the Bold thumbnails' accent bar, measured by design
+     reader 1; the layer is in Layers with no mark on canvas or in the export, and only Undo gets out). Fix: Line and
+     Pencil layers get the Stroke colour box and Stroke (px) the shapes have (the same fields, without Fill), so a line
+     is recoloured like any shape; the default stays the accent. T-186's "no stroke colour in Properties" ruling is
+     revised by this item.
+  Covering tests: e2e (NEW describes at the end of record.spec.ts and image.spec.ts) - Convert to MP4 unticked during a
+  held Starting… saves a .webm with no convert (red on the base: .mp4, converted); a drag on an unselected Rectangle
+  with a Text selected selects the Rectangle and Delete removes it (red on the base: the Text removed); a Pencil drawn
+  on the Blank circle's disc, recoloured in its new Stroke box, reads its new colour in the canvas pixels and the
+  Stroke (px) box changes its width (red on the base: no box). Docs: USER_GUIDE's Record and Stream Graphics Properties
+  passages, IC rows (T-186's Line/Pencil row revised), LESSONS at the TOP, TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); before hand-back, grep tests/ for every old value the
+  track moves and update each pin in place; any e2e double-click waits out App's route-change repeat swallow first
+  (T-193's merge lesson); the expediter runs the full suite and the real-media suite on the merged tree; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 143)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
