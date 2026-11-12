@@ -10228,6 +10228,88 @@ IMG-PREC.
   suite on the merged tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 141 — see the Done entry)
 
+## T-193 — sweep-80 fixes (round 142)
+
+- **Spec:** the eightieth sweep's verified findings (candidate clean pass #1 on 6e230a1, the T-192 tree; the count
+  stays at 0). Item 1 found by QA renderer readers A and B independently (A executed it in the built app: with an
+  extraction held, Enter on Audio's Choose file… ends on Play, and with a Recent pick refused during it, on the body;
+  B executed the pure core), a new consequence of T-192 (3); item 2 found by UX reader 2 and measured by the expediter
+  in the built app; items 3 and 4 found and measured by design reader 1 (item 3 the expediter had noted at round 141's
+  merge). Not counted: a keyboard Move layer down dropping focus (UX reader 1; refuted by the expediter's measurement:
+  focus stays on the pressed arrow through every press); the last cut chip or an autosave banner button removed by the
+  keyboard leaving focus on the body (the control goes and no control takes its place: the round-138 / T-189 (1)
+  class); the press-time `sessionHoldsWork` backstop withdrawing the banner without a swallow (T-140 (6), no click
+  involved); a held Enter on the layer Move arrows (the focused node stays the same layer, so a repeat moves that layer
+  again); DuckDuckGo hops without a deadline (T-110 (bf)); the ledgered T-110 letters each reader named. Two worker
+  tracks, disjoint files: Track A = item 1 (lib/swapFocus.ts and its test, video-studio/Importer.tsx,
+  audio-studio/AudioImporter.tsx, image-studio/ImportPanel.tsx); Track B = items 2, 3 and 4
+  (video-studio/ExportPanel.tsx and any status region its class grep fixes; image-studio/templates.ts;
+  image-studio/state/canvasStore.ts). The ffmpeg reader was still out when this ticket was written; a finding from it
+  joins Track B.
+
+  **Track A — a refused press leaves another press's focus record alone (item 1).**
+  1. **[LOW] A pick or drop refused while an import runs clears that import's focus record** (video-studio/Importer.tsx:
+     51-63 and audio-studio/AudioImporter.tsx:45-50: `refuseIfBusy` calls `dropSwapPress('video-play' | 'audio-play')`,
+     reached from the file handler, the drop and the Recent pick, which records first (Importer.tsx:160-163,
+     AudioImporter.tsx:154-157); lib/swapFocus.ts:39-41 drops whichever press holds the target). Enter on Choose file…
+     for a file that converts or extracts, then a Recent entry or a drop during it (the Recent menu stays enabled while
+     busy): the refused press drops the first press's record, and when the first import lands its Play does not take the
+     focus. The same shape in Stream Graphics: ImportPanel.tsx:75 and :98 (`ingestFile`'s refused type and failed
+     decode) drop `'image-select'` for a pasted or dropped file while an Import image ingest may still be pending. Fix:
+     a record carries its press. `recordSwapPress` returns a token (null when the press held no focus), and
+     `dropSwapPress(target, token)` drops only that press's record; the target-wide form stays for the studios' unmount
+     cleanups and the waveform's playback error. A press refused at once (a Recent entry or a drop while busy) is turned
+     away BEFORE it records, so it neither records nor drops; a Choose file… whose chooser was open when another import
+     began drops only its own token; `refuseIfBusy` drops nothing; a drop or a paste, which records nothing, drops
+     nothing. Class grep: every `recordSwapPress` and `dropSwapPress` call, named with whose record it can clear.
+  Covering tests: unit (NEW describe at the end of swapFocus.test.ts) - a token's drop leaves another press's record; a
+  target-wide drop still drops any; a press without focus returns no token and records nothing. E2E (NEW describes at
+  the end of video-core.spec.ts and audio.spec.ts) - Enter on Choose file… with the conversion / extraction held, then a
+  Recent entry refused during it and, separately, a drop refused during it, then the hold released: focus lands on Play
+  (red on the base: the body); the refused press still says its refusal (control). E2E (image.spec.ts NEW describe) - an
+  Import image pressed with Enter whose ingest is held, a refused paste during it, then the release: focus lands on the
+  Select tool (red on the base: the body). Docs: STYLE_GUIDE's swap rule (the token), IC rows, LESSONS at the TOP,
+  TESTING paragraph.
+
+  **Track B — nothing moves under a toggle, and a drawn mark can be seen (items 2, 3 and 4).**
+  2. **[LOW] A double-click on the only checked platform in Export's grid checks a different one**
+     (video-studio/ExportPanel.tsx:458-459: the always-mounted NOTHING_QUEUED region sits ABOVE the grid and collapses
+     with `-mb-4` only while something is queued, so unchecking the last platform adds a text line and a gap above the
+     grid and moves every card 32 px down). Measured by the expediter: with only TikTok checked, a real double-click on
+     its checkbox leaves only YouTube checked; a deliberate second click a moment later lands on the moved grid too. Fix:
+     the region moves BELOW the platform grid, directly above the Export row it explains, still always mounted and
+     still `role="status"`, so a press on any card never moves the cards. Class grep: every always-mounted status region
+     with the collapse trick (ReferencePanel.tsx:146, Player.tsx:450, CompilationPanel.tsx:96, GifPanel.tsx:94) -
+     measured in the built app, does its appearance, caused by a press, move what is under that press? Fix any that does
+     the same way, or rule it.
+  3. **[LOW] The "Emote · Blank circle" template's ring cannot be seen** (image-studio/templates.ts:380: Base circle is
+     `#ff3131` with a 2 px `#f52e2e` stroke, accent-muted's value, 1.08:1 from its fill; design reader 1 measured the
+     pixels). A person who selects it sees Stroke `#f52e2e` and 2 px, and a Stroke (px) edit changes nothing visible; the
+     exported emotes carry no ring. A sibling of T-192 (1) that its pin cannot see (a raw hex in document content). Fix:
+     the ring is `#120c0c` (BG_BASE's value, 5.29:1 against the fill). The accent-muted pin in designTokensInSync.test.ts
+     extends to the value: no template layer and no document default names `#f52e2e` (any case). Class grep: every
+     template layer with a stroke wider than 0 over an opaque fill, with its stroke-to-fill contrast; list each under
+     3:1 in the hand-back for adjudication (unchanged unless under 1.5:1).
+  4. **[LOW] The default Line and Pencil stroke is ember on the white default page** (image-studio/state/canvasStore.ts:
+     404-406: `stroke: EMBER`, 1.67:1 on the default document's `#ffffff`, and Line and Pencil have no colour box,
+     T-186's ruled missing feature, so the default is what a person gets). Fix: the default is `ACCENT` (3.66:1 on
+     white, 5.29:1 on BG_BASE), the colour of the Rectangle and Ellipse defaults and of the Line tool's own draw
+     preview.
+  Covering tests: e2e (NEW describe at the end of video-core.spec.ts) - with only a row-2 platform checked, a real
+  `dblclick` on its checkbox leaves no other platform checked (red on the base: YouTube); the cards' boxes do not move
+  when the last one is unchecked (red on the base: 32 px); NOTHING_QUEUED still appears and is announced (the T-153 case
+  stays green). Unit (NEW describes at the end of the canvasStore test file and of designTokensInSync.test.ts) - the
+  Line and Pencil defaults are ACCENT; the Blank circle's ring clears 3:1 against its fill; no template names
+  accent-muted's value (red on the base each). Before hand-back, grep tests/ for every old value this track moves
+  (`#f52e2e`, `rgba(245, 46, 46`, EMBER or `#fbbf24` for a Line or Pencil, the status region's place) and update each
+  pin in place: round 141's merge found an e2e pin the unit-only gates missed. Docs: IC rows, DESIGN_GUIDE where it
+  names the region's place or the line default, LESSONS at the TOP, TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back (with the default TMPDIR); the expediter runs the full suite and the real-media
+  suite on the merged tree; no docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 142)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
