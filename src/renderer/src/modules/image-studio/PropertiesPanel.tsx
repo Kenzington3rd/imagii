@@ -3,6 +3,7 @@ import {
   layerOffsetRange,
   type CanvasLayer,
   type EllipseLayer,
+  type LineLayer,
   type RectLayer,
   type TextLayer
 } from '@shared/canvas'
@@ -120,6 +121,9 @@ export function PropertiesPanel(): JSX.Element | null {
         <FillStrokeFields layer={layer as RectLayer | EllipseLayer} />
       ) : null}
 
+      {/* T-194 (5): a line or a pencil stroke has a stroke and no fill. Its default is the accent (T-193 (4)), which is 1.00:1 on the accent areas of the templates, so it needs the same recolour the shapes have. */}
+      {layer.type === 'line' ? <StrokeFields layer={layer as LineLayer} /> : null}
+
       {layer.type === 'text' ? <TextFields layer={layer as TextLayer} /> : null}
     </div>
   )
@@ -205,13 +209,26 @@ function FillStrokeFields({
 }: {
   layer: RectLayer | EllipseLayer
 }): JSX.Element {
-  const updateLayer = useCanvasStore((s) => s.updateLayer)
   return (
     <>
       <label className={COLOR_ROW}>
         <span className="text-xs text-ink-muted w-16">Fill</span>
         <ColorBox key={layer.id} layerId={layer.id} field="fill" caption="Fill" value={layer.fill} />
       </label>
+      <StrokeFields layer={layer} />
+    </>
+  )
+}
+
+/** The Stroke colour box and Stroke (px) box: the shapes' (after their Fill) and a line's or pencil stroke's (T-194 (5)), the same components, the same refusal and the same Undo keys. */
+function StrokeFields({
+  layer
+}: {
+  layer: RectLayer | EllipseLayer | LineLayer
+}): JSX.Element {
+  const updateLayer = useCanvasStore((s) => s.updateLayer)
+  return (
+    <>
       <label className={COLOR_ROW}>
         <span className="text-xs text-ink-muted w-16">Stroke</span>
         <ColorBox key={layer.id} layerId={layer.id} field="stroke" caption="Stroke" value={layer.stroke} />

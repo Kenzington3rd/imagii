@@ -3460,7 +3460,7 @@ test.describe('T-153: clips that load with length, clocks that read true, Export
 
   test('(fold) unchecking the last platform puts why Export is off inside a status region that was already on the page', async () => {
     test.setTimeout(90_000)
-    const WHY = 'Check at least one platform below to export.'
+    const WHY = 'Check at least one platform to export.'
     const { app, window } = await launchWithVideo('t153-status')
     try {
       const card = window.locator('[data-tutorial="video-export"]')
@@ -4461,7 +4461,7 @@ test.describe('Video Studio - a refused press leaves the running import\'s focus
 // (32 px) arrived over the grid and every card moved down, so the second press of a double-click on the only checked card landed on the card above it (TikTok's
 // landed on YouTube). The region is BELOW the grid now, still mounted, still a status region. Row 2 of the 3-column grid is TikTok, X / Twitter and Facebook.
 test.describe('T-193 (2): a toggle in Export\'s grid moves no card', () => {
-  const WHY = 'Check at least one platform below to export.'
+  const WHY = 'Check at least one platform to export.'
   const exportCardOf = (window: Page): Locator => window.locator('[data-tutorial="video-export"]')
   const boxOf = (window: Page, id: string): Locator => exportCardOf(window).locator(`[data-export-target="${id}"]`).getByRole('checkbox')
   const checkedIds = (window: Page): Promise<string[]> =>

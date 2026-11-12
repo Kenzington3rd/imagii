@@ -402,8 +402,8 @@ export function makeLineLayer(points: number[], name: 'Line' | 'Pencil' = 'Line'
     scaleY: 1,
     opacity: 1,
     points,
-    // T-193 (4): the accent, the Rectangle's and Ellipse's stroke and the Line tool's draw preview. Ember was 1.67:1 on the default white page, and Line and
-    // Pencil have no colour box (T-186), so the default is the colour a person gets.
+    // T-193 (4): the accent, the Rectangle's and Ellipse's stroke and the Line tool's draw preview. Ember was 1.67:1 on the default white page. The default is the colour a
+    // person gets until they recolour the line in its Stroke box (T-194 (5): Line and Pencil have the shapes' Stroke and Stroke (px) boxes).
     stroke: ACCENT,
     strokeWidth: 3,
     closed: false

@@ -47,6 +47,7 @@ interface NodeBaseProps {
   draggable: boolean
   onClick: () => void
   onTap: () => void
+  onDragStart: () => void
   onDragEnd: (e: Konva.KonvaEventObject<DragEvent>) => void
   onTransformEnd: (e: Konva.KonvaEventObject<Event>) => void
 }
@@ -328,6 +329,9 @@ export function Canvas(): JSX.Element {
       draggable,
       onClick: onSelect,
       onTap: onSelect,
+      // T-194 (4): Konva suppresses the click after a drag, so a drag on an unselected layer moved it while Properties, Delete and the handles stayed on another.
+      // A drag selects what it moves; the click select above stays for a press that does not move.
+      onDragStart: onSelect,
       // T-124 (14): the node is put ON the snapped position as well as the store. When the snapped value equals the layer's
       // old one (a drag shorter than half a cell) the store's x does not change, React sees no new prop, and Konva would
       // leave the node where the pointer let go of it.

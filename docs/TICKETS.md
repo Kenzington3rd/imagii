@@ -10391,7 +10391,7 @@ IMG-PREC.
   track moves and update each pin in place; any e2e double-click waits out App's route-change repeat swallow first
   (T-193's merge lesson); the expediter runs the full suite and the real-media suite on the merged tree; no
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
-- **Status:** in progress (round 143)
+- **Status:** done (round 143 — see the Done entry)
 
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
@@ -10969,6 +10969,54 @@ IMG-PREC.
 ---
 
 ## Done
+
+Round 143 — T-194, the five counted items of sweep 81, landed in the
+commit that carries this entry. Two Sonnet workers in fresh clones of
+e2a3be5, disjoint files. Track A (items 1 and 3): Export's
+nothing-queued sentence is "Check at least one platform to export."
+(the constant is drawn under the grid and as the disabled button's
+title, and its "below" was true in neither since T-193 (2)), and
+USER_GUIDE and the comment at the button say where it is; every
+running job's Cancel is `RunningCancel`, which now calls
+`swallowRepeatClicks()` and then `onClick()`, so the second press of a
+double-click on a one-job Export's Cancel reaches nothing (it opened
+the Watermark position select that moved up into the Cancel row's
+place). Track B (items 2, 4 and 5): Record reads Convert to MP4 when
+the take ends, through a ref read once at the top of
+`finalizeRecording` for the run's flag, the file name and the finalize
+option, so a change made during "Starting…" applies; the source tiles,
+Refresh sources, the Audio card and the Webcam card, whose values the
+start has already consumed, are in a fieldset disabled while starting,
+with the reason said under Start, and Convert to MP4 stays live. A
+drag on a canvas layer selects it (`onDragStart`), so Properties, the
+handles and Delete follow what was moved; the click select stays and a
+locked layer is unchanged. Line and Pencil layers have the shapes'
+Stroke colour box and Stroke (px) box through a shared `StrokeFields`
+(the same refusal and the same Undo keys), so a stroke drawn on the
+app's own accent fills can be recoloured. Deviations, accepted: none
+beyond the class greps the ticket asked for (Track A measured the
+audio export and GIF Cancels and read the rest; Track B measured every
+control on screen during "Starting…" and locked the ones the start had
+read). Found, not fixed: none. Survivors, both behaviourally
+equivalent and killed at the unit layer: the swallow moved after
+`onClick` (the state change lands after the handler returns), and the
+file name's extension back to the press's closure (recording:finalize
+strips it and derives it from `convertToMp4`). Expediter: independent
+mutations - the Cancel's swallow window set in the past, killed; the
+width box's Undo key merged with the colour box's, which survives at
+e2e because the Properties card ends the gesture on every blur that
+has no press down, so a colour and a width can never share a window by
+any input (a keyboard Tab case was added and is green on both), and is
+killed by the interactionWiring pin; the saving card's flag back to
+the press's closure, killed (it coincided with the worker's own m1d,
+so a third was run where nobody had mutated: `starting` cleared only
+when a start succeeds, which would leave Start and the cards locked
+after a failed start, killed by six of record.spec.ts's failed-start
+cases). Ledger: worker mutations 5 of 6 and 11 of 12 killed, every
+restore identical. Gates on the merged tree: npm run verify twice (216
+files, 7194 tests), test:media (566 cases: 538 run, 28 skipped), and
+the full Playwright suite with the default TMPDIR (972 tests, 63.8
+min: 972 passed).
 
 Round 142 — T-193, the four counted items of sweep 80, landed in the
 commit that carries this entry. Two Sonnet workers in fresh clones of

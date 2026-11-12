@@ -1057,8 +1057,8 @@ describe('the default Ellipse is drawn in the accent, like the Rectangle (T-192 
 })
 
 /**
- * T-193 (4): the default Line and Pencil stroke was EMBER, 1.67:1 on the default white page, and neither tool has a colour box (T-186's ruled missing feature), so
- * the default is the colour a person gets. It is the accent now: the Rectangle's and Ellipse's stroke and the Line tool's own draw preview (3.66:1 on white,
+ * T-193 (4): the default Line and Pencil stroke was EMBER, 1.67:1 on the default white page, so
+ * the default is the colour a person gets until they recolour it in the Stroke box Line and Pencil have since T-194 (5). It is the accent now: the Rectangle's and Ellipse's stroke and the Line tool's own draw preview (3.66:1 on white,
  * 5.29:1 on BG_BASE). The Pencil's draw preview is the same colour as the layer it commits (it was ember while drawing and would have turned accent on release).
  */
 describe('the default Line and Pencil are drawn in the accent (T-193 (4))', () => {

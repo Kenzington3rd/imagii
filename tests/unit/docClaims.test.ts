@@ -209,18 +209,18 @@ describe('the file:line cites in image.spec.ts point at the lines they name (T-1
   // names, the first line, the last line, what those lines hold]`. ImportPanel.tsx:70 was the one found (the cap is :71), and the
   // others were re-read with it: a cite that moves now fails here instead of waiting for the next sweep.
   const CITES: ReadonlyArray<readonly [string, string, number, number, RegExp]> = [
-    ['Canvas.tsx:440', 'src/renderer/src/modules/image-studio/Canvas.tsx', 440, 440, /__imagiiStage/],
-    ['Canvas.tsx:184-193', 'src/renderer/src/modules/image-studio/Canvas.tsx', 184, 193, /Fit-to-container scaling[\s\S]*MAX_STAGE_ZOOM/],
-    ['Canvas.tsx:267', 'src/renderer/src/modules/image-studio/Canvas.tsx', 267, 267, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
-    ['Canvas.tsx:179-182', 'src/renderer/src/modules/image-studio/Canvas.tsx', 179, 182, /function snap\([\s\S]*gridSize/],
-    ['Canvas.tsx:193', 'src/renderer/src/modules/image-studio/Canvas.tsx', 193, 193, /MAX_STAGE_ZOOM = 4/],
+    ['Canvas.tsx:444', 'src/renderer/src/modules/image-studio/Canvas.tsx', 444, 444, /__imagiiStage/],
+    ['Canvas.tsx:185-194', 'src/renderer/src/modules/image-studio/Canvas.tsx', 185, 194, /Fit-to-container scaling[\s\S]*MAX_STAGE_ZOOM/],
+    ['Canvas.tsx:268', 'src/renderer/src/modules/image-studio/Canvas.tsx', 268, 268, /absW > MIN_DRAW_PX && absH > MIN_DRAW_PX/],
+    ['Canvas.tsx:180-183', 'src/renderer/src/modules/image-studio/Canvas.tsx', 180, 183, /function snap\([\s\S]*gridSize/],
+    ['Canvas.tsx:194', 'src/renderer/src/modules/image-studio/Canvas.tsx', 194, 194, /MAX_STAGE_ZOOM = 4/],
     ['canvasStore.ts:391', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 391, 391, /makeLineLayer\(points: number\[\], name: 'Line' \| 'Pencil' = 'Line'\)/],
     ['canvasStore.ts:197', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 197, 197, /selectedLayerId: get\(\)\.selectedLayerId === id \? null/],
     ['canvasStore.ts:130', 'src/renderer/src/modules/image-studio/state/canvasStore.ts', 130, 130, /future: \[\]/],
     ['ImageStudio.tsx:70-79', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 70, 79, /key === 'v'[\s\S]*setTool\('pencil'\)/],
     ['ImageStudio.tsx:62', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 62, 62, /if \(hasChordModifier\(e\)\) return/],
     ['ImageStudio.tsx:59', 'src/renderer/src/modules/image-studio/ImageStudio.tsx', 59, 59, /focusOwnsKey\(/],
-    ['PropertiesPanel.tsx:52', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 52, 52, /<PositionBox value=\{layer\.x\}/],
+    ['PropertiesPanel.tsx:53', 'src/renderer/src/modules/image-studio/PropertiesPanel.tsx', 53, 53, /<PositionBox value=\{layer\.x\}/],
     ['ImportPanel.tsx:96', 'src/renderer/src/modules/image-studio/ImportPanel.tsx', 96, 96, /placementFor\(dims\.width, dims\.height, docWidth, docHeight\)/],
     ['src/main/index.ts:123-124', 'src/main/index.ts', 123, 124, /minWidth: 1024[\s\S]*minHeight: 640/]
   ]

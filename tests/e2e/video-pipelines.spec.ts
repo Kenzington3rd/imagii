@@ -4236,7 +4236,7 @@ test.describe('ExportPanel', () => {
       const disabled = card.getByRole('button', { name: 'Export', exact: true })
       await expect(disabled).toBeDisabled()
       // T-112: the reason is on screen (the Compile card's pattern) and on the button.
-      const WHY = 'Check at least one platform below to export.'
+      const WHY = 'Check at least one platform to export.'
       await expect(card.getByText(WHY, { exact: true })).toBeVisible()
       await expect(disabled).toHaveAttribute('title', WHY)
       // ...and it goes the moment something is checked.
@@ -16280,6 +16280,98 @@ test.describe('T-191 (2): a held Enter on Export leaves the safe-zone question o
       await window.keyboard.press('Enter')
       await expect(modal).toHaveCount(0)
       expect(mp4sOnDisk(outDir), 'Cancel exported nothing').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-194 (3): a double-click on a one-job export's Cancel. With one job Cancel acts at once (no question), the Cancel row unmounts when the batch ends and
+// the Watermark row moves up into its place: the second press (measured at 80, 150 and 250 ms) landed on the "Watermark position" <select> and focused it.
+// `RunningCancel` now calls `swallowRepeatClicks()` when pressed (the T-168 (6) rule, in the component every running job's Cancel is).
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('T-194 (3): a double-click on Export\'s Cancel leaves what moves up under it alone', () => {
+  // Press Cancel the way a person does: wait out App's route-change repeat swallow (T-153 (3), T-193's merge lesson), then two real presses `gapMs` apart
+  // at the middle of the button. `launchWithVideo` ends a few hundred ms after the route change, so without the wait the second press is dropped
+  // for a reason that has nothing to do with this fix.
+  async function startAndPressCancel(window: Page, seeded: string, presses: 1 | 2): Promise<{ x: number; y: number }> {
+    await expect.poll(() => window.evaluate(() => performance.now()), { timeout: 10_000 }).toBeGreaterThan(2000)
+    const card = exportCard(window)
+    await card.getByRole('button', { name: 'Export 1 file', exact: true }).click()
+    const cancel = card.getByRole('button', { name: 'Cancel', exact: true })
+    await expect(cancel, `the batch is running in ${seeded}`).toBeVisible()
+    const box = await cancel.boundingBox()
+    if (!box) throw new Error('no box for Cancel')
+    const x = box.x + box.width / 2
+    const y = box.y + box.height / 2
+    await window.mouse.move(x, y)
+    await window.mouse.down()
+    await window.mouse.up()
+    if (presses === 2) {
+      await window.waitForTimeout(150)
+      await window.mouse.down({ clickCount: 2 })
+      await window.mouse.up({ clickCount: 2 })
+    }
+    return { x, y }
+  }
+
+  test('two presses 150 ms apart cancel the export and the Watermark position select is not focused or pressed', async () => {
+    test.setTimeout(240_000)
+    const seeded = path.join(root, `t194cancel-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t194cancel', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 6_000 }])
+      await window.evaluate(() => {
+        const w = window as unknown as { __presses: Array<{ type: string; detail: number; what: string }> }
+        w.__presses = []
+        for (const type of ['mousedown', 'mouseup', 'click']) {
+          document.addEventListener(type, (e) => {
+            const el = e.target as HTMLElement
+            w.__presses.push({ type, detail: (e as MouseEvent).detail, what: `${el.tagName.toLowerCase()} ${el.getAttribute('aria-label') ?? ''}`.trim() })
+          })
+        }
+      })
+      const point = await startAndPressCancel(window, seeded, 2)
+      await expectToast(window, 'Export canceled.')
+      await window.waitForTimeout(600)
+      // The premise: the Watermark position select really is where the pointer is now (the row moved up into Cancel's place).
+      const beneath = await window.evaluate(
+        ({ x, y }) => document.elementsFromPoint(x, y).filter((el) => el.tagName === 'SELECT').map((el) => el.getAttribute('aria-label')),
+        point
+      )
+      expect(beneath, 'set up: the Watermark position select lies under the pointer once Cancel is gone').toContain('Watermark position')
+      const landed = await window.evaluate(() => (window as unknown as { __presses: Array<{ type: string; detail: number; what: string }> }).__presses)
+      expect(landed.filter((p) => p.detail > 1), 'no part of the second press (down, up or click) reached the page').toEqual([])
+      const focused = await window.evaluate(() => {
+        const a = document.activeElement
+        return { tag: a?.tagName ?? '', label: a?.getAttribute('aria-label') ?? '' }
+      })
+      expect(focused.tag, `no select took the focus (${focused.label})`).not.toBe('SELECT')
+      // A popup the second press opened would hold the next key: "?" reaching the page is the proof none did.
+      await window.keyboard.press('?')
+      await expect(window.getByRole('dialog')).toContainText('Keyboard shortcuts', { timeout: 5_000 })
+      expect(mp4sIn(seeded), 'the canceled export left no file').toEqual([])
+    } finally {
+      await app.close()
+    }
+  })
+
+  test('a single press on Cancel still cancels the export (control)', async () => {
+    test.setTimeout(240_000)
+    const seeded = path.join(root, `t194single-${Date.now().toString(36)}`)
+    mkdirSync(seeded, { recursive: true })
+    const { app, window } = await launchWithVideo('t194single', clipSrc, { export: { lastOutputDir: seeded } })
+    try {
+      await stubShellReveal(app)
+      await installSpawnStall(app, [{ match: 'ffmpeg', ms: 6_000 }])
+      await startAndPressCancel(window, seeded, 1)
+      await expectToast(window, 'Export canceled.')
+      await expect(exportCard(window).getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0)
+      await expect(exportCard(window).getByRole('button', { name: 'Export 1 file', exact: true })).toBeEnabled({ timeout: 30_000 })
+      expect(mp4sIn(seeded), 'the canceled export left no file').toEqual([])
     } finally {
       await app.close()
     }

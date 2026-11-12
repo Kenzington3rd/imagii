@@ -143,7 +143,9 @@ and webcam if you want them. Game and desktop sound are not captured.
    better compatibility), or uncheck it for a quick WebM save, which some apps do
    not accept.
 5. Click **Start recording**. While imagii opens the capture the button reads
-   **Starting…** and cannot be pressed again, so one press is one take. Click **Stop**
+   **Starting…** and cannot be pressed again, so one press is one take. The source, microphone and webcam are
+   locked until the recording begins (a line under the button says so), because the capture is opened from
+   them; **Convert to MP4** stays open, and the take is saved the way it is set when you stop. Click **Stop**
    when you are done, then pick where to save. **Cancel** in the save dialog discards the take — the dialog's title
    says so. With **Convert to MP4** on, **Discard recording** stops the
    conversion; with it off, saving a WebM is a quick copy and there is nothing
@@ -276,7 +278,7 @@ that names the file being converted.)
   platform's size is marked as one that will be scaled up and look soft, and a
   clip's length counts at its speed, so a 6-minute clip at 2x is a 3-minute
   video. The button says how many files it will write (**Export 3 files**); when no
-  platform is checked it is off, and a line beside it says to check one. If you
+  platform is checked it is off, and a line under the platform cards says to check one. If you
   press it before choosing a folder, imagii opens the folder chooser and goes on from
   there. Each row of the queue shows the file it wrote — **name (2).mp4** when the
   name was taken. Every platform export is encoded at 30 fps, except **YouTube 1080p60**,
@@ -733,7 +735,8 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    **+ Add text** is, whatever the words are;
    on the empty start screen there is no canvas to put them on, so imagii asks you to paste a
    picture or pick a template instead.
-   The selected layer has a dashed frame a few pixels outside it, so it never reads as the
+   Clicking a layer selects it, and so does dragging it (Properties, Delete and the handles
+   follow the layer that moved). The selected layer has a dashed frame a few pixels outside it, so it never reads as the
    layer's own outline. To resize a layer, drag a corner handle. A picture or text keeps its proportions, so a logo
    is never stretched by accident; hold **Shift** while you drag to stretch it freely. A
    rectangle or ellipse stretches, and Shift keeps its proportions instead. The handles on the
@@ -744,7 +747,8 @@ Make thumbnails, Twitch overlays, banners, and emotes on a canvas.
    and remove them. The **Properties** panel edits the selected layer; one drag of its
    **Opacity** slider, or one run of typing in a name, text, color or number field (**X (px)**,
    **Y (px)**, **Rotation**, **Size (px)**, **Stroke (px)**), is one **Undo**; a rotation preset
-   button is one **Undo** each. A rectangle's or ellipse's **Fill** and **Stroke**, and a word's
+   button is one **Undo** each. A rectangle's or ellipse's **Fill** and **Stroke**, a line's or Pencil
+   stroke's **Stroke** (a line has no Fill, and its **Stroke (px)** is its width), and a word's
    **Color**, take a color name (`white`, in any case), a code like `#ffcc00` (the `#` is optional,
    and `#fc0` works), `transparent` for no fill, or an `rgba(...)` color like the templates use. A
    color is applied when you leave the box (or press Enter), as one **Undo**; one imagii cannot

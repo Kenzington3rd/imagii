@@ -65,6 +65,11 @@ export function RecordStudio(): JSX.Element {
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
   const [includeMic, setIncludeMic] = useState(true)
   const [convertToMp4, setConvertToMp4] = useState(true)
+  // T-194 (2): the value the take is SAVED with. `recorder.onstop` runs the `finalizeRecording` of the render Start was pressed in, so reading the state there
+  // used the checkbox as it was at the press: a change made during "Starting…" (the card stays up through the capture's open and the first-picture wait, up to
+  // 10 s) was persisted and shown, and the take ignored it. The ref is assigned on every render, so it is the box as it is when the take ends.
+  const convertToMp4Ref = useRef(convertToMp4)
+  convertToMp4Ref.current = convertToMp4
   const [mics, setMics] = useState<DeviceOption[]>([])
   const [selectedMicId, setSelectedMicId] = useState<string | null>(null)
   const [cams, setCams] = useState<DeviceOption[]>([])
@@ -606,6 +611,8 @@ export function RecordStudio(): JSX.Element {
     // with a Stop that did nothing and no Discard. The same call in `stopRecording` is the instant answer to a click;
     // setting a state to the value it already has is nothing.
     setPhase('saving')
+    // T-194 (2): read once, here: the run's flag, the file's extension and the finalize option are the same answer.
+    const convert = convertToMp4Ref.current
     const sessionId = sessionIdRef.current
     const durationMs = Date.now() - startTimeRef.current
     const lostLine = micLostLine(micLostAtRef.current)
@@ -616,7 +623,7 @@ export function RecordStudio(): JSX.Element {
     // the save (it was an effect of the screen, and lost every event that arrived while the screen was gone).
     const claimed =
       sessionId !== null &&
-      useRecordSave.getState().begin({ takeId: sessionId, convertToMp4, percent: 0, discarding: false, micLostAt: micLostAtRef.current })
+      useRecordSave.getState().begin({ takeId: sessionId, convertToMp4: convert, percent: 0, discarding: false, micLostAt: micLostAtRef.current })
     const offProgress = window.api.recording.onProgress((info) => {
       useRecordSave.getState().patch({ percent: info.percent ?? null })
     })
@@ -631,9 +638,9 @@ export function RecordStudio(): JSX.Element {
       const result = await window.api.recording.finalize(sessionId, {
         // T-117: the machine's clock, like the export panel's {date} and {time} - the UTC ISO
         // string named an evening Pacific take for tomorrow.
-        filename: `recording-${localStamp()}.${convertToMp4 ? 'mp4' : 'webm'}`,
+        filename: `recording-${localStamp()}.${convert ? 'mp4' : 'webm'}`,
         durationMs,
-        convertToMp4
+        convertToMp4: convert
       })
       // finalize reaped the session (success or not) — never abandon it too.
       sessionIdRef.current = null
@@ -803,7 +810,10 @@ export function RecordStudio(): JSX.Element {
 
       {phase === 'idle' && !saving ? (
         <div className="grid grid-cols-1 lg:grid-cols-[1fr_clamp(320px,20%,520px)] gap-5">
-          <div className="card p-4 flex flex-col gap-3">
+          {/* T-194 (2): the source, the microphone and the webcam are read once, when Start is pressed (the capture is opened from them before any render can
+              come back), so a change made during "Starting…" was shown and the take ignored it. A disabled fieldset locks every control inside it (the tiles,
+              Refresh sources, the checkboxes and the selects) and the reason is said under Start. Convert to MP4 is read when the take ends and stays live. */}
+          <fieldset disabled={starting} className="card p-4 flex flex-col gap-3 min-w-0 disabled:opacity-60">
             <PanelHeader
               icon="video"
               actions={
@@ -871,9 +881,9 @@ export function RecordStudio(): JSX.Element {
                 ))}
               </div>
             )}
-          </div>
+          </fieldset>
           <div className="flex flex-col gap-3">
-            <div className="card p-4 flex flex-col gap-3 text-sm">
+            <fieldset disabled={starting} className="card p-4 flex flex-col gap-3 text-sm min-w-0 disabled:opacity-60">
               <PanelHeader icon="microphone">Audio</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
@@ -900,8 +910,8 @@ export function RecordStudio(): JSX.Element {
               {devicesScanned && includeMic && mics.length === 0 ? (
                 <p className="text-xs text-warn">{noDeviceHint('microphone')}</p>
               ) : null}
-            </div>
-            <div className="card p-4 flex flex-col gap-3 text-sm">
+            </fieldset>
+            <fieldset disabled={starting} className="card p-4 flex flex-col gap-3 text-sm min-w-0 disabled:opacity-60">
               <PanelHeader icon="record">Webcam</PanelHeader>
               <label className="flex items-center gap-2">
                 <input
@@ -965,7 +975,7 @@ export function RecordStudio(): JSX.Element {
                   preview while you record.
                 </p>
               ) : null}
-            </div>
+            </fieldset>
             <div className="card p-4 flex flex-col gap-3 text-sm">
               <PanelHeader icon="folder">Output</PanelHeader>
               <label className="flex items-center gap-2">
@@ -998,6 +1008,11 @@ export function RecordStudio(): JSX.Element {
             >
               <Icon name="record" size={18} /> {starting ? 'Starting…' : checkingDevices ? 'Checking devices…' : 'Start recording'}
             </button>
+            {starting ? (
+              <p className="text-xs text-ink-dim">
+                The capture is opening, so the source, microphone and webcam are locked for this recording. Convert to MP4 can still change.
+              </p>
+            ) : null}
           </div>
         </div>
       ) : null}

@@ -163,8 +163,8 @@ held by this list alone, so a new one must be added below:
   app's own **default marks** — the fill and stroke a freshly drawn
   rect / ellipse / line / text layer comes out in — DO follow the tokens,
   because a user expects new shapes to arrive in imagii's colors.
-  The line and pencil default is the accent (T-193 (4): the ember it was is 1.67:1 on the white page, and those two tools have no colour box, so the default is the
-  colour a person gets), and a template layer that strokes over an opaque fill keeps its stroke 1.5:1 or more from that fill (T-193 (3); the Blank circle's ring is
+  The line and pencil default is the accent (T-193 (4): the ember it was is 1.67:1 on the white page, and it is the colour a person gets until they change it: Line and Pencil have a Stroke box and a Stroke (px) box like the shapes (T-194 (5)), because the
+  accent is 1.00:1 on the app's own accent fills), and a template layer that strokes over an opaque fill keeps its stroke 1.5:1 or more from that fill (T-193 (3); the Blank circle's ring is
   `BG_BASE`'s value, 5.29:1 against its fill), pinned in `designTokensInSync.test.ts`.
   A new word is also placed and inked for what it lands on (T-140/T-141: wholly inside the page, 4.5:1 against what is under it), and the rule is
   the WORDS' own (T-166 (1)): a pasted sentence gets it too, sized down to fit and measured line by line (the box is the longest line wide and a line

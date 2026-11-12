@@ -37,7 +37,7 @@ import { Modal } from '../../components/Modal'
 import { persistSetting } from '../../lib/persistSetting'
 
 /** Why Export is disabled when no platform is checked on any clip (T-112). */
-const NOTHING_QUEUED = 'Check at least one platform below to export.'
+const NOTHING_QUEUED = 'Check at least one platform to export.'
 
 export interface SafeZoneRow {
   clipName: string
@@ -432,7 +432,8 @@ export function ExportPanel(): JSX.Element | null {
               disabled={running || kitRunning || totalQueued === 0}
               onClick={startExport}
               // T-112: a disabled button says why (the same sentence is under the
-              // header, visible without hovering — the Compile card's pattern).
+              // platform cards, visible without hovering — the Compile card's pattern;
+              // T-194 (1): worded without "below" so it is true in both places).
               // T-155 (4): and when it is the kit it waits for, it names the kit.
               title={
                 kitRunning && !running

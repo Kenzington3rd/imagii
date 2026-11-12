@@ -2969,7 +2969,8 @@ describe('T-137 Track A - the twenty-third sweep', () => {
     expect(studio, 'none of the component-state spellings this replaced').not.toMatch(/setSavePercent|setDiscarding|useState<number \| null>\(0\)/)
     const finalize = studio.slice(studio.indexOf('async function finalizeRecording'), studio.indexOf('function announceDiscarded'))
     expect(finalize.length, 'the slice found finalizeRecording').toBeGreaterThan(500)
-    const begin = finalize.indexOf('useRecordSave.getState().begin({ takeId: sessionId, convertToMp4,')
+    // T-194 (2): the flag is the ref's value read once at the top of the function (`convert`), not the closure's.
+    const begin = finalize.indexOf('useRecordSave.getState().begin({ takeId: sessionId, convertToMp4: convert,')
     expect(begin, 'the run is begun with the take\'s session id').toBeGreaterThan(-1)
     expect(begin, 'before the first await').toBeLessThan(finalize.indexOf('await '))
     expect(finalize).toMatch(/const claimed =\s*sessionId !== null &&/)
@@ -5492,5 +5493,43 @@ describe('T-193 Track A - a refused press records nothing and drops nothing; eve
     expect(panel, 'a paste passes no token').toMatch(/void ingestFile\(file\)\s*e\.preventDefault\(\)/)
     expect(panel, 'a drop passes no token').toMatch(/files\.forEach\(\(f\) => void ingestFile\(f\)\)/)
     expect(panel, 'no target-wide drop is left in the panel').not.toMatch(/dropSwapPress\('image-select'\)/)
+  })
+})
+
+// T-194 (2), (4), (5): the wiring the round-143 Track B behaviors stand on. Behavior: record.spec.ts "T-194 (2)" (Convert to MP4 unticked during a held Starting… saves a WebM; the cards are locked with the reason) and
+// image.spec.ts "T-194 (4), (5)" (a drag selects what it moves; a Pencil recoloured and widened, read in the stage pixels).
+describe('T-194 Track B - a take reads Convert to MP4 when it ends, the start-time cards lock while it starts, a drag selects, a line has the Stroke boxes', () => {
+  const strip = (text: string): string => text.replace(/\{\/\*[\s\S]*?\*\/\}/g, '').replace(/\/\*[\s\S]*?\*\//g, '').replace(/^\s*\/\/.*$/gm, '')
+  const record = strip(read('modules/record-studio/RecordStudio.tsx'))
+
+  it('finalizeRecording reads the ref once and uses it for the run, the file name and the finalize option; no other read of the state is left in it', () => {
+    const finalize = record.slice(record.indexOf('async function finalizeRecording('), record.indexOf('function announceDiscarded('))
+    expect(record).toMatch(/const convertToMp4Ref = useRef\(convertToMp4\)\s*convertToMp4Ref\.current = convertToMp4/)
+    expect(finalize).toMatch(/const convert = convertToMp4Ref\.current/)
+    expect(finalize).toMatch(/begin\(\{ takeId: sessionId, convertToMp4: convert,/)
+    expect(finalize).toMatch(/\.\$\{convert \? 'mp4' : 'webm'\}/)
+    expect(finalize).toMatch(/durationMs,\s*convertToMp4: convert\s*\}/)
+    expect(finalize.replace(/convertToMp4Ref/g, ''), 'the closure value is not read at the end of a take').not.toMatch(/\bconvertToMp4\b(?!:)/)
+  })
+
+  it('the source card, the Audio card and the Webcam card are fieldsets disabled while starting, the Output card is not, and the reason is said under Start', () => {
+    expect(record.match(/<fieldset disabled=\{starting\} className="card [^"]*disabled:opacity-60">/g)).toHaveLength(3)
+    const output = record.slice(record.indexOf('<PanelHeader icon="folder">Output</PanelHeader>'), record.indexOf('ref={startRef}'))
+    expect(output, 'Convert to MP4 is not locked').not.toMatch(/disabled/)
+    expect(record).toMatch(/\{starting \? \(\s*<p className="text-xs text-ink-dim">\s*The capture is opening, so the source, microphone and webcam are locked for this recording\. Convert to MP4 can still change\./)
+  })
+
+  it('every layer node selects itself when it starts to move (the click select stays), and a Line\'s Properties are the shared Stroke pair with no Fill', () => {
+    const canvas = strip(read('modules/image-studio/Canvas.tsx'))
+    expect(canvas).toMatch(/onClick: onSelect,\s*onTap: onSelect,\s*onDragStart: onSelect,/)
+    expect(canvas).toMatch(/onDragStart: \(\) => void/)
+    const panel = strip(read('modules/image-studio/PropertiesPanel.tsx'))
+    expect(panel).toMatch(/layer\.type === 'line' \? <StrokeFields layer=\{layer as LineLayer\} \/> : null/)
+    const fillStroke = panel.slice(panel.indexOf('function FillStrokeFields('), panel.indexOf('function StrokeFields('))
+    expect(fillStroke, 'the shapes use the same StrokeFields').toMatch(/<StrokeFields layer=\{layer\} \/>/)
+    const strokeFields = panel.slice(panel.indexOf('function StrokeFields('), panel.indexOf('function TextFields('))
+    expect(strokeFields).toMatch(/field="stroke" caption="Stroke"/)
+    expect(strokeFields).toMatch(/updateLayer\(layer\.id, \{ strokeWidth: n \} as Partial<CanvasLayer>, 'strokeWidth'\)/)
+    expect(strokeFields, 'a line has no fill').not.toMatch(/field="fill"/)
   })
 })

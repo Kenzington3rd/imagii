@@ -57,7 +57,7 @@ const __dirname = path.dirname(__filename)
  *
  * ── Three mechanisms worth explaining ──────────────────────────────────
  *
- * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:440) is the ledger's
+ * 1. The Konva stage. `window.__imagiiStage` (Canvas.tsx:444) is the ledger's
  *    own hook. `stageShapes()` reads the document layer's children — class +
  *    attrs — which is the rendered end state of `doc.layers`: React re-renders
  *    every node from the store, so a value read back off a node is the value
@@ -65,7 +65,7 @@ const __dirname = path.dirname(__filename)
  *    eye toggle assertable at the stage.
  *
  * 2. Mouse work is in DOC coordinates. The stage is scaled to fit its
- *    container (Canvas.tsx:184-193), so every screen point is computed from the
+ *    container (Canvas.tsx:185-194), so every screen point is computed from the
  *    live `stage.scaleX()` and the canvas rect (`stageGeom`). Transformer
  *    anchors are Konva nodes, not DOM: their screen position comes from
  *    `getAbsolutePosition()`, which already includes the stage scale.
@@ -1134,7 +1134,7 @@ test.describe('Image Studio — tools and drawing', () => {
         'Text'
       ])
 
-      // ── a drag under the 4px floor commits nothing (Canvas.tsx:267) ──
+      // ── a drag under the 4px floor commits nothing (Canvas.tsx:268) ──
       await toolbar.getByRole('button', { name: 'Rectangle' }).click()
       await dragOnStage(window, { x: 100, y: 700 }, { x: 102, y: 702 }, { expectPreview: false })
       await expectLayerCount(window, 6)
@@ -1180,7 +1180,7 @@ test.describe('Image Studio — tools and drawing', () => {
 
       // ── snap ON: the same gesture quantizes to multiples of 40 ──
       // Math.round(133/40)*40 = 120 and Math.round(93/40)*40 = 80
-      // (canvasStore rule read off Canvas.tsx:179-182). At the DEFAULT grid of
+      // (canvasStore rule read off Canvas.tsx:180-183). At the DEFAULT grid of
       // 20 the same gesture would land on 140/100, so this also proves the
       // grid-size field feeds the snap.
       await snap.check()
@@ -1310,7 +1310,7 @@ test.describe('Image Studio — selection', () => {
       await window.locator(TOOLBAR).getByRole('button', { name: 'Select' }).click()
       await clickDoc(window, { x: 450, y: 400 })
       const start = await lastShape(window)
-      // The number fields are the store's own readout (PropertiesPanel.tsx:52).
+      // The number fields are the store's own readout (PropertiesPanel.tsx:53).
       await expect(field(window, 'X (px)')).toHaveValue(String(Math.round(start.x)))
       await expect(field(window, 'Y (px)')).toHaveValue(String(Math.round(start.y)))
 
@@ -1917,7 +1917,7 @@ test.describe('Image Studio — properties panel', () => {
       expect(styled.stroke).toBe('#123456')
       expect(styled.strokeWidth).toBe(7)
 
-      // An ellipse gets the same three fields; a line layer gets none of them.
+      // An ellipse gets the same three fields; a line layer gets the Stroke pair and no Fill (T-194 (5), round 143: it used to get none of the three).
       await window.locator(TOOLBAR).getByRole('button', { name: 'Ellipse' }).click()
       await dragOnStage(window, { x: 700, y: 250 }, { x: 900, y: 400 })
       // T-192 (1): the default Ellipse is drawn in the accent like the Rectangle (it was accent-muted, rgba(245, 46, 46, 0.4)); re-pointed at the merge.
@@ -1927,7 +1927,8 @@ test.describe('Image Studio — properties panel', () => {
       await dragOnStage(window, { x: 200, y: 600 }, { x: 500, y: 700 })
       await expect(field(window, 'Name')).toHaveValue('Line')
       await expect(field(window, 'Fill')).toHaveCount(0)
-      await expect(field(window, 'Stroke (px)')).toHaveCount(0)
+      await expect(field(window, 'Stroke')).toHaveCount(1)
+      await expect(field(window, 'Stroke (px)')).toHaveCount(1)
       await window.screenshot({ path: path.join(SCREENSHOTS, 'image-06-properties.png') })
     } finally {
       await closeStudio(studio)
@@ -2155,7 +2156,7 @@ test.describe('Image Studio — export', () => {
       expect(calls1.save[0]?.filters).toEqual([{ name: 'PNG image', extensions: ['png'] }])
 
       // T-45: "1×" means one document pixel per exported pixel. The on-screen
-      // stage is a fit-to-container render (Canvas.tsx:184-193) and is NOT the
+      // stage is a fit-to-container render (Canvas.tsx:185-194) and is NOT the
       // document size here — asserted first, so every dimension below is a
       // claim about the export math and not an accident of this window.
       expect(geom.stageW, 'the stage is zoomed, not 1:1').not.toBe(t.doc.width)
@@ -2282,7 +2283,7 @@ test.describe('Image Studio — export', () => {
       const sizes = [28, 56, 112].map((n) => pngSize(bySize(n)))
 
       // T-45: the bytes carry the sizes the filenames and the toast promise.
-      // This doc sits at the 4x zoom cap (Canvas.tsx:193) — 112 document px
+      // This doc sits at the 4x zoom cap (Canvas.tsx:194) — 112 document px
       // are drawn as 448 screen px — which is exactly the zoom that used to
       // leak into the capture and write 112/224/448. Asserting the cap is
       // really engaged first is what makes the trio below a claim about the
@@ -8664,4 +8665,253 @@ test.describe('Image Studio - a refused paste or drop leaves a pending Import im
       await closeStudio(studio)
     }
   })
+})
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-194 (4), (5): a drag selects what it moves, and a Line or Pencil stroke is recoloured like a shape
+// ═══════════════════════════════════════════════════════════════════════════
+// (4) A layer was selected by its click alone, and Konva suppresses the click after a drag: with a Text selected, a drag on a Rectangle moved the Rectangle while Properties, the handles and Delete stayed
+// on the Text. `onDragStart` selects the layer that is moving. (5) A Line or Pencil stroke has no Fill and, since T-193 (4), is drawn in the accent, 1.00:1 on "Emote · Blank circle"'s disc: the layer was in
+// Layers with no mark on the canvas and no way to recolour it. It has the Stroke colour box and Stroke (px) box the shapes have. The end states read here are the layer on the stage, the Properties card
+// and the pixels the stage draws (chrome hidden, 1:1, as an export draws it).
+test.describe('Image Studio - a drag selects what it moves, and a line is recoloured like a shape (T-194 (4), (5))', () => {
+  const undo = (window: Page): Locator => window.getByRole('button', { name: 'Undo' })
+  const refusal = (window: Page): Locator => propsCard(window).getByRole('alert')
+
+  /** The RGBA the stage draws at a document point, with the editor's chrome hidden and the document at 1:1 (the T-186 (1) reader). */
+  function stagePixel(window: Page, x: number, y: number): Promise<{ r: number; g: number; b: number; a: number }> {
+    return window.evaluate(
+      ([px, py]) => {
+        interface Stage {
+          getLayers(): Array<{ visible(): boolean; visible(v: boolean): void; hasName(n: string): boolean }>
+          scaleX(): number
+          width(): number
+          height(): number
+          scale(v: { x: number; y: number }): void
+          toCanvas(o: { x: number; y: number; width: number; height: number; pixelRatio: number }): HTMLCanvasElement
+        }
+        const stage = (window as unknown as { __imagiiStage?: Stage }).__imagiiStage
+        if (!stage) throw new Error('__imagiiStage is not set')
+        const zoom = stage.scaleX()
+        const doc = { width: Math.round(stage.width() / zoom), height: Math.round(stage.height() / zoom) }
+        const chrome = stage.getLayers().filter((l) => l.hasName('chrome'))
+        const was = chrome.map((l) => l.visible())
+        let canvas: HTMLCanvasElement
+        try {
+          stage.scale({ x: 1, y: 1 })
+          for (const l of chrome) l.visible(false)
+          canvas = stage.toCanvas({ x: 0, y: 0, width: doc.width, height: doc.height, pixelRatio: 1 })
+        } finally {
+          chrome.forEach((l, i) => l.visible(was[i] as boolean))
+          stage.scale({ x: zoom, y: zoom })
+        }
+        const d = canvas.getContext('2d')?.getImageData(px as number, py as number, 1, 1).data
+        if (!d) throw new Error('no pixels')
+        return { r: d[0] as number, g: d[1] as number, b: d[2] as number, a: d[3] as number }
+      },
+      [x, y] as const
+    )
+  }
+  const near = (px: { r: number; g: number; b: number }, want: [number, number, number]): boolean =>
+    Math.abs(px.r - want[0]) <= 2 && Math.abs(px.g - want[1]) <= 2 && Math.abs(px.b - want[2]) <= 2
+
+  const rectOf = async (window: Page): Promise<ShapeInfo> => {
+    const r = (await stageShapes(window)).find((s) => s.cls === 'Rect')
+    if (!r) throw new Error('no Rect on the stage')
+    return r
+  }
+
+  /** A blank page with a Text layer and a Rectangle away from it, the Text selected, the Select tool on. */
+  async function textSelectedRectApart(window: Page): Promise<void> {
+    await startBlank(window)
+    const toolbar = window.locator(TOOLBAR)
+    await toolbar.getByRole('button', { name: 'Rectangle' }).click()
+    await dragOnStage(window, { x: 700, y: 450 }, { x: 1000, y: 650 })
+    await expectLayerCount(window, 2)
+    await toolbar.getByRole('button', { name: 'Select' }).click()
+    await layerRow(window, 'Text').click()
+    await expect(field(window, 'Name'), 'the premise: the Text is the selected layer').toHaveValue('Text')
+    await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Text'])
+  }
+
+  test('a drag on an unselected Rectangle with a Text selected selects the Rectangle: Properties and the handles follow it, and Delete removes it and not the Text (T-194 (4))', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t194-drag-selects')
+    const { window } = studio
+    try {
+      await textSelectedRectApart(window)
+      const before = await rectOf(window)
+      await dragTo(window, await toScreen(window, { x: 850, y: 550 }), await toScreen(window, { x: 950, y: 600 }), {
+        extent: { label: 'the Rectangle dragged', read: async () => (await rectOf(window)).x, settled: (x) => x > before.x + 40 }
+      })
+      expect((await rectOf(window)).x, 'the Rectangle moved').toBeGreaterThan(before.x + 40)
+      await expect(field(window, 'Name'), 'Properties follows the layer that moved').toHaveValue('Rectangle')
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000, message: 'the handles are on the Rectangle' }).toEqual(['Rect'])
+      await window.keyboard.press('Delete')
+      await expectLayerCount(window, 1)
+      expect((await stageShapes(window)).map((s) => s.cls), 'Delete removed the Rectangle that was dragged, not the Text').toEqual(['Text'])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a plain click on an unselected Rectangle still selects it (control: the click select stays), and a drag on a LOCKED Rectangle moves nothing (the press-release is a click, which selects as before)', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t194-click-and-locked')
+    const { window } = studio
+    try {
+      await textSelectedRectApart(window)
+      await clickDoc(window, { x: 850, y: 550 })
+      await expect(field(window, 'Name')).toHaveValue('Rectangle')
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000 }).toEqual(['Rect'])
+
+      await layerRow(window, 'Rectangle').getByRole('button', { name: 'Lock layer' }).click()
+      await layerRow(window, 'Text').click()
+      await expect(field(window, 'Name')).toHaveValue('Text')
+      await expect.poll(async () => (await rectOf(window)).draggable, { timeout: 10_000 }).toBe(false)
+      const before = await rectOf(window)
+      const g = await stageGeom(window)
+      const grab = await toScreen(window, { x: 850, y: 550 })
+      await dragTo(window, grab, { x: grab.x + 80 * g.scale, y: grab.y + 40 * g.scale })
+      const after = await rectOf(window)
+      expect([after.x, after.y], 'a locked layer is not dragged').toEqual([before.x, before.y])
+      // The press and release on it are a click, which selects it as before (a drag never starts, so `onDragStart` has nothing to change for a locked layer).
+      await expect(field(window, 'Name'), 'the press-release is a click: the click select, as before').toHaveValue('Rectangle')
+      await expect.poll(() => transformerClasses(window), { timeout: 10_000, message: 'a locked layer is selected without handles' }).toEqual([])
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a Pencil stroke drawn on the Blank circle\'s disc (accent on accent, unseen) is recoloured in its Stroke box and read in the stage pixels, Stroke (px) widens it, there is no Fill box, and Undo gives each back', async () => {
+    test.setTimeout(180_000)
+    const studio = await openStudio('t194-pencil-recolour')
+    const { window } = studio
+    try {
+      await templateCard(window, templateById('emote-blank-112')).click()
+      await expectLayerCount(window, 1)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+      await toolbar.getByRole('button', { name: 'Pencil' }).click()
+      await dragOnStage(window, { x: 30, y: 56 }, { x: 82, y: 56 }, { via: [{ x: 40, y: 56 }, { x: 50, y: 56 }, { x: 60, y: 56 }, { x: 70, y: 56 }] })
+      await expectLayerCount(window, 2)
+      const stroke = await lastShape(window)
+      expect(stroke.cls).toBe('Line')
+      await expect(field(window, 'Name')).toHaveValue('Pencil')
+      // Where the stroke is, in document pixels: one of its own points (the layer sits at 0,0, but is read as it is).
+      const pts = stroke.points ?? []
+      const k = Math.floor(pts.length / 4) * 2
+      const px = Math.round(stroke.x + (pts[k] as number))
+      const py = Math.round(stroke.y + (pts[k + 1] as number))
+      const disc: [number, number, number] = [255, 49, 49]
+      expect(near(await stagePixel(window, px, py), disc), 'the premise: the accent stroke on the accent disc cannot be seen').toBe(true)
+
+      // The boxes: Stroke and Stroke (px), no Fill.
+      await expect(field(window, 'Stroke'), 'the stroke box shows the accent').toHaveValue(ACCENT)
+      await expect(field(window, 'Stroke (px)')).toHaveValue('3')
+      await expect(field(window, 'Fill'), 'a line has no fill').toHaveCount(0)
+
+      const stroked = field(window, 'Stroke')
+      await retype(stroked, '00ff88')
+      await leave(stroked)
+      await expect.poll(async () => (await lastShape(window)).stroke, { timeout: 10_000, message: 'the colour is stored resolved' }).toBe('#00ff88')
+      await expect
+        .poll(async () => near(await stagePixel(window, px, py), [0, 255, 136]), { timeout: 10_000, message: 'the stage draws the stroke in its new colour' })
+        .toBe(true)
+
+      // Eight pixels off the stroke's centre line is the disc until the stroke is wide enough to reach it.
+      expect(near(await stagePixel(window, px, py - 8), disc), 'a 3 px stroke does not reach 8 px off').toBe(true)
+      const width = field(window, 'Stroke (px)')
+      await retype(width, '24')
+      await leave(width)
+      await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000 }).toBe(24)
+      await expect
+        .poll(async () => near(await stagePixel(window, px, py - 8), [0, 255, 136]), { timeout: 10_000, message: 'a 24 px stroke covers the pixel 8 px off its line' })
+        .toBe(true)
+
+      // One Undo per edit, as the shapes' boxes: the width, then the colour.
+      await undo(window).click()
+      await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000 }).toBe(3)
+      expect((await lastShape(window)).stroke, 'the first Undo gives back the width only').toBe('#00ff88')
+      await undo(window).click()
+      await expect.poll(async () => (await lastShape(window)).stroke, { timeout: 10_000 }).toBe(ACCENT)
+      await expect.poll(async () => near(await stagePixel(window, px, py), disc), { timeout: 10_000 }).toBe(true)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+
+  test('a Line drawn with the Line tool has the same two boxes: "zzz" is refused in the shapes\' sentence and stores nothing, a colour name is stored resolved, and Stroke (px) refuses a negative by clamping', async () => {
+    test.setTimeout(150_000)
+    const studio = await openStudio('t194-line-boxes')
+    const { window } = studio
+    try {
+      await startBlank(window)
+      const toolbar = window.locator(TOOLBAR)
+      await toolbar.getByRole('button', { name: '+ More' }).click()
+      await toolbar.getByRole('button', { name: 'Line' }).click()
+      await dragOnStage(window, { x: 200, y: 500 }, { x: 600, y: 700 })
+      await expectLayerCount(window, 2)
+      await expect(field(window, 'Name')).toHaveValue('Line')
+      await expect(field(window, 'Fill')).toHaveCount(0)
+      const stroked = field(window, 'Stroke')
+      await expect(stroked).toHaveValue(ACCENT)
+      await retype(stroked, 'zzz')
+      await leave(stroked)
+      await expect(refusal(window)).toHaveText(CANVAS_COLOR_REFUSAL)
+      expect((await lastShape(window)).stroke, 'a refusal stores nothing').toBe(ACCENT)
+      await retype(stroked, 'lime')
+      await leave(stroked)
+      await expect.poll(async () => (await lastShape(window)).stroke, { timeout: 10_000 }).toBe('#00ff00')
+      await expect(refusal(window)).toHaveCount(0)
+      const width = field(window, 'Stroke (px)')
+      await retype(width, '-5')
+      await leave(width)
+      await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000, message: 'a typed negative is clamped like the shapes\'' }).toBe(0)
+    } finally {
+      await closeStudio(studio)
+    }
+  })
+  // T-153 (1): every box passes its own key to `updateLayer`. `endGesture` runs on every pointerup in the panel, so a case that moves between the boxes with the POINTER cannot tell the keys apart; a keyboard
+  // user Tabs from Stroke to Stroke (px) with no pointerup, and with the keys merged one Undo would revert both. Focus goes by `focus()` and Tab, typing by the keyboard: no click in the panel.
+  for (const kind of ['Line', 'Rectangle'] as const) {
+    test(`${kind}: Stroke typed, Tab (no click) to Stroke (px) typed: one Ctrl+Z restores only the width, a second restores the colour (own keys, T-194 (5) / T-153 (1))`, async () => {
+      test.setTimeout(150_000)
+      const studio = await openStudio(`t194-keys-${kind.toLowerCase()}`)
+      const { window } = studio
+      try {
+        await startBlank(window)
+        const toolbar = window.locator(TOOLBAR)
+        if (kind === 'Line') await toolbar.getByRole('button', { name: '+ More' }).click()
+        await toolbar.getByRole('button', { name: kind }).click()
+        await dragOnStage(window, { x: 200, y: 500 }, { x: 600, y: 700 })
+        await expectLayerCount(window, 2)
+        const before = await lastShape(window)
+        const originalWidth = before.strokeWidth
+        const originalStroke = before.stroke
+        // Move the pointer off the panel and leave it there: focus and keys only from here.
+        await window.mouse.move(5, 5)
+        const stroke = field(window, 'Stroke')
+        await stroke.focus()
+        await window.keyboard.press('Control+a')
+        await window.keyboard.type('00ff88')
+        await window.keyboard.press('Tab')
+        await expect(field(window, 'Stroke (px)'), 'Tab reached the width box').toBeFocused()
+        await expect.poll(async () => (await lastShape(window)).stroke, { timeout: 10_000 }).toBe('#00ff88')
+        await window.keyboard.press('Control+a')
+        await window.keyboard.type('11')
+        await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000 }).toBe(11)
+        await window.keyboard.press('Tab')
+        await expect(field(window, 'Stroke (px)')).not.toBeFocused()
+
+        await window.keyboard.press('Control+z')
+        await expect.poll(async () => (await lastShape(window)).strokeWidth, { timeout: 10_000, message: 'the first Ctrl+Z gives back the width' }).toBe(originalWidth)
+        expect((await lastShape(window)).stroke, 'and keeps the colour').toBe('#00ff88')
+        await window.keyboard.press('Control+z')
+        await expect.poll(async () => (await lastShape(window)).stroke, { timeout: 10_000, message: 'the second gives back the colour' }).toBe(originalStroke)
+      } finally {
+        await closeStudio(studio)
+      }
+    })
+  }
 })

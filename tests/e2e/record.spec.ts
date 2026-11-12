@@ -5653,3 +5653,135 @@ test.describe('Record - the source grid shows each tile whole at every window (T
     })
   }
 })
+
+// ═══════════════════════════════════════════════════════════════════════════
+// T-194 (2): a take is saved the way Convert to MP4 is set when it ends. `recorder.onstop` ran the `finalizeRecording` of the render Start was pressed in, which read THAT render's checkbox, so
+// a change made during "Starting…" (the Output card stays up through the capture's open and the first-picture wait) was persisted and shown, and the take ignored it. The take reads a ref kept
+// in step with the state. The rest of the cards on screen during "Starting…" are read once, at the press, and cannot apply any more: they are locked (a disabled fieldset) with the reason
+// said under Start. "Starting…" is held the way the T-119 case above holds it: the DESKTOP capture (and only it) waits for the test.
+// ═══════════════════════════════════════════════════════════════════════════
+test.describe('Record - the take is saved the way Convert to MP4 is set when it ends, and the other cards are locked while it starts (T-194 (2))', () => {
+  /** `saveAs` is the file the stubbed Save dialog answers with (inside the test's root), or null to cancel it; `dialogMs` holds the dialog open, so the saving card is on screen for that long. */
+  async function openRecord(label: string, saveAs: string | null, dialogMs = 0): Promise<{ app: ElectronApplication; window: Page; root: string; userDataDir: string; outPath: string }> {
+    ensureScreenshots()
+    const root = makeRoot(label)
+    const userDataDir = path.join(root, 'userData')
+    const outPath = path.join(root, saveAs ?? 'none')
+    mkdirSync(root, { recursive: true })
+    seedUserData(userDataDir, SEED)
+    const app = await launchApp(userDataDir)
+    const window = await app.firstWindow()
+    await stubSaveDialog(app, saveAs === null ? null : outPath, dialogMs)
+    await gotoRecordFromHome(window)
+    return { app, window, root, userDataDir, outPath }
+  }
+
+  /** The source is picked and no microphone is asked for (none in this container); the desktop capture is then held until `__letGo`, and Start is pressed. Returns with "Starting…" showing. */
+  async function holdStarting(window: Page): Promise<void> {
+    await window.getByRole('checkbox', { name: 'Record microphone' }).uncheck()
+    await window.getByRole('button', { name: 'Refresh sources' }).click()
+    await expect(window.locator('img[alt]').first()).toBeVisible({ timeout: 20_000 })
+    await window.evaluate(() => {
+      const md = navigator.mediaDevices
+      const realGum = md.getUserMedia.bind(md)
+      const w = window as unknown as { __letGo: () => void }
+      const gate = new Promise<void>((resolve) => {
+        w.__letGo = resolve
+      })
+      md.getUserMedia = async (c?: MediaStreamConstraints) => {
+        if (JSON.stringify(c ?? {}).includes('chromeMediaSource')) await gate
+        return realGum(c)
+      }
+    })
+    await window.getByRole('button', { name: /Start recording/ }).click()
+    await expect(window.getByRole('button', { name: /Starting…/ })).toBeDisabled()
+  }
+
+  const letGo = (window: Page): Promise<void> => window.evaluate(() => (window as unknown as { __letGo: () => void }).__letGo())
+  const convertBox = (window: Page): Locator => window.getByRole('checkbox', { name: /Convert to MP4/ })
+
+  test('Convert to MP4 unticked during "Starting…": the take is saved as a WebM with no convert (the dialog is offered a .webm name, the card says a quick copy, the file is a WebM)', async () => {
+    test.setTimeout(180_000)
+    const { app, window, root, userDataDir, outPath } = await openRecord('t194-convert-off', 'take.out', 6_000)
+    try {
+      await expect(convertBox(window), 'the premise: Convert to MP4 starts ticked').toBeChecked()
+      await holdStarting(window)
+      await convertBox(window).uncheck()
+      await expect(convertBox(window)).not.toBeChecked()
+      await expect.poll(() => readConfig(userDataDir).record?.convertToMp4, { timeout: 15_000, intervals: [200] }).toBe(false)
+      await letGo(window)
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText(/REC 00:0[1-9]/)).toBeVisible({ timeout: 10_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+
+      // The save run's own flag: a WebM is a quick copy ("nothing to stop"), not a convert with a bar and a Discard.
+      await expect(window.getByText('Finishing up — saving to disk…')).toBeVisible({ timeout: 30_000 })
+      await expect(window.getByText('Saving a WebM is a quick copy, so there is nothing to stop.')).toBeVisible()
+      await expect(window.getByRole('progressbar')).toHaveCount(0)
+      // The name the dialog was opened with, and the file that lands: the extension and the finalize option agree with the box as it was when the take ended.
+      await expect.poll(async () => (await readSaveDialogDefaults(app)).length, { timeout: 30_000, intervals: [200] }).toBe(1)
+      expect((await readSaveDialogDefaults(app))[0], 'the suggested name is a .webm').toMatch(/^recording-.*\.webm$/)
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      expect(existsSync(outPath), 'the take was saved').toBe(true)
+      const probe = await probeFile(outPath)
+      expect(probe.format?.format_name, 'a WebM, not a converted MP4').toContain('webm')
+      expect(readConfig(userDataDir).record?.convertToMp4).toBe(false)
+      expect(leftoverTemps(userDataDir)).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('the source tiles, Refresh sources, Record microphone and the webcam box are locked while "Starting…", the reason is under Start, and Convert to MP4 stays live; all of it is back once the take rolls', async () => {
+    test.setTimeout(150_000)
+    const { app, window, root, userDataDir } = await openRecord('t194-locked', null)
+    try {
+      await holdStarting(window)
+      const tiles = window.locator('button.card').filter({ has: window.locator('img[alt]') })
+      expect(await tiles.count(), 'the premise: there is a tile to lock').toBeGreaterThan(0)
+      for (const i of Array.from({ length: await tiles.count() }, (_, n) => n)) await expect(tiles.nth(i)).toBeDisabled()
+      await expect(window.getByRole('button', { name: 'Refresh sources' })).toBeDisabled()
+      await expect(window.getByRole('checkbox', { name: 'Record microphone' })).toBeDisabled()
+      await expect(window.getByRole('checkbox', { name: /Include webcam/ })).toBeDisabled()
+      await expect(window.getByText(/The capture is opening, so the source, microphone and webcam are locked for this recording\. Convert to MP4 can still change\./)).toBeVisible()
+      await expect(convertBox(window), 'the one control that still applies').toBeEnabled()
+      await letGo(window)
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 30_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      await expect(window.getByRole('checkbox', { name: 'Record microphone' }), 'unlocked again once the take is done').toBeEnabled()
+      await expect(window.getByRole('button', { name: 'Refresh sources' })).toBeEnabled()
+      await expect(window.getByText(/The capture is opening/)).toHaveCount(0)
+      await expect.poll(() => leftoverTemps(userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+
+  test('the webcam device and corner selects are locked too while "Starting…" (cameras stubbed in), and open again at idle', async () => {
+    test.setTimeout(150_000)
+    const { app, window, root, userDataDir } = await openRecord('t194-locked-cam', null)
+    try {
+      await stubCameras(window)
+      await window.getByRole('button', { name: 'Refresh sources' }).click()
+      await window.getByRole('checkbox', { name: /Include webcam/ }).check()
+      await expect(window.getByRole('combobox', { name: 'Webcam' })).toBeVisible({ timeout: 20_000 })
+      await expect(window.getByRole('combobox', { name: 'Webcam' })).toBeEnabled()
+      await holdStarting(window)
+      await expect(window.getByRole('combobox', { name: 'Webcam' })).toBeDisabled()
+      await expect(window.getByLabel('Corner')).toBeDisabled()
+      // The stubbed camera cannot be opened, so the take goes on screen-only (T-84): let go, end it, and decline the save.
+      await letGo(window)
+      await expect(window.getByRole('button', { name: 'Stop' })).toBeVisible({ timeout: 40_000 })
+      await window.getByRole('button', { name: 'Stop' }).click()
+      await expect(window.getByRole('button', { name: /Start recording/ })).toBeVisible({ timeout: 60_000 })
+      await expect(window.getByRole('combobox', { name: 'Webcam' }), 'open again at idle').toBeEnabled()
+      await expect.poll(() => leftoverTemps(userDataDir), { timeout: 15_000, intervals: [200] }).toEqual([])
+    } finally {
+      await app.close()
+      cleanup(root)
+    }
+  })
+})

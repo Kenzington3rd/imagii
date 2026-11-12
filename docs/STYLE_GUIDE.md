@@ -996,7 +996,8 @@ Repeated UI is a component, not copy-paste:
   the audio export's was a plain gray box with no danger ink and no title, the Clip Kit's a hand-rolled bordered one, the model download's a bare cross.
   `<RunningCancel title="Cancel GIF export" onClick={...} />` is a `btn-ghost` with the danger ink, the word "Cancel" (what a screen reader and a
   voice-control user say) and the job it stops as its `title`; a dialog's "Cancel" is an answer, stays `btn-ghost px-3 py-1.5 text-sm` and lives in a
-  `Modal`. `<ProgressTrack label percent tone? className? />` is the `role="progressbar"` named for its job: `percent` a number draws the fill and
+  `Modal`. A press on it calls `swallowRepeatClicks()` before `onClick` (T-194 (3)): a running job's Cancel takes its own row away when the job ends and whatever sat
+  below moves up under the pointer (the Export's Cancel and the Watermark position select), so the second press of a double-click is dropped at the window. `<ProgressTrack label percent tone? className? />` is the `role="progressbar"` named for its job: `percent` a number draws the fill and
   `aria-valuenow`, `null` draws the sliding `.progress-indeterminate` segment with no value (a bar is a measurement or it is absent, T-89), and `tone`
   keeps a row the person canceled gray and a failed one red (T-100); the percent beside it stays with the panel. `tests/unit/runningJobControls.test.ts`
   fails on a hand-written Cancel button outside a `Modal`, and on a `role="progressbar"` outside the track and its two decided exceptions (the waveform's

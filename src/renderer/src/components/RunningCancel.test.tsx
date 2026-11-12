@@ -2,6 +2,10 @@ import { describe, it, expect, vi } from 'vitest'
 import { renderToStaticMarkup } from 'react-dom/server'
 import type { ReactElement } from 'react'
 import { RunningCancel } from './RunningCancel'
+import { swallowRepeatClicks } from '../lib/repeatPress'
+
+// T-194 (3): a press arms the window's repeat swallow, which needs a `window`; this suite renders to strings in node, so the arming is recorded instead.
+vi.mock('../lib/repeatPress', () => ({ swallowRepeatClicks: vi.fn() }))
 
 /**
  * T-136 (7) - the Cancel of a running job is one component. Eleven places hand-wrote it and two had drifted off the pattern (the audio export's was
@@ -25,5 +29,23 @@ describe('RunningCancel', () => {
     const button = RunningCancel({ title: 'Cancel reframe', onClick }) as ReactElement<{ onClick: () => void }>
     button.props.onClick()
     expect(onClick).toHaveBeenCalledTimes(1)
+  })
+})
+
+/**
+ * T-194 (3) - a running job's Cancel takes its own row away when the job ends, and what sat below moves up under the pointer: a double-click on the Export's
+ * Cancel put the second press on the Watermark position select. A press arms the window's repeat swallow (T-168 (6)) and THEN hands the press on, so the
+ * swallow is already in force when `onClick` runs (its state change is what moves the row).
+ */
+describe('RunningCancel swallows the repeat of its own press (T-194 (3))', () => {
+  it('a press arms swallowRepeatClicks and then calls onClick, in that order, once each', () => {
+    const calls: string[] = []
+    vi.mocked(swallowRepeatClicks).mockImplementation(() => {
+      calls.push('swallow')
+    })
+    const button = RunningCancel({ title: 'Cancel export', onClick: () => calls.push('onClick') }) as ReactElement<{ onClick: () => void }>
+    button.props.onClick()
+    expect(calls).toEqual(['swallow', 'onClick'])
+    vi.mocked(swallowRepeatClicks).mockReset()
   })
 })
