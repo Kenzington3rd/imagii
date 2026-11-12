@@ -10017,10 +10017,11 @@ IMG-PREC.
   device); USER_GUIDE's "they stay" for Line and Pencil (true for as long as the toolbar it describes is on screen); the
   Reference Search notice card not selectable (imagii's own fixed sentence, round 139's microphone-line ruling); Record
   capturing at about 30 fps (the owner's hand-check); identical "Delete preset" / "Apply" names and a placeholder-only
-  preset name (T-110 (l)); the ledgered T-110 letters each reader named. Two worker tracks, disjoint files: Track A =
+  preset name (T-110 (l)); the ledgered T-110 letters each reader named. Three worker tracks, disjoint files: Track A =
   items 1 and 2 (lib/repeatPress.ts, components/Modal.tsx, components/RecentFilesMenu.tsx); Track B = items 3-5
   (references/MoodBoardPanel.tsx, audio-studio/WaveformView.tsx, docs/DESIGN_GUIDE.md, tests/unit/noRawHex.test.ts).
-  The QA main and ffmpeg readers were still out when this ticket was written; a finding from either becomes Track C.
+  The QA main reader's finding (item 6, executed) is Track C (src/main/sidecars/whisperManager.ts and its test); the
+  ffmpeg reader was still out when this ticket was written, and a finding from it joins Track C.
 
   **Track A — a key still held does not act on the control a press hands focus to (items 1 and 2).**
   1. **[LOW] A held Enter on Recent's "Clear list" opens the file chooser** (components/RecentFilesMenu.tsx:118-130:
@@ -10079,6 +10080,22 @@ IMG-PREC.
   guide's section (red on the base: PropertiesPanel.tsx and canvasColor.ts). Docs: IC rows; a "Dispositions - round
   140, Track B" section; DESIGN_GUIDE (item 5, and the waveform's colours where the tokens are described); LESSONS at
   the TOP; TESTING paragraph.
+  **Track C — a failed model download stops downloading (item 6).**
+  6. **[LOW] A model download that fails on the write keeps fetching the rest of the file** (sidecars/whisperManager.ts:
+     `runInstall` settles every failure - the non-2xx answer :770-774, the write stream's error :792-797, the response's
+     error :825-830 - without `request.abort()`; `settle` clears `activeInstall`, so Cancel can no longer reach it).
+     Executed by the QA main reader (the real `installWhisperModel` bundled with a fake `net.request`, a directory at the
+     `.partial` forcing EISDIR): the install settled as failed and all 50 of 50 chunks were still pulled, abort never
+     called. On a full disk during the 141 MB download the panel says it failed while the transfer runs on, and a retry
+     opens a second connection. Fix: a failed settle aborts the request when it is still live - in `settle`, for every
+     `ok: false` outcome except the one the request's own error or abort produced, guarded so the abort's handler
+     (already settle-once) cannot recurse; a success and a Cancel are unchanged.
+  Covering tests: unit (NEW describe at the end of the whisperManager test file, or a new beside-file test if none
+  holds `installWhisperModel`) - with a fake `net.request`: a write-stream error, a non-2xx answer and a response
+  error each call `abort()` once and stop the chunks (red on the base: abort never called, every chunk delivered); a
+  completed download and a Cancel call it as before (controls); the partial is removed in every failure. No ffmpeg or
+  network change, so no Layer 5 case. Docs: IC row for Download model's failure path; a "Dispositions - round 140,
+  Track C" section; LESSONS at the TOP; TESTING paragraph.
 - **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
   describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
   standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
