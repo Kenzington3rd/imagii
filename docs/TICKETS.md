@@ -10003,6 +10003,88 @@ IMG-PREC.
   docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
 - **Status:** done (round 139 — see the Done entry)
 
+## T-191 — sweep-78 fixes (round 140)
+
+- **Spec:** the seventy-eighth sweep's verified findings (candidate clean pass #1 on 916ae26, the T-190 tree; the count
+  stays at 0). Item 1 found by UX reader 1 and executed by QA renderer reader A (a held Enter on Clear list opened the
+  file chooser once per repeat; the round-139 class sweep had named RecentFilesMenu "not this class" on a reason true
+  only for a pick); item 2 found by the same two readers and executed by QA renderer reader A (a held Enter on Variants
+  opens the dialog and the first repeat closes it) - first ruled under round 139's disposition, then counted by the
+  expediter: that disposition names only the safe-zone and Clear-transcripts questions, whose closing IS the safe
+  answer; item 3 found and executed by QA renderer reader B; items 4 and 5 found by design reader 1 (item 4 measured
+  in a built app). All five confirmed against source. Not counted: the Record microphone picker showing the first
+  device while a no-pick take records the system default (Chromium lists the Default input first, so they are the same
+  device); USER_GUIDE's "they stay" for Line and Pencil (true for as long as the toolbar it describes is on screen); the
+  Reference Search notice card not selectable (imagii's own fixed sentence, round 139's microphone-line ruling); Record
+  capturing at about 30 fps (the owner's hand-check); identical "Delete preset" / "Apply" names and a placeholder-only
+  preset name (T-110 (l)); the ledgered T-110 letters each reader named. Two worker tracks, disjoint files: Track A =
+  items 1 and 2 (lib/repeatPress.ts, components/Modal.tsx, components/RecentFilesMenu.tsx); Track B = items 3-5
+  (references/MoodBoardPanel.tsx, audio-studio/WaveformView.tsx, docs/DESIGN_GUIDE.md, tests/unit/noRawHex.test.ts).
+  The QA main and ffmpeg readers were still out when this ticket was written; a finding from either becomes Track C.
+
+  **Track A — a key still held does not act on the control a press hands focus to (items 1 and 2).**
+  1. **[LOW] A held Enter on Recent's "Clear list" opens the file chooser** (components/RecentFilesMenu.tsx:118-130:
+     with no entries left the menu unmounts, so Clear list puts focus on the control before it - both importers'
+     "Choose file…" (audio-studio/AudioImporter.tsx:170, video-studio/Importer.tsx:162) - inside the Enter's own
+     keydown; the auto-repeats are keyboard clicks on Choose file, which has no repeat guard). Executed: 4 repeats, 4
+     open-dialog calls; a single Enter, 0. The pick path is the same shape: `closeToToggle()` hands focus to the
+     toggle, and when the pick is refused or still converting each repeat reopens and closes the menu. Fix: one
+     mechanism for "a press that hands focus elsewhere": `holdHeldKeys()` exported from lib/repeatPress.ts - the
+     held-key guard's existing rule (the keys down now are swallowed as repeats until they are let go; a fresh press
+     acts), which `swallowRepeatClicks` already applies at a dialog's close - called by RecentFilesMenu where Clear list
+     and a pick move focus. The importers are not touched.
+  2. **[LOW] A held Enter on a button that opens a dialog closes the dialog it opened** (hooks/useFocusTrap.ts:121-125
+     focuses the dialog's first control; the held-key guard arms only at a close). Executed on Variants (the header
+     Close takes the first repeat: 5 repeats, 0 dialogs; a single Enter leaves it open); by reading the same holds for
+     Templates (its Close), Presets (CustomPresetManager's Close) and the board Rename (NameDialog's input confirms on
+     Enter with no repeat test: the unchanged name, a no-op that closes it), and the safe-zone question opened by Export
+     closes on its Cancel. Fix: `Modal` calls `holdHeldKeys()` when it opens (its open effect, beside the close's
+     `swallowRepeatClicks`), so every dialog opened by a key that is still down ignores that key's repeats until it is
+     released; a dialog opened by the mouse is unchanged.
+  Covering tests: unit (NEW describe at the end of the repeatPress test file) - a guard armed with a key down swallows
+  that key's repeats, lets a fresh press through, and does nothing for keys that were up (red: no export). E2E
+  (home-chrome.spec.ts NEW describe) - on both importers, a held Enter on Clear list clears the list and opens no
+  chooser (`dialog.showOpenDialog` stubbed and counted; red: one call per repeat); a fresh Enter on Choose file still
+  opens it (control); a held Enter on a refused Recent pick leaves the menu closed. E2E (image.spec.ts NEW describe) -
+  a held Enter on Templates and on Variants leaves the dialog open (red: closed); E2E (video-core.spec.ts NEW describe)
+  - a held Enter on Export when the safe-zone question applies leaves the question open with focus on Cancel (red:
+  closed). Docs: IC rows revised in place (the round-139 Track A disposition's RecentFilesMenu line and its
+  safe-answer line) plus a "Dispositions - round 140, Track A" section; STYLE_GUIDE's held-key rule names
+  `holdHeldKeys` and where it is armed; LESSONS at the TOP; TESTING paragraph.
+
+  **Track B — a cleared cache, a waveform's progress, and the colour exceptions the guide lists (items 3-5).**
+  3. **[LOW] After "Clear thumbnail cache", "→ Canvas" on a board tile fails until the tab is left** (references/
+     MoodBoardPanel.tsx:322-324: a tile uses its cached file until the `<img>` fires `onError` (T-79), which a tile
+     already drawn never does; `onClearThumbs` :192-199 marks nothing). The send loads the deleted file and says
+     "That picture didn't load. Try again, or save it to the board again." - a retry fails the same way and re-saving
+     answers "Already on". Executed in a built app. Against done T-79 / T-137 (10): clearing costs a re-download, never
+     a board or a send. Fix: after a clear that succeeded, every item of every board is marked uncached (the
+     `uncachedItemIds` set the `onError` fallback already feeds), so the tiles and "→ Canvas" use the source URL at once;
+     a refused clear marks nothing.
+  4. **[LOW] The Audio waveform's played part cannot be told from the rest** (audio-studio/WaveformView.tsx:64-65:
+     `waveColor: ACCENT_MUTED` beside `progressColor: ACCENT`, measured rgb(245,46,46) against rgb(255,49,49), about
+     1.03:1; DESIGN_GUIDE's token table gives accent-muted one role, the hover state of accent elements). Fix: the
+     unplayed wave is `INK_DIM`, the played part stays `ACCENT`, the cursor stays `EMBER`; measure that both bar colours
+     clear 3:1 against the waveform's own background (WCAG 1.4.11) and that the cut regions over them still read.
+  5. **[LOW] DESIGN_GUIDE's raw-color exceptions list misses two literals the test allows** (tests/unit/noRawHex.test.ts
+     says its allow-list is "exactly what docs/DESIGN_GUIDE.md ('Documented raw-color exceptions') says may"; T-186 (1)
+     added `#ffcc00` in PropertiesPanel.tsx:189's placeholder and canvasColor.ts:7's refusal to the test only; the guide
+     names TextOverlayEditor's alone, :147-149). Fix: the guide's typing-example bullet names all three sites; and the
+     test holds the rule - every file its allow-list names appears in that guide section.
+  Covering tests: e2e (references.spec.ts NEW describe) - a board item with a cached thumbnail; Clear thumbnail cache;
+  "→ Canvas" adds the reference layer (red on the base: the "didn't load" toast); a refused clear leaves the tile on
+  its cached file. E2E (audio.spec.ts NEW describe) - after a seek to the middle, a played bar and an unplayed bar
+  differ in colour and each clears 3:1 against the background, read from the drawn pixels (red on the base: the two
+  agree within a few units). Unit (noRawHex.test.ts NEW describe at the end) - every allow-listed file is named in the
+  guide's section (red on the base: PropertiesPanel.tsx and canvasColor.ts). Docs: IC rows; a "Dispositions - round
+  140, Track B" section; DESIGN_GUIDE (item 5, and the waveform's colours where the tokens are described); LESSONS at
+  the TOP; TESTING paragraph.
+- **Acceptance criteria:** standard bars; red-first with sha256 content-replace restores in a ledger; new cases in NEW
+  describe blocks appended at the end of shared files; `npm run verify` twice and the touched e2e specs whole and
+  standalone green before hand-back; the expediter runs the full suite and the real-media suite on the merged tree; no
+  docs/TICKETS.md, package.json or lockfile edits; processes stopped by explicit PID only.
+- **Status:** in progress (round 140)
+
 ## T-110 — residuals backlog from the wave + the review gate (post-wave)
 
 - **Spec:** verified finds that stay out of the wave's scope. (a) a
